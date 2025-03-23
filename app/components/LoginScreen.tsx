@@ -1,4 +1,4 @@
-import React, { useState, useRef } from 'react';
+import React, { useState, useRef, useEffect } from 'react';
 import {
   View,
   Text,
@@ -14,9 +14,11 @@ import {
   DeviceEventEmitter,
   Image,
   useWindowDimensions,
+  ActivityIndicator,
 } from 'react-native';
 import { LinearGradient } from 'expo-linear-gradient';
 import { Mail, Lock, Eye, EyeOff, ArrowRight } from 'lucide-react-native';
+import { useSanityAuth } from '../hooks/useSanityAuth';
 
 const { width: SCREEN_WIDTH, height: SCREEN_HEIGHT } = Dimensions.get('window');
 
@@ -31,8 +33,10 @@ export default function LoginScreen({ onAuthenticated, onSwitchToSignup, onForgo
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
-  const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState('');
+
+  // Get auth functions and settings from Sanity
+  const { login, googleLogin, loading, authSettings } = useSanityAuth();
 
   // Animation values
   const fadeAnim = useRef(new Animated.Value(0)).current;
@@ -47,36 +51,143 @@ export default function LoginScreen({ onAuthenticated, onSwitchToSignup, onForgo
     }).start();
   }, []);
 
+  // Define AuthSettings interface
+  interface BrandingSettings {
+    appName: string;
+    tagline: string;
+    primaryColor: string;
+    secondaryColor: string;
+  }
+  
+  interface LoginScreenSettings {
+    headerTitle: string;
+    title: string;
+    subtitle: string;
+    googleAuthEnabled: boolean;
+    footerText: string;
+  }
+  
+  interface AuthSettings {
+    branding?: BrandingSettings;
+    loginScreen?: LoginScreenSettings;
+  }
+
+  // Default branding and login screen settings
+  const defaultBranding: BrandingSettings = {
+    appName: 'tunnel',
+    tagline: 'Connect, Share, Earn',
+    primaryColor: '#0070F3',
+    secondaryColor: '#00DFD8',
+  };
+  
+  const defaultLoginScreenSettings: LoginScreenSettings = {
+    headerTitle: 'tunnel',
+    title: 'Welcome Back',
+    subtitle: 'Sign in to continue your journey',
+    googleAuthEnabled: true,
+    footerText: 'By continuing, you agree to our Terms of Service and Privacy Policy'
+  };
+
+  // Get Sanity settings for login screen or use defaults
+  const typedAuthSettings = authSettings as AuthSettings | null;
+  const branding = typedAuthSettings?.branding || defaultBranding;
+  const loginScreenSettings = typedAuthSettings?.loginScreen || defaultLoginScreenSettings;
+
   const handleLogin = async () => {
     setError('');
-    setIsLoading(true);
 
     // Basic validation
     if (!email || !password) {
       setError('Please fill in all fields');
-      setIsLoading(false);
       return;
     }
 
-    // Simulate API call
-    setTimeout(() => {
-      setIsLoading(false);
+    try {
+      console.log('Attempting login with UI...');
       
-      // Emit auth state change event
-      DeviceEventEmitter.emit('AUTH_STATE_CHANGED', { isAuthenticated: true });
+      // Call Sanity login function with email and password
+      const user = await login(email, password);
+      
+      // Only proceed if we have a valid user
+      if (!user || !user._id) {
+        throw new Error('Invalid credentials');
+      }
+      
+      console.log('Login successful, navigating...');
+      
+      // Special handling for users who are logging in for the first time
+      // (created directly in Sanity without a password)
+      if (user.needsPasswordReset) {
+        console.log('User needs to set a password, showing message...');
+        
+        // Show a more clear message to the user
+        setError('Welcome! Please set a password in the Edit Profile screen to secure your account.');
+        
+        // Keep the message visible long enough to be read
+        setTimeout(() => {
+          setError('');
+        }, 5000);
+      }
+      
+      // Emit auth state change event with user data
+      DeviceEventEmitter.emit('AUTH_STATE_CHANGED', { 
+        isAuthenticated: true,
+        userData: user
+      });
+      
       onAuthenticated();
-    }, 1500);
+    } catch (err: any) {
+      console.error('Login error in UI:', err);
+      
+      // Provide more specific error messages for different failures
+      if (err.message && err.message.includes('no password set')) {
+        setError('This account needs a password. Please try again with just your email.');
+      } else if (err.message && err.message.includes('Invalid email or password')) {
+        setError('Invalid email or password. Please try again.');
+      } else {
+        setError(err.message || 'Authentication failed');
+      }
+    }
   };
 
-  const handleGoogleSignIn = () => {
-    setIsLoading(true);
-    
-    // Simulate Google sign-in
-    setTimeout(() => {
-      setIsLoading(false);
-      DeviceEventEmitter.emit('AUTH_STATE_CHANGED', { isAuthenticated: true });
+  const handleGoogleSignIn = async () => {
+    try {
+      // Mock Google auth data - in a real app, this would come from Google Auth SDK
+      // For testing purposes, use real test data with a valid email format
+      const googleUserData = {
+        email: 'test.google.user@example.com',
+        displayName: 'Test Google User',
+        photoURL: null,
+        uid: 'google-mock-uid-testing123',
+      };
+      
+      console.log('Attempting Google login with data:', googleUserData);
+      
+      // Wait for the login process to complete
+      const user = await googleLogin(googleUserData);
+      
+      if (!user || !user._id) {
+        throw new Error('Invalid response from Google login');
+      }
+      
+      console.log('Google login successful, user data:', user);
+      
+      // Emit auth state change event with the user data
+      DeviceEventEmitter.emit('AUTH_STATE_CHANGED', { 
+        isAuthenticated: true,
+        userData: user
+      });
+      
       onAuthenticated();
-    }, 1500);
+    } catch (err: any) {
+      console.error('Google authentication failed:', err);
+      setError(err.message || 'Google authentication failed');
+      
+      // Show the error message for a few seconds
+      setTimeout(() => {
+        setError('');
+      }, 5000);
+    }
   };
 
   const renderInputField = (
@@ -138,10 +249,10 @@ export default function LoginScreen({ onAuthenticated, onSwitchToSignup, onForgo
           >
             <View style={styles.headerTextContainer}>
               <Text style={[styles.headerTitle, { fontSize: dynamicStyles.titleSize + 10 }]}>
-                tunnel
+                {loginScreenSettings.headerTitle}
               </Text>
               <Text style={[styles.headerSubtitle, { fontSize: dynamicStyles.subtitleSize }]}>
-                Connect, Share, Earn
+                {branding.tagline}
               </Text>
             </View>
 
@@ -149,10 +260,10 @@ export default function LoginScreen({ onAuthenticated, onSwitchToSignup, onForgo
               style={[styles.formContainer, { padding: dynamicStyles.contentPadding, width: dynamicStyles.formWidth }]}
             >
               <Text style={[styles.title, { fontSize: dynamicStyles.titleSize }]}>
-                Welcome Back
+                {loginScreenSettings.title}
               </Text>
               <Text style={[styles.subtitle, { fontSize: dynamicStyles.subtitleSize }]}>
-                Sign in to continue your journey
+                {loginScreenSettings.subtitle}
               </Text>
 
               {renderInputField(
@@ -175,20 +286,26 @@ export default function LoginScreen({ onAuthenticated, onSwitchToSignup, onForgo
               {error ? <Text style={styles.errorText}>{error}</Text> : null}
 
               <Pressable
-                style={[styles.authButton, isLoading && styles.authButtonDisabled]}
+                style={[styles.authButton, loading && styles.authButtonDisabled]}
                 onPress={handleLogin}
-                disabled={isLoading}
+                disabled={loading}
               >
                 <LinearGradient
-                  colors={['#0070F3', '#00DFD8']}
+                  colors={[branding.primaryColor, branding.secondaryColor]}
                   style={[styles.authButtonGradient, { padding: dynamicStyles.buttonPadding }]}
                   start={{ x: 0, y: 0 }}
                   end={{ x: 1, y: 1 }}
                 >
-                  <Text style={styles.authButtonText}>
-                    Sign In
-                  </Text>
-                  <ArrowRight size={22} color="white" />
+                  {loading ? (
+                    <ActivityIndicator color="white" size="small" />
+                  ) : (
+                    <>
+                      <Text style={styles.authButtonText}>
+                        Sign In
+                      </Text>
+                      <ArrowRight size={22} color="white" />
+                    </>
+                  )}
                 </LinearGradient>
               </Pressable>
 
@@ -201,26 +318,30 @@ export default function LoginScreen({ onAuthenticated, onSwitchToSignup, onForgo
                 </Text>
               </TouchableOpacity>
 
-              <View style={styles.dividerContainer}>
-                <View style={styles.divider} />
-                <Text style={styles.dividerText}>OR</Text>
-                <View style={styles.divider} />
-              </View>
+              {loginScreenSettings.googleAuthEnabled && (
+                <>
+                  <View style={styles.dividerContainer}>
+                    <View style={styles.divider} />
+                    <Text style={styles.dividerText}>OR</Text>
+                    <View style={styles.divider} />
+                  </View>
 
-              <Pressable
-                style={[styles.googleButton, isLoading && styles.authButtonDisabled]}
-                onPress={handleGoogleSignIn}
-                disabled={isLoading}
-              >
-                <View style={styles.googleButtonContent}>
-                  <Image 
-                    source={{ uri: 'https://developers.google.com/identity/images/g-logo.png' }} 
-                    style={styles.googleIcon} 
-                    resizeMode="contain"
-                  />
-                  <Text style={styles.googleButtonText}>Sign in with Google</Text>
-                </View>
-              </Pressable>
+                  <Pressable
+                    style={[styles.googleButton, loading && styles.authButtonDisabled]}
+                    onPress={handleGoogleSignIn}
+                    disabled={loading}
+                  >
+                    <View style={styles.googleButtonContent}>
+                      <Image 
+                        source={{ uri: 'https://developers.google.com/identity/images/g-logo.png' }} 
+                        style={styles.googleIcon} 
+                        resizeMode="contain"
+                      />
+                      <Text style={styles.googleButtonText}>Sign in with Google</Text>
+                    </View>
+                  </Pressable>
+                </>
+              )}
 
               <View style={styles.switchContainer}>
                 <Text style={[styles.switchText, { fontSize: dynamicStyles.subtitleSize }]}>
@@ -236,9 +357,7 @@ export default function LoginScreen({ onAuthenticated, onSwitchToSignup, onForgo
 
             <View style={styles.footer}>
               <Text style={[styles.footerText, { fontSize: dynamicStyles.subtitleSize - 2 }]}>
-                By continuing, you agree to our{' '}
-                <Text style={styles.footerLink}>Terms of Service</Text> and{' '}
-                <Text style={styles.footerLink}>Privacy Policy</Text>
+                {loginScreenSettings.footerText}
               </Text>
             </View>
           </Animated.View>

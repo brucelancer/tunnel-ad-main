@@ -10,21 +10,12 @@ import {
   ViewToken,
   Animated,
   DeviceEventEmitter,
-  AppState,
-  AppStateStatus,
-  Modal,
-  TouchableOpacity,
-  ScrollView,
-  ActivityIndicator,
 } from 'react-native';
 import { Video, ResizeMode, Audio } from 'expo-av';
 import { useRouter, useFocusEffect } from 'expo-router';
-import { Play, Share2, CheckCircle, ThumbsUp, ThumbsDown, Lock, PlayCircle, RefreshCw } from 'lucide-react-native';
+import { Play, Share2, CheckCircle, ThumbsUp, ThumbsDown } from 'lucide-react-native';
 import { usePoints } from '../hooks/usePoints';
 import { useReactions } from '../hooks/useReactions';
-import AsyncStorage from '@react-native-async-storage/async-storage';
-import * as videoService from '../tunnel-ad-main/services/videoService';
-import { useSanityAuth } from '../app/hooks/useSanityAuth';
 
 const { width: SCREEN_WIDTH, height: SCREEN_HEIGHT } = Dimensions.get('window');
 
@@ -44,45 +35,78 @@ interface VideoItem {
   points: number;
   type: VideoType;
   aspectRatio?: number;
-  thumbnail?: string;
-  views?: number;
-  likes?: number;
-  dislikes?: number;
-  authorId?: string;
 }
+
+const VIDEOS: VideoItem[] = [
+  {
+    id: '1',
+    url: 'https://storage.googleapis.com/gtv-videos-bucket/sample/ForBiggerBlazes.mp4',
+    title: 'Street Dance Performance',
+    author: '@streetdancer',
+    description: 'Amazing street dance performance! 🔥 #dance #street',
+    points: 10,
+    type: 'horizontal',
+    aspectRatio: 16/9,
+  },
+  {
+    id: '2',
+    url: 'https://media.istockphoto.com/id/2185373575/th/%E0%B8%A7%E0%B8%B4%E0%B8%94%E0%B8%B5%E0%B9%82%E0%B8%AD/%E0%B8%99%E0%B8%B1%E0%B8%81%E0%B9%80%E0%B8%A3%E0%B8%B5%E0%B8%A2%E0%B8%99%E0%B8%8A%E0%B8%B2%E0%B8%A2%E0%B8%97%E0%B8%B5%E0%B9%88%E0%B8%88%E0%B8%94%E0%B8%88%E0%B9%88%E0%B8%AD%E0%B8%9F%E0%B8%B1%E0%B8%87%E0%B8%AD%E0%B8%A2%E0%B9%88%E0%B8%B2%E0%B8%87%E0%B8%95%E0%B8%B1%E0%B9%89%E0%B8%87%E0%B9%83%E0%B8%88%E0%B9%81%E0%B8%A5%E0%B8%B0%E0%B8%88%E0%B8%94%E0%B8%9A%E0%B8%B1%E0%B8%99%E0%B8%97%E0%B8%B6%E0%B8%81%E0%B9%83%E0%B8%99%E0%B8%8A%E0%B8%B1%E0%B9%89%E0%B8%99%E0%B9%80%E0%B8%A3%E0%B8%B5%E0%B8%A2%E0%B8%99%E0%B9%82%E0%B8%94%E0%B8%A2%E0%B8%A1%E0%B8%B5%E0%B8%99%E0%B8%B1%E0%B8%81%E0%B9%80%E0%B8%A3%E0%B8%B5%E0%B8%A2%E0%B8%99%E0%B8%AB%E0%B8%8D%E0%B8%B4%E0%B8%87%E0%B9%80%E0%B8%9A%E0%B8%A5%E0%B8%AD%E0%B9%80%E0%B8%9B%E0%B9%87%E0%B8%99%E0%B8%9E%E0%B8%B7%E0%B9%89%E0%B8%99%E0%B8%AB.mp4?s=mp4-640x640-is&k=20&c=IT9YrpEspdX8iipnjdLK-irPRU_zexRUUyOlCTQF4cw=',
+    title: 'Urban Dance Battle',
+    author: '@urbandancer',
+    description: 'Epic dance battle in the city! 💫 #battle #urban',
+    points: 10,
+    type: 'vertical',
+    aspectRatio: 9/16,
+  },
+  {
+    id: '3',
+    url: 'https://storage.googleapis.com/gtv-videos-bucket/sample/ForBiggerBlazes.mp4',
+    title: 'Contemporary Dance',
+    author: '@contemporary',
+    description: 'Beautiful contemporary dance piece ✨ #contemporary #art',
+    points: 10,
+    type: 'horizontal',
+    aspectRatio: 16/9,
+  },
+  {
+    id: '4',
+    url: 'http://commondatastorage.googleapis.com/gtv-videos-bucket/sample/TearsOfSteel.mp4',
+    title: 'Contemporary Dance',
+    author: '@contemporary',
+    description: 'Beautiful contemporary dance piece ✨ #contemporary #art',
+    points: 10,
+    type: 'horizontal',
+    aspectRatio: 16/9,
+  },
+  {
+    id: '5',
+    url: 'https://storage.googleapis.com/gtv-videos-bucket/sample/ForBiggerBlazes.mp4',
+    title: 'Contemporary Dance',
+    author: '@contemporary',
+    description: 'Beautiful contemporary dance piece ✨ #contemporary #art',
+    points: 10,
+    type: 'horizontal',
+    aspectRatio: 16/9,
+  },
+  {
+    id: '6',
+    url: 'https://storage.googleapis.com/gtv-videos-bucket/sample/ForBiggerBlazes.mp4',
+    title: 'Contemporary Dance',
+    author: '@contemporary',
+    description: 'Beautiful contemporary dance piece ✨ #contemporary #art',
+    points: 10,
+    type: 'horizontal',
+    aspectRatio: 16/9,
+  },
+];
 
 interface VideoItemProps {
   item: VideoItem;
   isCurrentVideo: boolean;
   onVideoRef: (id: string, ref: any) => void;
-  isLocked?: boolean;
-  autoScroll: boolean;
-  toggleAutoScroll: () => void;
-  autoScrollPulse: Animated.Value;
 }
 
-interface VideoRefs {
-  [key: string]: {
-    current: any;
-    getLastPosition: () => number;
-    resetPosition: () => void;
-  };
-}
-
-interface ViewableItemsInfo {
-  viewableItems: Array<ViewToken>;
-  changed: Array<ViewToken>;
-}
-
-const VideoItemComponent = React.memo(({ 
-  item, 
-  isCurrentVideo, 
-  onVideoRef, 
-  isLocked = false, 
-  autoScroll, 
-  toggleAutoScroll,
-  autoScrollPulse
-}: VideoItemProps): JSX.Element => {
+const VideoItemComponent = React.memo(({ item, isCurrentVideo, onVideoRef }: VideoItemProps): JSX.Element => {
   const router = useRouter();
   const { addPoints, hasWatchedVideo } = usePoints();
   const { getVideoReactions, updateReaction, loadReactions } = useReactions();
@@ -99,18 +123,11 @@ const VideoItemComponent = React.memo(({
   const pointsAnimation = useRef(new Animated.Value(0)).current;
   const pointsScale = useRef(new Animated.Value(1)).current;
   const hasShownAnimationRef = useRef(false);
-  const lastPositionRef = useRef<number>(0);
 
   // Listen for tab state changes
   useEffect(() => {
     const subscription = DeviceEventEmitter.addListener('VIDEO_TAB_STATE', (event) => {
       setIsTabActive(event.isActive);
-      
-      // Immediately pause and mute the video when tab becomes inactive
-      if (!event.isActive && videoRef.current) {
-        videoRef.current.pauseAsync().catch(() => {});
-        videoRef.current.setIsMutedAsync(true).catch(() => {});
-      }
     });
 
     return () => {
@@ -169,17 +186,12 @@ const VideoItemComponent = React.memo(({
   }, [hasWatchedVideo, item.id]);
 
   useEffect(() => {
-    onVideoRef(item.id, {
-      current: videoRef.current,
-      getLastPosition: () => lastPositionRef.current,
-      resetPosition: () => { lastPositionRef.current = 0; }
-    });
-    
+    onVideoRef(item.id, videoRef);
+
     // Listen for points reset
     const subscription = DeviceEventEmitter.addListener('POINTS_UPDATED', (event) => {
       if (event?.type === 'reset') {
         resetState();
-        lastPositionRef.current = 0;
       }
     });
 
@@ -188,79 +200,29 @@ const VideoItemComponent = React.memo(({
     };
   }, [item.id, onVideoRef]);
 
-  // Always stop videos when they're no longer current
-  useEffect(() => {
-    if (!isCurrentVideo && videoRef.current) {
-      // Fully stop the video when it's no longer the current one
-      videoRef.current.stopAsync().catch(() => {});
-      videoRef.current.setIsMutedAsync(true).catch(() => {});
-    } else if (isCurrentVideo && isTabActive && videoRef.current) {
-      // Only start playing when this becomes the current video
-      videoRef.current.playAsync().catch(() => {});
-      videoRef.current.setIsMutedAsync(false).catch(() => {});
-    }
-  }, [isCurrentVideo, isTabActive]);
-
-  // Ensure current refs are passed to parent
-  useEffect(() => {
-    // Update the reference any time videoRef changes
-    if (videoRef.current) {
-      onVideoRef(item.id, {
-        current: videoRef.current,
-        getLastPosition: () => lastPositionRef.current,
-        resetPosition: () => { lastPositionRef.current = 0; }
-      });
-    }
-  });
-
-  // Additional effect to fully stop video when no longer active
-  useEffect(() => {
-    return () => {
-      if (videoRef.current) {
-        try {
-          videoRef.current.stopAsync();
-          videoRef.current.unloadAsync();
-        } catch (e) {
-          // Ignore errors during cleanup
-        }
-      }
-    };
-  }, []);
-
-  // Replace the existing useEffect that responds to isCurrentVideo & isTabActive changes
   useEffect(() => {
     if (isCurrentVideo && isTabActive) {
       // Play and unmute the current video only if tab is active
-      videoRef.current?.playAsync().catch(() => {});
-      videoRef.current?.setIsMutedAsync(false).catch(() => {});
+      videoRef.current?.playAsync();
+      videoRef.current?.setIsMutedAsync(false);
     } else {
-      // Stop videos that are not visible or when tab is not active
-      videoRef.current?.stopAsync().catch(() => {});
-      videoRef.current?.setIsMutedAsync(true).catch(() => {});
+      // Stop and mute videos that are not visible or when tab is not active
+      videoRef.current?.pauseAsync();
+      videoRef.current?.setIsMutedAsync(true);
       setShowButtons(false);
     }
-    
     return () => {
       if (videoRef.current) {
-        videoRef.current.stopAsync().catch(() => {});
-        videoRef.current.setIsMutedAsync(true).catch(() => {});
+        videoRef.current.pauseAsync();
+        videoRef.current.setIsMutedAsync(true);
       }
     };
   }, [isCurrentVideo, isTabActive]);
 
   const handlePlaybackStatusUpdate = async (status: any) => {
     setStatus(status);
-    
-    // Detect video completion and emit event
     if (status.didJustFinish) {
       setShowButtons(false);
-      // Emit event that video has ended - always emit this regardless of previous watch status
-      DeviceEventEmitter.emit('VIDEO_ENDED', { videoId: item.id });
-    }
-    
-    // Store the current position for potential resuming
-    if (status.isLoaded && status.positionMillis) {
-      lastPositionRef.current = status.positionMillis;
     }
     
     // Calculate and display remaining time until halfway point
@@ -356,7 +318,7 @@ const VideoItemComponent = React.memo(({
         width: maxWidth,
         height: Math.min(height, AVAILABLE_HEIGHT),
         resizeMode: ResizeMode.CONTAIN,
-        marginTop: -170 // Match test.tsx value for horizontal videos
+        marginTop: -170
       };
     }
   };
@@ -397,70 +359,20 @@ const VideoItemComponent = React.memo(({
       await videoRef.current.stopAsync();
     }
     router.push({
-      pathname: '/video-detail' as any,
+      pathname: '/video-detail',
       params: { id: item.id }
     });
   };
 
   const handleLike = async () => {
     const newAction = reactions.userAction === 'like' ? null : 'like';
-    setReactions({
-      ...reactions,
-      userAction: newAction,
-      likes: newAction === 'like' ? reactions.likes + 1 : reactions.likes - 1
-    });
+    await updateReaction(item.id, newAction);
   };
 
   const handleDislike = async () => {
     const newAction = reactions.userAction === 'dislike' ? null : 'dislike';
-    setReactions({
-      ...reactions,
-      userAction: newAction,
-      dislikes: newAction === 'dislike' ? reactions.dislikes + 1 : reactions.dislikes - 1
-    });
+    await updateReaction(item.id, newAction);
   };
-
-  // Add special styles for horizontal video info content positioning
-  const getContentPositionStyles = () => {
-    if (item.type === 'horizontal') {
-      return {
-        videoInfoStyle: {
-          position: 'absolute' as const,
-          bottom: 0,
-          left: SCREEN_WIDTH * 0.05,
-          width: SCREEN_WIDTH * 0.65,
-          marginBottom: SCREEN_HEIGHT * 0.14,
-          zIndex: 10,
-        },
-        actionButtonsStyle: {
-          position: 'absolute' as const,
-          bottom: 0,
-          right: SCREEN_WIDTH * 0.05,
-          marginBottom: SCREEN_HEIGHT * 0.14,
-          zIndex: 10,
-        }
-      };
-    }
-    return {
-      videoInfoStyle: {
-        position: 'absolute' as const,
-        bottom: 0,
-        left: SCREEN_WIDTH * 0.05,
-        width: SCREEN_WIDTH * 0.65,
-        marginBottom: SCREEN_HEIGHT * 0.14,
-        zIndex: 10,
-      },
-      actionButtonsStyle: {
-        position: 'absolute' as const,
-        bottom: 0,
-        right: SCREEN_WIDTH * 0.05,
-        marginBottom: SCREEN_HEIGHT * 0.14,
-        zIndex: 10,
-      }
-    };
-  };
-
-  const { videoInfoStyle, actionButtonsStyle } = getContentPositionStyles();
 
   return (
     <View style={[
@@ -470,18 +382,14 @@ const VideoItemComponent = React.memo(({
       <Video
         ref={videoRef}
         source={{ uri: item.url }}
-        style={[styles.video, { 
-          width, 
-          height, 
-          marginTop 
-        }]}
+        style={[styles.video, { width, height, marginTop }]}
         resizeMode={resizeMode}
         isLooping
         onPlaybackStatusUpdate={handlePlaybackStatusUpdate}
         onLoad={onLoad}
         useNativeControls={false}
-        shouldPlay={isCurrentVideo && isTabActive && !isLocked}
-        isMuted={!isCurrentVideo || !isTabActive || isLocked}
+        shouldPlay={isCurrentVideo && isTabActive}
+        isMuted={!isCurrentVideo || !isTabActive}
         volume={1.0}
         progressUpdateIntervalMillis={500}
       />
@@ -489,11 +397,11 @@ const VideoItemComponent = React.memo(({
         styles.overlay,
         item.type === 'vertical' ? styles.verticalOverlay : styles.horizontalOverlay
       ]}>
-        <View style={[styles.videoInfo, videoInfoStyle]}>
+        <View style={styles.videoInfo}>
           <View style={styles.authorContainer}>
-            <Text style={styles.author} numberOfLines={1} ellipsizeMode="tail">
-              {item.author}
-            </Text>
+          <Text style={styles.author} numberOfLines={1} ellipsizeMode="tail">
+            {item.author}
+          </Text>
             {remainingTime && !hasEarnedPoints && (
               <View style={styles.countdownWrapper}>
                 <View style={styles.countdownDot} />
@@ -511,7 +419,7 @@ const VideoItemComponent = React.memo(({
             <Text style={styles.watchFullButtonText}>Watch Full</Text>
           </Pressable>
         </View>
-        <View style={[styles.actionButtons, actionButtonsStyle]}>
+        <View style={styles.actionButtons}>
           <View style={styles.likeContainer}>
             <Pressable onPress={handleLike} style={styles.actionButton}>
               <ThumbsUp 
@@ -534,33 +442,6 @@ const VideoItemComponent = React.memo(({
               </Text>
             </Pressable>
           </View>
-          
-          {/* Auto-scroll toggle button */}
-          {isCurrentVideo && (
-            <Animated.View style={{
-              transform: [{ scale: autoScrollPulse }]
-            }}>
-              <Pressable 
-                style={[
-                  styles.inlineAutoScrollButton,
-                  autoScroll && styles.inlineAutoScrollButtonActive
-                ]} 
-                onPress={toggleAutoScroll}
-              >
-                <PlayCircle 
-                  color={autoScroll ? 'white' : '#1877F2'} 
-                  size={SCREEN_WIDTH * 0.045} 
-                />
-                <Text style={[
-                  styles.inlineAutoScrollText,
-                  autoScroll && styles.inlineAutoScrollTextActive
-                ]}>
-                  {autoScroll ? 'Auto ON' : 'Auto OFF'}
-                </Text>
-              </Pressable>
-            </Animated.View>
-          )}
-          
           <Pressable onPress={onShare} style={styles.shareButton}>
             <Share2 color="white" size={SCREEN_WIDTH * 0.06} />
           </Pressable>
@@ -597,7 +478,6 @@ const VideoItemComponent = React.memo(({
             )}
           </View>
         </View>
-        
         {showButtons && (
           <View style={styles.buttonPopup}>
             <Text style={styles.popupHeader}>Video paused ⏸️</Text>
@@ -607,290 +487,138 @@ const VideoItemComponent = React.memo(({
           </View>
         )}
       </View>
-      
-      {/* Lock overlay when premium alert is shown */}
-      {isLocked && isCurrentVideo && (
-        <View style={styles.lockOverlay}>
-          <Lock color="white" size={SCREEN_WIDTH * 0.1} />
-        </View>
-      )}
     </View>
   );
 });
 
+interface VideoRefs {
+  [key: string]: React.RefObject<any>;
+}
+
+interface ViewableItemsInfo {
+  viewableItems: Array<ViewToken>;
+  changed: Array<ViewToken>;
+}
+
 export default function VideoFeed() {
-  const [currentVideoIndex, setCurrentVideoIndex] = useState(0);
-  const [loadingMore, setLoadingMore] = useState(false);
-  const [refreshing, setRefreshing] = useState(false);
-  const [videos, setVideos] = useState<VideoItem[]>([]);
-  const [lastVideoId, setLastVideoId] = useState<string | null>(null);
-  const [hasMoreVideos, setHasMoreVideos] = useState(true);
-  const [isLoading, setIsLoading] = useState(true);
-  const [showLockedVideo, setShowLockedVideo] = useState(false);
-  const [showAutoScrollModal, setShowAutoScrollModal] = useState(false);
-  const [isAutoScrollEnabled, setIsAutoScrollEnabled] = useState(false);
-  const { user } = useSanityAuth();
-  
+  const [currentIndex, setCurrentIndex] = useState(0);
+  const [forceUpdate, setForceUpdate] = useState(0);
   const flatListRef = useRef<FlatList>(null);
   const videoRefs = useRef<VideoRefs>({});
-  const initRef = useRef(false);
-  const viewConfigRef = useRef({ viewAreaCoveragePercentThreshold: 70 });
-  const onViewableItemsChangedRef = useRef((info: ViewableItemsInfo) => {
-    if (info.viewableItems.length > 0) {
-      const index = info.viewableItems[0].index ?? 0;
-      setCurrentVideoIndex(index);
-    }
-  });
-  const autoScrollPulse = useRef(new Animated.Value(1)).current;
-  const autoScrollTimeoutRef = useRef<NodeJS.Timeout | null>(null);
-  
-  // Handle Video refs
-  const handleVideoRef = (id: string, ref: any) => {
+  const { loadReactions } = useReactions();
+
+  // Configure audio to play even when device is muted
+  useEffect(() => {
+    const configureAudio = async () => {
+      try {
+        await Audio.setAudioModeAsync({
+          playsInSilentModeIOS: true,  // iOS will play audio even when the device is in silent mode
+          staysActiveInBackground: false,
+          shouldDuckAndroid: true,     // Reduce volume of other apps when this app plays audio
+          playThroughEarpieceAndroid: false, // Play through speaker, not earpiece
+        });
+      } catch (error) {
+        console.error('Failed to configure audio mode:', error);
+      }
+    };
+
+    configureAudio();
+  }, []);
+
+  useEffect(() => {
+    // Listen for points reset and force re-render
+    const subscription = DeviceEventEmitter.addListener('POINTS_UPDATED', (event) => {
+      // Only reset position if it's from the reset button
+      if (event?.type === 'reset') {
+        setForceUpdate(prev => prev + 1);
+        setCurrentIndex(0);
+        // Scroll back to top only on reset
+        flatListRef.current?.scrollToOffset({ offset: 0, animated: true });
+      }
+    });
+
+    return () => {
+      subscription.remove();
+    };
+  }, []);
+
+  // Load reactions when feed becomes visible
+  useFocusEffect(
+    React.useCallback(() => {
+      loadReactions();
+      return () => {};
+    }, [loadReactions])
+  );
+
+  const handleVideoRef = (id: string, ref: React.RefObject<any>) => {
     videoRefs.current[id] = ref;
   };
-  
-  // Toggle auto-scroll
-  const toggleAutoScroll = useCallback(() => {
-    const newValue = !isAutoScrollEnabled;
-    setIsAutoScrollEnabled(newValue);
-    
-    // Save preference
-    AsyncStorage.setItem('autoScrollEnabled', String(newValue))
-      .catch(err => console.error('Error saving auto-scroll preference:', err));
-      
-    // Schedule next auto-scroll if enabled
-    if (newValue && videos.length > currentVideoIndex + 1) {
-      if (autoScrollTimeoutRef.current) {
-        clearTimeout(autoScrollTimeoutRef.current);
-      }
-      
-      autoScrollTimeoutRef.current = setTimeout(() => {
-        if (flatListRef.current && videos.length > currentVideoIndex + 1) {
-          flatListRef.current.scrollToIndex({
-            index: currentVideoIndex + 1,
-            animated: true
-          });
-        }
-      }, 5000); // Auto-scroll after 5 seconds
+
+  const handleViewabilityChanged = useCallback(({ viewableItems }: ViewableItemsInfo) => {
+    if (viewableItems.length > 0 && viewableItems[0].index !== null) {
+      setCurrentIndex(viewableItems[0].index);
     }
-  }, [isAutoScrollEnabled, videos, currentVideoIndex]);
-  
-  // Load videos from Sanity
-  const loadVideos = useCallback(async (refresh = false) => {
-    try {
-      if (refresh) {
-        setRefreshing(true);
-        setLastVideoId(null);
-      } else if (!hasMoreVideos || loadingMore) {
-        return;
-      } else {
-        setLoadingMore(true);
-      }
-      
-      console.log('Loading videos, lastId:', lastVideoId);
-      
-      // Using null for the `lastId` parameter as the videoService expects it
-      const fetchedVideos = await videoService.fetchVideos(
-        20, 
-        refresh ? null : (lastVideoId as null | undefined)
-      );
-      
-      // Update state based on whether this is a refresh or pagination
-      if (refresh) {
-        setVideos(fetchedVideos);
-      } else {
-        setVideos(prev => [...prev, ...fetchedVideos]);
-      }
-      
-      // Update pagination state
-      if (fetchedVideos.length > 0) {
-        setLastVideoId(fetchedVideos[fetchedVideos.length - 1].id);
-      }
-      setHasMoreVideos(fetchedVideos.length === 20);
-      
-      console.log(`Loaded ${fetchedVideos.length} videos`);
-    } catch (error) {
-      console.error('Error loading videos:', error);
-    } finally {
-      setIsLoading(false);
-      setLoadingMore(false);
-      setRefreshing(false);
-    }
-  }, [lastVideoId, hasMoreVideos, loadingMore]);
-  
-  // Initial load
-  useEffect(() => {
-    if (!initRef.current) {
-      loadVideos(true);
-      initRef.current = true;
-    }
-  }, [loadVideos]);
-  
-  // Configure auto-scroll animation
-  useEffect(() => {
-    const pulsateAnimation = () => {
-      Animated.sequence([
-        Animated.timing(autoScrollPulse, {
-          toValue: 1.2,
-          duration: 1000,
-          useNativeDriver: true
-        }),
-        Animated.timing(autoScrollPulse, {
-          toValue: 1,
-          duration: 1000,
-          useNativeDriver: true
-        })
-      ]).start(() => pulsateAnimation());
-    };
-    
-    pulsateAnimation();
-    
-    return () => {
-      autoScrollPulse.stopAnimation();
-    };
-  }, [autoScrollPulse]);
-  
-  // Reset video position helper function
-  const resetVideoPosition = (videoId: string) => {
-    const videoRef = videoRefs.current[videoId];
-    if (videoRef && typeof videoRef.resetPosition === 'function') {
-      videoRef.resetPosition();
-    }
-  };
-  
-  // Load more videos when reaching the end
-  const handleEndReached = () => {
-    if (!loadingMore && hasMoreVideos) {
-      loadVideos();
-    }
-  };
-  
-  // Add pull-to-refresh functionality
-  const handleRefresh = () => {
-    loadVideos(true);
-  };
-  
-  // Render video item
+  }, []);
+
   const renderVideo = ({ item, index }: { item: VideoItem; index: number }) => (
     <VideoItemComponent
-      key={item.id}
       item={item}
-      isCurrentVideo={index === currentVideoIndex}
+      isCurrentVideo={index === currentIndex}
       onVideoRef={handleVideoRef}
-      isLocked={showLockedVideo && index > 1}
-      autoScroll={isAutoScrollEnabled}
-      toggleAutoScroll={toggleAutoScroll}
-      autoScrollPulse={autoScrollPulse}
     />
   );
-  
-  // Render loading state
-  if (isLoading && videos.length === 0) {
-    return (
-      <View style={[styles.container, styles.loadingContainer]}>
-        <ActivityIndicator size="large" color="#0070F3" />
-        <Text style={styles.loadingText}>Loading videos...</Text>
-      </View>
-    );
-  }
-  
+
   return (
-    <View style={styles.container}>
-      <FlatList
-        ref={flatListRef}
-        data={videos}
-        renderItem={renderVideo}
-        keyExtractor={(item) => item.id}
-        pagingEnabled
-        snapToInterval={AVAILABLE_HEIGHT}
-        decelerationRate="fast"
-        showsVerticalScrollIndicator={false}
-        onViewableItemsChanged={onViewableItemsChangedRef.current}
-        viewabilityConfig={viewConfigRef.current}
-        initialNumToRender={3}
-        maxToRenderPerBatch={3}
-        windowSize={5}
-        onEndReached={handleEndReached}
-        onEndReachedThreshold={0.5}
-        refreshing={refreshing}
-        onRefresh={handleRefresh}
-        snapToAlignment="start"
-        removeClippedSubviews={true}
-        maintainVisibleContentPosition={{
-          minIndexForVisible: 0,
-          autoscrollToTopThreshold: 10,
-        }}
-        ListFooterComponent={loadingMore ? (
-          <View style={styles.loadMoreContainer}>
-            <ActivityIndicator size="small" color="#0070F3" />
-            <Text style={styles.loadMoreText}>Loading more videos...</Text>
-          </View>
-        ) : null}
-        ListEmptyComponent={
-          <View style={styles.emptyContainer}>
-            <Text style={styles.emptyText}>No videos found</Text>
-            <Pressable style={styles.refreshButton} onPress={() => loadVideos(true)}>
-              <RefreshCw color="#fff" size={20} />
-              <Text style={styles.refreshButtonText}>Refresh</Text>
-            </Pressable>
-          </View>
-        }
-      />
-      
-      {/* Show spinner when loading more videos */}
-      {loadingMore && videos.length > 0 && (
-        <View style={styles.loadingOverlay}>
-          <ActivityIndicator size="small" color="#0070F3" />
-        </View>
-      )}
-    </View>
+    <FlatList
+      key={forceUpdate}
+      ref={flatListRef}
+      data={VIDEOS}
+      renderItem={renderVideo}
+      keyExtractor={(item) => item.id}
+      pagingEnabled
+      showsVerticalScrollIndicator={false}
+      snapToInterval={AVAILABLE_HEIGHT}
+      decelerationRate="fast"
+      onViewableItemsChanged={handleViewabilityChanged}
+      viewabilityConfig={{
+        itemVisiblePercentThreshold: 50,
+      }}
+      style={styles.flatList}
+      initialScrollIndex={0}
+      getItemLayout={(_, index) => ({
+        length: AVAILABLE_HEIGHT,
+        offset: AVAILABLE_HEIGHT * index,
+        index,
+      })}
+    />
   );
 }
 
 const styles = StyleSheet.create({
-  container: {
+  flatList: {
     flex: 1,
-    backgroundColor: '#000',
   },
   videoContainer: {
-    width: SCREEN_WIDTH,
-    height: AVAILABLE_HEIGHT,
-    backgroundColor: '#000',
-    justifyContent: 'center',
-    alignItems: 'center',
-    position: 'relative',
-  },
-  verticalContainer: {
     height: AVAILABLE_HEIGHT,
     width: SCREEN_WIDTH,
     justifyContent: 'center',
     alignItems: 'center',
     backgroundColor: '#000',
-    position: 'relative',
-  },
-  horizontalContainer: {
-    height: AVAILABLE_HEIGHT,
-    width: SCREEN_WIDTH,
-    justifyContent: 'center',
-    alignItems: 'center',
-    backgroundColor: '#000',
-    paddingVertical: 10,
-    position: 'relative',
   },
   video: {
-    position: 'absolute',
+    // Dynamic sizing is applied via calculateVideoDimensions
   },
   overlay: {
     ...StyleSheet.absoluteFillObject,
     justifyContent: 'flex-end',
     paddingBottom: SCREEN_HEIGHT * 0.02,
-    zIndex: 5,
   },
   videoInfo: {
     position: 'absolute',
     bottom: 0,
     left: SCREEN_WIDTH * 0.05,
     width: SCREEN_WIDTH * 0.65,
+    marginBottom: SCREEN_HEIGHT * 0.14,
   },
   authorContainer: {
     flexDirection: 'row',
@@ -901,12 +629,12 @@ const styles = StyleSheet.create({
   author: {
     color: 'white',
     fontSize: SCREEN_WIDTH * 0.045,
-    fontWeight: 'bold',
-    marginBottom: 4,
+    fontFamily: 'Inter_700Bold',
   },
   description: {
     color: 'white',
     fontSize: SCREEN_WIDTH * 0.035,
+    fontFamily: 'Inter_400Regular',
     marginBottom: SCREEN_HEIGHT * 0.015,
   },
   watchFullButton: {
@@ -920,72 +648,7 @@ const styles = StyleSheet.create({
   watchFullButtonText: {
     color: 'black',
     fontSize: SCREEN_WIDTH * 0.035,
-    fontWeight: '600',
-  },
-  loadingContainer: {
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-  loadingText: {
-    color: '#0070F3',
-    fontSize: 16,
-    marginTop: 10,
-  },
-  loadMoreContainer: {
-    padding: 10,
-    alignItems: 'center',
-  },
-  loadMoreText: {
-    color: '#0070F3',
-    fontSize: 14,
-    marginTop: 8,
-  },
-  emptyContainer: {
-    height: AVAILABLE_HEIGHT,
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-  emptyText: {
-    color: '#AAA',
-    fontSize: 16,
-    marginBottom: 16,
-  },
-  refreshButton: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    padding: 10,
-    borderWidth: 1,
-    borderColor: '#444',
-    borderRadius: 10,
-  },
-  refreshButtonText: {
-    color: '#AAA',
-    fontSize: 14,
-    marginLeft: 10,
-  },
-  loadingOverlay: {
-    ...StyleSheet.absoluteFillObject,
-    backgroundColor: 'rgba(0, 0, 0, 0.7)',
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-  verticalOverlay: {
-    justifyContent: 'flex-end',
-    paddingBottom: SCREEN_HEIGHT * 0.02,
-    position: 'absolute',
-    top: 0,
-    left: 0,
-    right: 0,
-    bottom: 0,
-  },
-  horizontalOverlay: {
-    justifyContent: 'space-between',
-    paddingVertical: SCREEN_HEIGHT * 0.02,
-    position: 'absolute',
-    top: 0,
-    left: 0,
-    right: 0,
-    bottom: 0,
+    fontFamily: 'Inter_600SemiBold',
   },
   actionButtons: {
     position: 'absolute',
@@ -993,6 +656,7 @@ const styles = StyleSheet.create({
     bottom: 0,
     alignItems: 'center',
     gap: SCREEN_HEIGHT * 0.025,
+    marginBottom: SCREEN_HEIGHT * 0.14,
   },
   likeContainer: {
     alignItems: 'center',
@@ -1049,6 +713,29 @@ const styles = StyleSheet.create({
     fontSize: 16,
     fontWeight: '600',
   },
+  verticalContainer: {
+    height: AVAILABLE_HEIGHT,
+    width: SCREEN_WIDTH,
+    justifyContent: 'center',
+    alignItems: 'center',
+    backgroundColor: '#000',
+  },
+  horizontalContainer: {
+    height: AVAILABLE_HEIGHT,
+    width: SCREEN_WIDTH,
+    justifyContent: 'center',
+    alignItems: 'center',
+    backgroundColor: '#000',
+    paddingVertical: 10,
+  },
+  verticalOverlay: {
+    justifyContent: 'flex-end',
+    paddingBottom: SCREEN_HEIGHT * 0.02,
+  },
+  horizontalOverlay: {
+    justifyContent: 'space-between',
+    paddingVertical: SCREEN_HEIGHT * 0.02,
+  },
   watchedContainer: {
     alignItems: 'center',
     marginBottom: 10,
@@ -1067,9 +754,11 @@ const styles = StyleSheet.create({
   pointsText: {
     color: '#00ff00',
     fontSize: 15,
+    
     fontWeight: 'bold',
     textAlign: 'center',
     textShadowColor: 'rgba(0, 0, 0, 0.3)',
+
     textShadowRadius: 3,
   },
   staticPoints: {
@@ -1080,46 +769,6 @@ const styles = StyleSheet.create({
     backgroundColor: 'transparent',
     alignItems: 'center',
     justifyContent: 'center',
-  },
-  inlineAutoScrollButton: {
-    alignItems: 'center',
-    backgroundColor: 'rgba(0, 0, 0, 0.5)',
-    borderRadius: SCREEN_WIDTH * 0.08,
-    borderWidth: 1,
-    borderColor: '#1877F2',
-    padding: SCREEN_WIDTH * 0.015,
-    marginVertical: SCREEN_HEIGHT * 0.01,
-    width: SCREEN_WIDTH * 0.17,
-  },
-  inlineAutoScrollButtonActive: {
-    backgroundColor: '#1877F2',
-  },
-  inlineAutoScrollText: {
-    color: 'white',
-    fontSize: SCREEN_WIDTH * 0.03,
-    fontFamily: 'Inter_600SemiBold',
-    marginTop: 2,
-  },
-  inlineAutoScrollTextActive: {
-    color: 'white',
-    fontWeight: 'bold',
-  },
-  lockOverlay: {
-    ...StyleSheet.absoluteFillObject,
-    backgroundColor: 'rgba(0, 0, 0, 0.7)',
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-  lockedOverlay: {
-    ...StyleSheet.absoluteFillObject,
-    backgroundColor: 'rgba(0, 0, 0, 0.7)',
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-  lockedText: {
-    color: 'white',
-    fontSize: 18,
-    fontWeight: 'bold',
   },
   countdownWrapper: {
     flexDirection: 'row',

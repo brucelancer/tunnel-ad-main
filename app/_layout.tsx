@@ -24,6 +24,7 @@ export default function RootLayout() {
       <View style={styles.container}>
         <Stack screenOptions={{ headerShown: false }}>
           <Stack.Screen name="(tabs)" />
+          <Stack.Screen name="screens" />
           <Stack.Screen name="+not-found" />
         </Stack>
         <StatusBar style="light" />

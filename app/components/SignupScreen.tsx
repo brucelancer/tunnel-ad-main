@@ -14,9 +14,11 @@ import {
   DeviceEventEmitter,
   Image,
   useWindowDimensions,
+  ActivityIndicator,
 } from 'react-native';
 import { LinearGradient } from 'expo-linear-gradient';
 import { Mail, Lock, Eye, EyeOff, User, ArrowRight } from 'lucide-react-native';
+import { useSanityAuth } from '../hooks/useSanityAuth';
 
 const { width: SCREEN_WIDTH, height: SCREEN_HEIGHT } = Dimensions.get('window');
 
@@ -28,13 +30,15 @@ interface SignupScreenProps {
 export default function SignupScreen({ onAuthenticated, onSwitchToLogin }: SignupScreenProps) {
   const { width: SCREEN_WIDTH, height: SCREEN_HEIGHT } = useWindowDimensions();
   const [email, setEmail] = useState('');
+  const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
-  const [username, setUsername] = useState('');
   const [showPassword, setShowPassword] = useState(false);
   const [showConfirmPassword, setShowConfirmPassword] = useState(false);
-  const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState('');
+  
+  // Get auth functions and settings from our Sanity hook
+  const { signup, googleLogin, loading, authSettings } = useSanityAuth();
 
   // Animation values
   const fadeAnim = useRef(new Animated.Value(0)).current;
@@ -49,48 +53,124 @@ export default function SignupScreen({ onAuthenticated, onSwitchToLogin }: Signu
     }).start();
   }, []);
 
+  // Get Sanity settings for signup screen
+  const branding = authSettings?.branding || {
+    appName: 'tunnel',
+    tagline: 'Connect, Share, Earn',
+    primaryColor: '#0070F3',
+    secondaryColor: '#00DFD8',
+  };
+  
+  const signupScreenSettings = authSettings?.signupScreen || {
+    headerTitle: 'tunnel',
+    title: 'Create Account',
+    subtitle: 'Sign up to start your journey',
+    googleAuthEnabled: true,
+    footerText: 'By continuing, you agree to our Terms of Service and Privacy Policy'
+  };
+
+  const passwordRequirements = authSettings?.passwordRequirements || {
+    minLength: 8,
+    requireSpecialChar: true,
+    requireNumber: true,
+    requireUppercase: true
+  };
+
+  const validatePassword = (pwd: string) => {
+    if (pwd.length < passwordRequirements.minLength) {
+      return `Password must be at least ${passwordRequirements.minLength} characters`;
+    }
+    
+    if (passwordRequirements.requireSpecialChar && !/[!@#$%^&*(),.?":{}|<>]/.test(pwd)) {
+      return 'Password must contain at least one special character';
+    }
+    
+    if (passwordRequirements.requireNumber && !/\d/.test(pwd)) {
+      return 'Password must contain at least one number';
+    }
+    
+    if (passwordRequirements.requireUppercase && !/[A-Z]/.test(pwd)) {
+      return 'Password must contain at least one uppercase letter';
+    }
+    
+    return '';
+  };
+
   const handleSignup = async () => {
     setError('');
-    setIsLoading(true);
-
+    
     // Basic validation
-    if (!email || !password || !confirmPassword || !username) {
+    if (!email || !username || !password || !confirmPassword) {
       setError('Please fill in all fields');
-      setIsLoading(false);
       return;
     }
     
     if (password !== confirmPassword) {
       setError('Passwords do not match');
-      setIsLoading(false);
       return;
     }
     
-    if (password.length < 6) {
-      setError('Password must be at least 6 characters');
-      setIsLoading(false);
+    const passwordError = validatePassword(password);
+    if (passwordError) {
+      setError(passwordError);
       return;
     }
 
-    // Simulate API call
-    setTimeout(() => {
-      setIsLoading(false);
+    try {
+      console.log('Submitting signup:', { email, username, password: '***' });
       
-      // Emit auth state change event
-      DeviceEventEmitter.emit('AUTH_STATE_CHANGED', { isAuthenticated: true });
+      // Call Sanity signup function with complete user data
+      const user = await signup({
+        email,
+        username,
+        password
+      });
+      
+      console.log('Signup successful, new user:', user?._id);
+      
+      // Emit auth state change event with user data
+      DeviceEventEmitter.emit('AUTH_STATE_CHANGED', { 
+        isAuthenticated: true,
+        userData: user
+      });
+      
       onAuthenticated();
-    }, 1500);
+    } catch (err: any) {
+      console.error('Signup error:', err);
+      setError(err.message || 'Registration failed');
+    }
   };
 
-  const handleGoogleSignUp = () => {
-    setIsLoading(true);
-    
-    // Simulate Google sign-up
-    setTimeout(() => {
-      setIsLoading(false);
-      DeviceEventEmitter.emit('AUTH_STATE_CHANGED', { isAuthenticated: true });
+  const handleGoogleSignUp = async () => {
+    try {
+      // Mock Google auth data - in a real app, this would come from Google Auth
+      const googleUserData = {
+        email: 'google.user@example.com',
+        displayName: 'Google User',
+        photoURL: null,
+        // Additional data that might help create a better user profile
+        firstName: 'Google',
+        lastName: 'User',
+        uid: 'google-mock-uid-123456',
+      };
+      
+      console.log('Attempting Google signup with data:', googleUserData);
+      
+      const user = await googleLogin(googleUserData);
+      
+      console.log('Google signup successful, user data:', user);
+      
+      // Emit auth state change event with user data
+      DeviceEventEmitter.emit('AUTH_STATE_CHANGED', { 
+        isAuthenticated: true,
+        userData: user
+      });
+      
       onAuthenticated();
-    }, 1500);
+    } catch (err: any) {
+      console.error('Google authentication failed:', err);
+      setError(err.message || 'Google authentication failed');
+    }
   };
 
   const renderInputField = (
@@ -111,7 +191,7 @@ export default function SignupScreen({ onAuthenticated, onSwitchToLogin }: Signu
         value={value}
         onChangeText={onChangeText}
         secureTextEntry={secureTextEntry}
-        autoCapitalize="none"
+        autoCapitalize={placeholder === 'Username' ? 'none' : 'none'}
       />
       {showPasswordToggle && (
         <Pressable style={styles.eyeIcon} onPress={togglePasswordVisibility}>
@@ -152,10 +232,10 @@ export default function SignupScreen({ onAuthenticated, onSwitchToLogin }: Signu
           >
             <View style={styles.headerTextContainer}>
               <Text style={[styles.headerTitle, { fontSize: dynamicStyles.titleSize + 10 }]}>
-                tunnel
+                {signupScreenSettings.headerTitle}
               </Text>
               <Text style={[styles.headerSubtitle, { fontSize: dynamicStyles.subtitleSize }]}>
-                Connect, Share, Earn
+                {branding.tagline}
               </Text>
             </View>
 
@@ -163,24 +243,24 @@ export default function SignupScreen({ onAuthenticated, onSwitchToLogin }: Signu
               style={[styles.formContainer, { padding: dynamicStyles.contentPadding, width: dynamicStyles.formWidth }]}
             >
               <Text style={[styles.title, { fontSize: dynamicStyles.titleSize }]}>
-                Create Account
+                {signupScreenSettings.title}
               </Text>
               <Text style={[styles.subtitle, { fontSize: dynamicStyles.subtitleSize }]}>
-                Join our community and start earning
+                {signupScreenSettings.subtitle}
               </Text>
-
-              {renderInputField(
-                <User size={22} color="#0070F3" />,
-                'Username',
-                username,
-                setUsername
-              )}
 
               {renderInputField(
                 <Mail size={22} color="#0070F3" />,
                 'Email',
                 email,
                 setEmail
+              )}
+
+              {renderInputField(
+                <User size={22} color="#0070F3" />,
+                'Username',
+                username,
+                setUsername
               )}
 
               {renderInputField(
@@ -206,43 +286,53 @@ export default function SignupScreen({ onAuthenticated, onSwitchToLogin }: Signu
               {error ? <Text style={styles.errorText}>{error}</Text> : null}
 
               <Pressable
-                style={[styles.authButton, isLoading && styles.authButtonDisabled]}
+                style={[styles.authButton, loading && styles.authButtonDisabled]}
                 onPress={handleSignup}
-                disabled={isLoading}
+                disabled={loading}
               >
                 <LinearGradient
-                  colors={['#0070F3', '#00DFD8']}
+                  colors={[branding.primaryColor, branding.secondaryColor]}
                   style={[styles.authButtonGradient, { padding: dynamicStyles.buttonPadding }]}
                   start={{ x: 0, y: 0 }}
                   end={{ x: 1, y: 1 }}
                 >
-                  <Text style={styles.authButtonText}>
-                    Sign Up
-                  </Text>
-                  <ArrowRight size={22} color="white" />
+                  {loading ? (
+                    <ActivityIndicator color="white" size="small" />
+                  ) : (
+                    <>
+                      <Text style={styles.authButtonText}>
+                        Create Account
+                      </Text>
+                      <ArrowRight size={22} color="white" />
+                    </>
+                  )}
                 </LinearGradient>
               </Pressable>
 
-              <View style={styles.dividerContainer}>
-                <View style={styles.divider} />
-                <Text style={styles.dividerText}>OR</Text>
-                <View style={styles.divider} />
-              </View>
+              {signupScreenSettings.googleAuthEnabled && (
+                <>
+                  <View style={styles.dividerContainer}>
+                    <View style={styles.divider} />
+                    <Text style={styles.dividerText}>OR</Text>
+                    <View style={styles.divider} />
+                  </View>
 
-              <Pressable
-                style={[styles.googleButton, isLoading && styles.authButtonDisabled]}
-                onPress={handleGoogleSignUp}
-                disabled={isLoading}
-              >
-                <View style={styles.googleButtonContent}>
-                  <Image 
-                    source={{ uri: 'https://developers.google.com/identity/images/g-logo.png' }} 
-                    style={styles.googleIcon} 
-                    resizeMode="contain"
-                  />
-                  <Text style={styles.googleButtonText}>Sign up with Google</Text>
-                </View>
-              </Pressable>
+                  <Pressable
+                    style={[styles.googleButton, loading && styles.authButtonDisabled]}
+                    onPress={handleGoogleSignUp}
+                    disabled={loading}
+                  >
+                    <View style={styles.googleButtonContent}>
+                      <Image 
+                        source={{ uri: 'https://developers.google.com/identity/images/g-logo.png' }} 
+                        style={styles.googleIcon} 
+                        resizeMode="contain"
+                      />
+                      <Text style={styles.googleButtonText}>Sign up with Google</Text>
+                    </View>
+                  </Pressable>
+                </>
+              )}
 
               <View style={styles.switchContainer}>
                 <Text style={[styles.switchText, { fontSize: dynamicStyles.subtitleSize }]}>
@@ -258,9 +348,7 @@ export default function SignupScreen({ onAuthenticated, onSwitchToLogin }: Signu
 
             <View style={styles.footer}>
               <Text style={[styles.footerText, { fontSize: dynamicStyles.subtitleSize - 2 }]}>
-                By continuing, you agree to our{' '}
-                <Text style={styles.footerLink}>Terms of Service</Text> and{' '}
-                <Text style={styles.footerLink}>Privacy Policy</Text>
+                {signupScreenSettings.footerText}
               </Text>
             </View>
           </Animated.View>

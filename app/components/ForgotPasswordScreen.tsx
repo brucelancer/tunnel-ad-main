@@ -13,9 +13,11 @@ import {
   ScrollView,
   Image,
   useWindowDimensions,
+  ActivityIndicator,
 } from 'react-native';
 import { LinearGradient } from 'expo-linear-gradient';
 import { Mail, ArrowLeft, Send } from 'lucide-react-native';
+import { useSanityAuth } from '../hooks/useSanityAuth';
 
 interface ForgotPasswordScreenProps {
   onBack: () => void;
@@ -24,9 +26,11 @@ interface ForgotPasswordScreenProps {
 export default function ForgotPasswordScreen({ onBack }: ForgotPasswordScreenProps) {
   const { width: SCREEN_WIDTH, height: SCREEN_HEIGHT } = useWindowDimensions();
   const [email, setEmail] = useState('');
-  const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState('');
   const [isEmailSent, setIsEmailSent] = useState(false);
+
+  // Get auth functions and settings from Sanity
+  const { forgotPassword, loading, authSettings } = useSanityAuth();
 
   // Animation values
   const fadeAnim = useRef(new Animated.Value(0)).current;
@@ -48,14 +52,30 @@ export default function ForgotPasswordScreen({ onBack }: ForgotPasswordScreenPro
     ]).start();
   }, []);
 
+  // Get Sanity settings for forgot password screen
+  const branding = authSettings?.branding || {
+    appName: 'tunnel',
+    tagline: 'Connect, Share, Earn',
+    primaryColor: '#0070F3',
+    secondaryColor: '#00DFD8',
+  };
+  
+  const forgotPasswordScreenSettings = authSettings?.forgotPasswordScreen || {
+    headerTitle: 'tunnel',
+    title: 'Reset Password',
+    subtitle: 'Enter your email address and we\'ll send you instructions to reset your password',
+    successTitle: 'Check Your Email',
+    successMessage: 'We\'ve sent password reset instructions to your email address. Please check your inbox.',
+    buttonText: 'Send Reset Link',
+    resendText: 'Didn\'t receive the email? Send again'
+  };
+
   const handleResetPassword = async () => {
     setError('');
-    setIsLoading(true);
 
     // Basic validation
     if (!email) {
       setError('Please enter your email address');
-      setIsLoading(false);
       return;
     }
 
@@ -63,15 +83,19 @@ export default function ForgotPasswordScreen({ onBack }: ForgotPasswordScreenPro
     const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
     if (!emailRegex.test(email)) {
       setError('Please enter a valid email address');
-      setIsLoading(false);
       return;
     }
 
-    // Simulate API call
-    setTimeout(() => {
-      setIsLoading(false);
+    try {
+      // Call Sanity forgot password function
+      await forgotPassword(email);
       setIsEmailSent(true);
-    }, 1500);
+    } catch (err: any) {
+      // For security reasons, we don't want to reveal if an email exists or not
+      // So we show success message even if there's an error (but we log it)
+      console.error('Error requesting password reset:', err);
+      setIsEmailSent(true);
+    }
   };
 
   // Responsive styles
@@ -120,11 +144,11 @@ export default function ForgotPasswordScreen({ onBack }: ForgotPasswordScreenPro
 
             <View style={styles.headerTextContainer}>
               <Text style={[styles.headerTitle, { fontSize: dynamicStyles.titleSize + 10 }]}>
-                tunnel
+                {forgotPasswordScreenSettings.headerTitle}
               </Text>
-              {/* <Text style={[styles.headerSubtitle, { fontSize: dynamicStyles.subtitleSize }]}>
-                Connect, Share, Earn
-              </Text> */}
+              <Text style={[styles.headerSubtitle, { fontSize: dynamicStyles.subtitleSize }]}>
+                {branding.tagline}
+              </Text>
             </View>
 
             <View 
@@ -137,10 +161,10 @@ export default function ForgotPasswordScreen({ onBack }: ForgotPasswordScreenPro
               ]}
             >
               <Text style={[styles.title, { fontSize: dynamicStyles.titleSize }]}>
-                Reset Password
+                {forgotPasswordScreenSettings.title}
               </Text>
               <Text style={[styles.subtitle, { fontSize: dynamicStyles.subtitleSize }]}>
-                Enter your email address and we'll send you instructions to reset your password
+                {forgotPasswordScreenSettings.subtitle}
               </Text>
 
               {!isEmailSent ? (
@@ -164,20 +188,26 @@ export default function ForgotPasswordScreen({ onBack }: ForgotPasswordScreenPro
                   {error ? <Text style={styles.errorText}>{error}</Text> : null}
 
                   <Pressable
-                    style={[styles.resetButton, isLoading && styles.resetButtonDisabled]}
+                    style={[styles.resetButton, loading && styles.resetButtonDisabled]}
                     onPress={handleResetPassword}
-                    disabled={isLoading}
+                    disabled={loading}
                   >
                     <LinearGradient
-                      colors={['#0070F3', '#00DFD8']}
+                      colors={[branding.primaryColor, branding.secondaryColor]}
                       style={[styles.resetButtonGradient, { padding: dynamicStyles.buttonPadding }]}
                       start={{ x: 0, y: 0 }}
                       end={{ x: 1, y: 1 }}
                     >
-                      <Text style={styles.resetButtonText}>
-                        Send Reset Link
-                      </Text>
-                      <Send size={22} color="white" />
+                      {loading ? (
+                        <ActivityIndicator color="white" size="small" />
+                      ) : (
+                        <>
+                          <Text style={styles.resetButtonText}>
+                            {forgotPasswordScreenSettings.buttonText}
+                          </Text>
+                          <Send size={22} color="white" />
+                        </>
+                      )}
                     </LinearGradient>
                   </Pressable>
                 </>
@@ -185,23 +215,23 @@ export default function ForgotPasswordScreen({ onBack }: ForgotPasswordScreenPro
                 <View style={styles.successContainer}>
                   <View style={styles.successIconContainer}>
                     <LinearGradient
-                      colors={['rgba(0,112,243,0.1)', 'rgba(0,223,216,0.1)']}
+                      colors={[`${branding.primaryColor}20`, `${branding.secondaryColor}20`]}
                       style={styles.successIconGradient}
                       start={{ x: 0, y: 0 }}
                       end={{ x: 1, y: 1 }}
                     >
-                      <Send size={32} color="#0070F3" />
+                      <Send size={32} color={branding.primaryColor} />
                     </LinearGradient>
                   </View>
-                  <Text style={styles.successTitle}>Check Your Email</Text>
+                  <Text style={styles.successTitle}>{forgotPasswordScreenSettings.successTitle}</Text>
                   <Text style={styles.successMessage}>
-                    We've sent password reset instructions to your email address. Please check your inbox.
+                    {forgotPasswordScreenSettings.successMessage}
                   </Text>
                   <TouchableOpacity 
                     style={styles.resendButton}
                     onPress={() => setIsEmailSent(false)}
                   >
-                    <Text style={styles.resendButtonText}>Didn't receive the email? Send again</Text>
+                    <Text style={styles.resendButtonText}>{forgotPasswordScreenSettings.resendText}</Text>
                   </TouchableOpacity>
                 </View>
               )}

@@ -8,6 +8,7 @@ import {
   Dimensions,
   Animated,
   Alert,
+  ActivityIndicator,
 } from 'react-native';
 import {
   Film,
@@ -23,6 +24,8 @@ import { Video, ResizeMode } from 'expo-av';
 import * as ImagePicker from 'expo-image-picker';
 import { LinearGradient } from 'expo-linear-gradient';
 import ScreenContainer from './ScreenContainer';
+import * as videoService from '../../tunnel-ad-main/services/videoService';
+import { useSanityAuth } from '../hooks/useSanityAuth';
 
 const { width: SCREEN_WIDTH } = Dimensions.get('window');
 
@@ -38,9 +41,14 @@ export default function VideoTunnelling({ onSubmit }: VideoTunnellingProps) {
   const [videoOrientation, setVideoOrientation] = useState<VideoOrientation>('horizontal');
   const [personalDescription, setPersonalDescription] = useState('');
   const [personalVideoUri, setPersonalVideoUri] = useState<string | null>(null);
+  const [videoTitle, setVideoTitle] = useState('');
   const [adDescription, setAdDescription] = useState('');
   const [videoLink, setVideoLink] = useState('');
   const [isMuted, setIsMuted] = useState(false);
+  const [isUploading, setIsUploading] = useState(false);
+  const [uploadProgress, setUploadProgress] = useState(0);
+  
+  const { user } = useSanityAuth();
   
   const borderAnimation = useRef(new Animated.Value(0)).current;
   const linkFieldAnimation = useRef(new Animated.Value(0)).current;
@@ -124,6 +132,12 @@ export default function VideoTunnelling({ onSubmit }: VideoTunnellingProps) {
 
       if (!result.canceled && result.assets[0].uri) {
         setPersonalVideoUri(result.assets[0].uri);
+        
+        // Auto-detect orientation from video dimensions
+        if (result.assets[0].width && result.assets[0].height) {
+          const aspectRatio = result.assets[0].width / result.assets[0].height;
+          setVideoOrientation(aspectRatio >= 1 ? 'horizontal' : 'vertical');
+        }
       }
     } catch (error) {
       Alert.alert('Error', 'Failed to upload video');
@@ -151,29 +165,83 @@ export default function VideoTunnelling({ onSubmit }: VideoTunnellingProps) {
     setVideoLink(sampleLink);
   };
 
-  const handleSubmit = () => {
-    const currentDescription = contentType === 'personal' ? personalDescription : adDescription;
+  const handleSubmit = async () => {
+    if (!user || !user._id) {
+      Alert.alert('Authentication Required', 'Please log in to upload videos');
+      return;
+    }
     
-    if (!currentDescription) {
-      Alert.alert('Error', 'Please add a description');
-      return;
+    let title = videoTitle;
+    let description = contentType === 'personal' ? personalDescription : adDescription;
+    
+    // Validate title
+    if (!title) {
+      title = 'Untitled Video';
     }
-
+    
+    // Check if we have a video source
     if (contentType === 'personal' && !personalVideoUri) {
-      Alert.alert('Error', 'Please upload a video');
+      Alert.alert('Video Required', 'Please upload a video file');
       return;
     }
+    
     if (contentType === 'ad' && !videoLink) {
-      Alert.alert('Error', 'Please provide a valid video link');
+      Alert.alert('Video Link Required', 'Please provide a video link');
       return;
     }
-
-    onSubmit({
-      type: contentType,
-      description: currentDescription,
-      videoUri: contentType === 'personal' ? personalVideoUri : videoLink,
-      orientation: videoOrientation,
-    });
+    
+    // Start uploading
+    setIsUploading(true);
+    setUploadProgress(10);
+    
+    try {
+      // Prepare video data
+      const videoData = {
+        title,
+        description,
+        contentType,
+        videoOrientation,
+        videoUri: personalVideoUri,
+        videoLink,
+        aspectRatio: videoOrientation === 'horizontal' ? 16/9 : 9/16,
+      };
+      
+      // Simulate progress for better UX
+      setUploadProgress(30);
+      setTimeout(() => setUploadProgress(50), 500);
+      setTimeout(() => setUploadProgress(70), 1000);
+      
+      // Upload to Sanity
+      const createdVideo = await videoService.createVideo(videoData, user._id);
+      
+      // Update progress to complete
+      setUploadProgress(100);
+      
+      // Show success message
+      Alert.alert(
+        'Video Uploaded',
+        'Your video has been uploaded successfully!',
+        [{ text: 'OK', onPress: () => {
+          // Reset form and call onSubmit
+          resetForm();
+          onSubmit(createdVideo);
+        }}]
+      );
+    } catch (error) {
+      console.error('Error uploading video:', error);
+      Alert.alert('Upload Failed', 'There was a problem uploading your video. Please try again.');
+    } finally {
+      setIsUploading(false);
+      setUploadProgress(0);
+    }
+  };
+  
+  const resetForm = () => {
+    setVideoTitle('');
+    setPersonalDescription('');
+    setAdDescription('');
+    setPersonalVideoUri(null);
+    setVideoLink('');
   };
 
   const getContentTypeStyles = (type: ContentType, isActive: boolean) => ({
@@ -280,6 +348,21 @@ export default function VideoTunnelling({ onSubmit }: VideoTunnellingProps) {
     );
   };
 
+  // Add title input
+  const renderTitleInput = () => (
+    <View style={styles.inputSection}>
+      <Text style={styles.inputLabel}>Video Title</Text>
+      <TextInput
+        style={styles.textInput}
+        placeholder="Enter a title for your video"
+        placeholderTextColor="#666"
+        value={videoTitle}
+        onChangeText={setVideoTitle}
+        maxLength={100}
+      />
+    </View>
+  );
+
   return (
     <ScreenContainer>
       <View style={styles.container}>
@@ -297,6 +380,7 @@ export default function VideoTunnelling({ onSubmit }: VideoTunnellingProps) {
         </View>
 
         <View style={styles.formContainer}>
+          {renderTitleInput()}
           {contentType === 'personal' && (
             <>
               <View style={styles.inputGroup}>
@@ -509,22 +593,22 @@ export default function VideoTunnelling({ onSubmit }: VideoTunnellingProps) {
           )}
 
           <Pressable
-            style={[
-              styles.submitButton,
-              (!personalVideoUri || !personalDescription) && styles.submitButtonDisabled
-            ]}
+            style={[styles.submitButton, (isUploading) && styles.disabledButton]}
             onPress={handleSubmit}
+            disabled={isUploading}
           >
-            <LinearGradient
-              colors={['#0070F3', '#00DFD8']}
-              style={styles.submitGradient}
-              start={{ x: 0, y: 0 }}
-              end={{ x: 1, y: 1 }}
-            >
+            {isUploading ? (
+              <View style={styles.uploadingContainer}>
+                <ActivityIndicator color="white" size="small" />
+                <Text style={styles.submitButtonText}>
+                  Uploading... {uploadProgress}%
+                </Text>
+              </View>
+            ) : (
               <Text style={styles.submitButtonText}>
-                Share {contentType === 'personal' ? 'Personal Video' : 'Advertisement'}
+                Submit Video
               </Text>
-            </LinearGradient>
+            )}
           </Pressable>
         </View>
       </View>
@@ -808,12 +892,14 @@ const styles = StyleSheet.create({
     borderRadius: 24,
     overflow: 'hidden',
   },
-  submitButtonDisabled: {
-    opacity: 0.5,
+  disabledButton: {
+    opacity: 0.7,
   },
-  submitGradient: {
-    padding: 24,
+  uploadingContainer: {
+    flexDirection: 'row',
     alignItems: 'center',
+    justifyContent: 'center',
+    gap: 10,
   },
   submitButtonText: {
     color: '#fff',
@@ -842,5 +928,25 @@ const styles = StyleSheet.create({
   },
   soundButtonText: {
     fontSize: 18,
+  },
+  inputSection: {
+    marginBottom: 24,
+  },
+  inputLabel: {
+    color: '#fff',
+    fontSize: 16,
+    fontFamily: 'Inter_600SemiBold',
+    marginBottom: 10,
+    opacity: 0.9,
+  },
+  textInput: {
+    backgroundColor: 'rgba(255,255,255,0.05)',
+    borderRadius: 16,
+    padding: 16,
+    color: '#fff',
+    fontSize: 16,
+    fontFamily: 'Inter_400Regular',
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.1)',
   },
 }); 

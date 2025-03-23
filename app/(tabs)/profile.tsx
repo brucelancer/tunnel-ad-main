@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
 import {
   View,
   Text,
@@ -12,6 +12,10 @@ import {
   Switch,
   NativeScrollEvent,
   NativeSyntheticEvent,
+  RefreshControl,
+  Modal,
+  TouchableOpacity,
+  Alert,
 } from 'react-native';
 import { usePoints } from '../../hooks/usePoints';
 import { useReactions } from '../../hooks/useReactions';
@@ -32,11 +36,18 @@ import {
   MapPin,
   ChevronDown,
   LogOut,
+  User,
+  X,
+  ZoomIn,
+  ZoomOut,
 } from 'lucide-react-native';
 import { BlurView } from 'expo-blur';
-import { useRouter } from 'expo-router';
+import { useRouter, useFocusEffect } from 'expo-router';
 import ScreenContainer from '../components/ScreenContainer';
 import AuthScreen from '../components/AuthScreen';
+import { useSanityAuth } from '../hooks/useSanityAuth';
+import AsyncStorage from '@react-native-async-storage/async-storage';
+import * as sanityAuthService from '../../tunnel-ad-main/services/sanityAuthService';
 
 const { width: SCREEN_WIDTH, height: SCREEN_HEIGHT } = Dimensions.get('window');
 
@@ -92,6 +103,13 @@ export default function ProfileScreen() {
   const [expandedFaq, setExpandedFaq] = useState<string | null>(null);
   const router = useRouter();
   const [isAuthenticated, setIsAuthenticated] = useState(false);
+  const [refreshing, setRefreshing] = useState(false);
+  const [showImageModal, setShowImageModal] = useState(false);
+  const [imageScale, setImageScale] = useState(1);
+  const lastTapTimeRef = useRef(0);
+  
+  // Get user data from Sanity auth hook
+  const { user, logout } = useSanityAuth();
 
   useEffect(() => {
     setDisplayPoints(points);
@@ -112,18 +130,47 @@ export default function ProfileScreen() {
     };
   }, []);
 
-  // Listen for auth state changes
+  // Listen for auth state changes and for direct user updates
   useEffect(() => {
+    if (user) {
+      console.log("Profile screen received user data from useSanityAuth:", user);
+      
+      // Update authenticated state
+      setIsAuthenticated(true);
+      
+      // Update points display
+      if (user.points !== undefined) {
+        setDisplayPoints(user.points);
+      }
+    } else {
+      console.log("No user data in useSanityAuth hook");
+      setIsAuthenticated(false);
+    }
+    
+    // Listen for AUTH_STATE_CHANGED events
     const subscription = DeviceEventEmitter.addListener('AUTH_STATE_CHANGED', (event) => {
+      console.log("Profile screen received AUTH_STATE_CHANGED event:", event);
+      
+      // Update authentication state if it's provided
       if (event?.isAuthenticated !== undefined) {
         setIsAuthenticated(event.isAuthenticated);
+      }
+      
+      // If user data was included in the event, use it directly
+      if (event?.userData) {
+        console.log("Using user data from event in profile screen:", event.userData);
+        
+        // Update points if different
+        if (event.userData.points !== undefined) {
+          setDisplayPoints(event.userData.points);
+        }
       }
     });
 
     return () => {
       subscription.remove();
     };
-  }, []);
+  }, [user]);
 
   const animatePointsEarned = () => {
     Animated.sequence([
@@ -168,10 +215,82 @@ export default function ProfileScreen() {
     setShowResetConfirm(false);
   };
 
-  const handleLogout = () => {
-    // Emit auth state change event
-    DeviceEventEmitter.emit('AUTH_STATE_CHANGED', { isAuthenticated: false });
+  const handleLogout = async () => {
+    try {
+      // Call the logout function from the hook
+      await logout();
+      
+      // Clear local state immediately before event emission
+      setIsAuthenticated(false);
+      
+      // Clear from AsyncStorage directly for redundancy
+      await AsyncStorage.removeItem('user');
+      
+      // Emit auth state change event
+      DeviceEventEmitter.emit('AUTH_STATE_CHANGED', { 
+        isAuthenticated: false,
+        userData: null
+      });
+      
+      console.log('User logged out successfully');
+    } catch (error) {
+      console.error('Logout error:', error);
+    }
   };
+
+  const handleEditProfile = () => {
+    // Navigate to edit profile screen
+    router.push('/editprofile' as any);
+  };
+
+  // Function to force refresh user data (can be called on focus or pull-to-refresh)
+  const refreshUserData = async () => {
+    try {
+      setRefreshing(true);
+      // Force a re-check of user session
+      const userString = await AsyncStorage.getItem('user');
+      if (userString) {
+        const userData = JSON.parse(userString);
+        console.log('refreshUserData found user data:', userData);
+        
+        // Update local authentication state first
+        setIsAuthenticated(true);
+        
+        // Emit event with the user data to force update across components
+        DeviceEventEmitter.emit('AUTH_STATE_CHANGED', { 
+          isAuthenticated: true,
+          userData: userData 
+        });
+      } else {
+        console.log('No user data found in AsyncStorage');
+        setIsAuthenticated(false);
+      }
+    } catch (error) {
+      console.error('Error refreshing user data:', error);
+    } finally {
+      setRefreshing(false);
+    }
+  };
+
+  const onRefresh = useCallback(() => {
+    refreshUserData();
+  }, []);
+
+  // Call refreshUserData when component mounts to ensure latest data
+  useEffect(() => {
+    refreshUserData();
+  }, []);
+
+  // Refresh data when the screen comes into focus
+  useFocusEffect(
+    useCallback(() => {
+      console.log('Profile screen is focused, refreshing data...');
+      refreshUserData();
+      return () => {
+        // Clean up or actions to take when screen loses focus
+      };
+    }, [])
+  );
 
   const headerOpacity = scrollY.interpolate({
     inputRange: [0, 50, 100],
@@ -184,6 +303,19 @@ export default function ProfileScreen() {
     outputRange: [-90, 0],
     extrapolate: 'clamp',
   });
+
+  // Function to get image URL from a Sanity image object or direct URI
+  const getImageUrl = (imageData: any): string | undefined => {
+    // If it's a string URI, use it directly
+    if (typeof imageData === 'string') {
+      return imageData;
+    }
+    // If it's a Sanity image object, convert it to URL
+    else if (imageData && imageData.asset) {
+      return sanityAuthService.urlFor(imageData).url();
+    }
+    return undefined;
+  };
 
   const renderStatCard = (icon: React.ReactNode, title: string, value: string | number) => (
     <View style={styles.statCard}>
@@ -260,6 +392,34 @@ export default function ProfileScreen() {
     scrollY.setValue(offsetY);
   };
 
+  // Function to handle zoom in
+  const handleZoomIn = () => {
+    setImageScale(prev => Math.min(prev + 0.5, 3)); // Max zoom 3x
+  };
+  
+  // Function to handle zoom out
+  const handleZoomOut = () => {
+    setImageScale(prev => Math.max(prev - 0.5, 1)); // Min zoom 1x
+  };
+
+  // Handle double tap to zoom in/out
+  const handleDoubleTap = () => {
+    const now = Date.now();
+    const DOUBLE_TAP_DELAY = 300;
+    
+    if (now - lastTapTimeRef.current < DOUBLE_TAP_DELAY) {
+      // Double tap detected
+      if (imageScale > 1) {
+        // If already zoomed in, zoom out to normal
+        setImageScale(1);
+      } else {
+        // If at normal zoom, zoom in to 2x
+        setImageScale(2);
+      }
+    }
+    lastTapTimeRef.current = now;
+  };
+
   // If not authenticated, show the auth screen
   if (!isAuthenticated) {
     return <AuthScreen onAuthenticated={() => setIsAuthenticated(true)} />;
@@ -269,7 +429,7 @@ export default function ProfileScreen() {
     <View style={styles.container}>
       <StatusBar barStyle="light-content" />
       
-      {/* Animated Header */}
+      {/* Animated Header - empty, just blur background */}
       <Animated.View style={[
         styles.header,
         {
@@ -278,17 +438,89 @@ export default function ProfileScreen() {
         }
       ]}>
         <BlurView intensity={100} style={StyleSheet.absoluteFill} />
-        <View style={styles.headerContent}>
-          <Text style={styles.headerTitle}>Profile</Text>
-          <Pressable
-            style={styles.settingsButton}
-            onPress={handleNavigateToSettings}
-            hitSlop={20}
-          >
-            <Settings color="white" size={24} />
-          </Pressable>
-        </View>
       </Animated.View>
+
+      {/* Image Full View Modal */}
+      <Modal
+        visible={showImageModal}
+        transparent={true}
+        animationType="fade"
+        onRequestClose={() => {
+          setImageScale(1); // Reset zoom when closing
+          setShowImageModal(false);
+        }}
+      >
+        <View style={styles.modalOverlay}>
+          <BlurView intensity={90} style={StyleSheet.absoluteFill} />
+          <TouchableOpacity 
+            style={styles.modalCloseArea}
+            activeOpacity={1}
+            onPress={() => {
+              setImageScale(1); // Reset zoom when closing
+              setShowImageModal(false);
+            }}
+          >
+            <View style={styles.modalImageContainer}>
+              <TouchableOpacity
+                activeOpacity={1}
+                onPress={(e: any) => {
+                  e.stopPropagation();
+                  handleDoubleTap();
+                }}
+              >
+                {user?.profile?.avatar && (
+                  <Image
+                    source={{ uri: getImageUrl(user.profile.avatar) }}
+                    style={[
+                      styles.modalImage,
+                      { transform: [{ scale: imageScale }] }
+                    ]}
+                    resizeMode="contain"
+                  />
+                )}
+              </TouchableOpacity>
+            </View>
+          </TouchableOpacity>
+          
+          {/* Zoom status indicator */}
+          {imageScale > 1 ? (
+            <View style={styles.zoomIndicator}>
+              <Text style={styles.zoomText}>{Math.round(imageScale * 100)}%</Text>
+            </View>
+          ) : null}
+          
+          {/* Close button */}
+          <TouchableOpacity 
+            style={styles.modalCloseButton}
+            onPress={() => {
+              setImageScale(1); // Reset zoom when closing
+              setShowImageModal(false);
+            }}
+          >
+            <X color="white" size={24} />
+          </TouchableOpacity>
+          
+          {/* Zoom controls */}
+          <View style={styles.zoomControls}>
+            <TouchableOpacity 
+              style={styles.zoomButton} 
+              onPress={handleZoomIn}
+            >
+              <ZoomIn color="white" size={24} />
+            </TouchableOpacity>
+            <TouchableOpacity 
+              style={styles.zoomButton}
+              onPress={handleZoomOut}
+              disabled={imageScale <= 1}
+            >
+              <ZoomOut 
+                color={imageScale <= 1 ? "#666" : "white"} 
+                size={24} 
+              />
+            </TouchableOpacity>
+          </View>
+        </View>
+      </Modal>
 
       <ScrollView
         style={styles.scrollView}
@@ -296,15 +528,47 @@ export default function ProfileScreen() {
         showsVerticalScrollIndicator={false}
         onScroll={handleScroll}
         scrollEventThrottle={16}
+        refreshControl={
+          <RefreshControl
+            refreshing={refreshing}
+            onRefresh={onRefresh}
+            tintColor="#0070F3"
+            colors={["#0070F3"]}
+            progressBackgroundColor="#111"
+          />
+        }
       >
         {/* Profile Header */}
         <View style={styles.profileHeader}>
-          <Image
-            source={{ uri: 'https://randomuser.me/api/portraits/men/32.jpg' }}
-            style={styles.profileImage}
-          />
-          <Text style={styles.profileName}>John Doe</Text>
-          <Text style={styles.profileUsername}>@johndoe</Text>
+          <Pressable 
+            onPress={() => user?.profile?.avatar && setShowImageModal(true)}
+            style={styles.profileImageContainer}
+            android_ripple={{ color: 'rgba(0, 112, 243, 0.2)', foreground: true }}
+          >
+            {user?.profile?.avatar ? (
+              <>
+                <Image
+                  source={{ uri: getImageUrl(user.profile.avatar) }}
+                  style={styles.profileImage}
+                />
+                <View style={styles.profileImageOverlay}>
+                  <ZoomIn color="white" size={24} />
+                </View>
+              </>
+            ) : (
+              <View style={styles.avatarPlaceholder}>
+                <User size={40} color="#0070F3" />
+              </View>
+            )}
+          </Pressable>
+          <Text style={styles.profileName}>
+            {user?.firstName && user.lastName 
+              ? `${user.firstName} ${user.lastName}` 
+              : user?.username || 'User'}
+          </Text>
+          <Text style={styles.profileUsername}>
+            @{user?.username || 'username'}
+          </Text>
           
           <View style={styles.pointsContainer}>
             <Text style={styles.pointsLabel}>Your Points</Text>
@@ -314,8 +578,94 @@ export default function ProfileScreen() {
                 { transform: [{ scale: scaleAnim }] }
               ]}
             >
-              {displayPoints}
+              {user?.points || displayPoints}
             </Animated.Text>
+          </View>
+        </View>
+
+        {/* User Bio Section */}
+        {user?.profile?.bio && (
+          <View style={styles.section}>
+            <Text style={styles.sectionTitle}>About</Text>
+            <View style={styles.bioContainer}>
+              <Text style={styles.bioText}>{user.profile.bio}</Text>
+            </View>
+          </View>
+        )}
+
+        {/* User Interests Section */}
+        {user?.profile?.interests && user.profile.interests.length > 0 && (
+          <View style={styles.section}>
+            <Text style={styles.sectionTitle}>Interests</Text>
+            <View style={styles.interestsContainer}>
+              {user.profile.interests.map((interest: string, index: number) => (
+                <View key={index} style={styles.interestTag}>
+                  <Text style={styles.interestText}>{interest}</Text>
+                </View>
+              ))}
+            </View>
+          </View>
+        )}
+        
+        {/* Personal Information Section */}
+        <View style={styles.section}>
+          <Text style={styles.sectionTitle}>Personal Information</Text>
+          <View style={styles.contactContainer}>
+            {user?.firstName && (
+              <View style={styles.contactItem}>
+                <User color="#0070F3" size={20} />
+                <View style={styles.contactTextContainer}>
+                  <Text style={styles.contactLabel}>First Name</Text>
+                  <Text style={styles.contactValue}>{user.firstName}</Text>
+                </View>
+              </View>
+            )}
+            {user?.lastName && (
+              <View style={styles.contactItem}>
+                <User color="#0070F3" size={20} />
+                <View style={styles.contactTextContainer}>
+                  <Text style={styles.contactLabel}>Last Name</Text>
+                  <Text style={styles.contactValue}>{user.lastName}</Text>
+                </View>
+              </View>
+            )}
+            {user?.username && (
+              <View style={styles.contactItem}>
+                <User color="#0070F3" size={20} />
+                <View style={styles.contactTextContainer}>
+                  <Text style={styles.contactLabel}>Username</Text>
+                  <Text style={styles.contactValue}>@{user.username}</Text>
+                </View>
+              </View>
+            )}
+          </View>
+        </View>
+
+        {/* Contact Info Section */}
+        <View style={styles.section}>
+          <Text style={styles.sectionTitle}>Contact Information</Text>
+          <View style={styles.contactContainer}>
+            <View key="email" style={styles.contactItem}>
+              <Mail color="#0070F3" size={20} />
+              <View style={styles.contactTextContainer}>
+                <Text style={styles.contactLabel}>Email</Text>
+                <Text style={styles.contactValue}>{user?.email || 'No email provided'}</Text>
+              </View>
+            </View>
+            <View key="phone" style={styles.contactItem}>
+              <Phone color="#0070F3" size={20} />
+              <View style={styles.contactTextContainer}>
+                <Text style={styles.contactLabel}>Phone</Text>
+                <Text style={styles.contactValue}>{user?.phone || 'No phone provided'}</Text>
+              </View>
+            </View>
+            <View key="location" style={styles.contactItem}>
+              <MapPin color="#0070F3" size={20} />
+              <View style={styles.contactTextContainer}>
+                <Text style={styles.contactLabel}>Location</Text>
+                <Text style={styles.contactValue}>{user?.location || 'No location provided'}</Text>
+              </View>
+            </View>
           </View>
         </View>
 
@@ -325,24 +675,26 @@ export default function ProfileScreen() {
             {renderStatCard(
               <Award color="#0070F3" size={24} />,
               'Badges',
-              '4'
+              user?.badges?.length || '4'
             )}
             {renderStatCard(
               <Clock color="#0070F3" size={24} />,
               'Days Active',
-              '12'
+              user?.daysActive || (user?.createdAt ? 
+                Math.ceil((new Date().getTime() - new Date(user.createdAt).getTime()) / (1000 * 60 * 60 * 24)).toString() : 
+                '12')
             )}
           </View>
           <View style={styles.statsRow}>
             {renderStatCard(
               <Heart color="#0070F3" size={24} />,
               'Likes Given',
-              '27'
+              user?.likesGiven || '27'
             )}
             {renderStatCard(
               <BarChart2 color="#0070F3" size={24} />,
               'Rank',
-              'Gold'
+              user?.rank || (user?.points && user.points > 500 ? 'Gold' : user?.points && user.points > 100 ? 'Silver' : 'Bronze')
             )}
           </View>
         </View>
@@ -350,25 +702,47 @@ export default function ProfileScreen() {
         {/* Badges Section */}
         <View style={styles.section}>
           <Text style={styles.sectionTitle}>Your Badges</Text>
-          <ScrollView
-            horizontal
-            showsHorizontalScrollIndicator={false}
-            contentContainerStyle={styles.badgesContainer}
-          >
-            {BADGES.map((badge) => (
-              <View key={badge.id} style={styles.badge}>
-                <Text style={styles.badgeIcon}>{badge.icon}</Text>
-                <Text style={styles.badgeName}>{badge.name}</Text>
-                <Text style={styles.badgeDescription}>{badge.description}</Text>
-              </View>
-            ))}
-          </ScrollView>
+          {user?.badges && user.badges.length > 0 ? (
+            <ScrollView
+              horizontal
+              showsHorizontalScrollIndicator={false}
+              contentContainerStyle={styles.badgesContainer}
+            >
+              {user.badges.map((badge: { id: string; icon: string; name: string; description: string }) => (
+                <View key={badge.id} style={styles.badge}>
+                  <Text style={styles.badgeIcon}>{badge.icon}</Text>
+                  <Text style={styles.badgeName}>{badge.name}</Text>
+                  <Text style={styles.badgeDescription}>{badge.description}</Text>
+                </View>
+              ))}
+            </ScrollView>
+          ) : (
+            <ScrollView
+              horizontal
+              showsHorizontalScrollIndicator={false}
+              contentContainerStyle={styles.badgesContainer}
+            >
+              {BADGES.map((badge) => (
+                <View key={badge.id} style={styles.badge}>
+                  <Text style={styles.badgeIcon}>{badge.icon}</Text>
+                  <Text style={styles.badgeName}>{badge.name}</Text>
+                  <Text style={styles.badgeDescription}>{badge.description}</Text>
+                </View>
+              ))}
+            </ScrollView>
+          )}
         </View>
 
         {/* Settings Section */}
         <View style={styles.section}>
           <Text style={styles.sectionTitle}>Settings</Text>
           <View style={styles.settingsContainer}>
+            {renderSettingItem(
+              <User color="#0070F3" size={20} />,
+              'Edit Profile',
+              undefined,
+              handleEditProfile
+            )}
             {renderSettingItem(
               <Bell color="#0070F3" size={20} />,
               'Notifications',
@@ -407,25 +781,6 @@ export default function ProfileScreen() {
               undefined,
               handleLogout
             )}
-          </View>
-        </View>
-
-        {/* Contact Info Section */}
-        <View style={styles.section}>
-          <Text style={styles.sectionTitle}>Contact Information</Text>
-          <View style={styles.contactContainer}>
-            <View key="email" style={styles.contactItem}>
-              <Mail color="#0070F3" size={20} />
-              <Text style={styles.contactText}>john.doe@example.com</Text>
-            </View>
-            <View key="phone" style={styles.contactItem}>
-              <Phone color="#0070F3" size={20} />
-              <Text style={styles.contactText}>+1 (555) 123-4567</Text>
-            </View>
-            <View key="location" style={styles.contactItem}>
-              <MapPin color="#0070F3" size={20} />
-              <Text style={styles.contactText}>San Francisco, CA</Text>
-            </View>
           </View>
         </View>
 
@@ -471,6 +826,27 @@ export default function ProfileScreen() {
               {showResetConfirm ? 'Confirm Reset' : 'Reset All Data (Debug)'}
             </Text>
           </Pressable>
+          
+          {/* Add diagnostic button */}
+          <Pressable
+            style={[styles.debugButton]}
+            onPress={() => {
+              // Display user ID and authentication details
+              if (user) {
+                Alert.alert(
+                  'User Details',
+                  `ID: ${user._id}\nEmail: ${user.email}\nCreated: ${user.createdAt ? new Date(user.createdAt).toLocaleString() : 'N/A'}\nProfile: ${user.profile ? 'Yes' : 'No'}\nAvatar: ${user.profile?.avatar ? 'Yes' : 'No'}`,
+                  [{ text: 'OK' }]
+                );
+              } else {
+                Alert.alert('No User', 'No user is currently logged in');
+              }
+            }}
+          >
+            <Text style={styles.resetButtonText}>
+              Show User Details (Debug)
+            </Text>
+          </Pressable>
         </View>
       </ScrollView>
     </View>
@@ -508,12 +884,29 @@ const styles = StyleSheet.create({
     paddingTop: 60,
     paddingBottom: 30,
   },
-  profileImage: {
+  profileImageContainer: {
+    position: 'relative',
     width: 100,
     height: 100,
     borderRadius: 50,
+    overflow: 'hidden',
     borderWidth: 3,
     borderColor: '#1877F2',
+  },
+  profileImage: {
+    width: '100%',
+    height: '100%',
+  },
+  profileImageOverlay: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
+    bottom: 0,
+    backgroundColor: 'rgba(0, 0, 0, 0.5)',
+    justifyContent: 'center',
+    alignItems: 'center',
+    opacity: 0,
   },
   profileName: {
     color: 'white',
@@ -629,11 +1022,19 @@ const styles = StyleSheet.create({
     borderBottomWidth: 1,
     borderBottomColor: '#222',
   },
-  contactText: {
+  contactTextContainer: {
+    marginLeft: 10,
+  },
+  contactLabel: {
     color: '#888',
+    fontSize: 12,
+    fontFamily: 'Inter_500Medium',
+  },
+  contactValue: {
+    color: 'white',
     fontSize: 14,
     fontFamily: 'Inter_400Regular',
-    marginLeft: 10,
+    marginTop: 2,
   },
   faqContainer: {
     backgroundColor: '#111',
@@ -722,5 +1123,112 @@ const styles = StyleSheet.create({
     color: '#888',
     fontSize: 12,
     fontFamily: 'Inter_500Medium',
+  },
+  avatarPlaceholder: {
+    width: 100,
+    height: 100,
+    borderRadius: 50,
+    backgroundColor: 'rgba(0,112,243,0.1)',
+    justifyContent: 'center',
+    alignItems: 'center',
+    borderWidth: 3,
+    borderColor: '#1877F2',
+  },
+  bioContainer: {
+    backgroundColor: '#111',
+    borderRadius: 15,
+    padding: 15,
+  },
+  bioText: {
+    color: 'white',
+    fontSize: 14,
+    fontFamily: 'Inter_400Regular',
+  },
+  interestsContainer: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 5,
+  },
+  interestTag: {
+    backgroundColor: '#111',
+    borderRadius: 15,
+    padding: 5,
+  },
+  interestText: {
+    color: 'white',
+    fontSize: 12,
+    fontFamily: 'Inter_400Regular',
+  },
+  modalOverlay: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+    backgroundColor: 'rgba(0, 0, 0, 0.8)',
+  },
+  modalCloseArea: {
+    width: '100%',
+    height: '100%',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  modalImageContainer: {
+    width: SCREEN_WIDTH * 0.9,
+    height: SCREEN_HEIGHT * 0.7,
+    justifyContent: 'center',
+    alignItems: 'center',
+    overflow: 'hidden',
+  },
+  modalImage: {
+    width: SCREEN_WIDTH * 0.9,
+    height: SCREEN_HEIGHT * 0.7,
+  },
+  modalCloseButton: {
+    position: 'absolute',
+    top: 50,
+    right: 20,
+    backgroundColor: 'rgba(0, 0, 0, 0.5)',
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  zoomControls: {
+    position: 'absolute',
+    bottom: 50,
+    flexDirection: 'row',
+    justifyContent: 'center',
+    alignItems: 'center',
+    gap: 20,
+  },
+  zoomButton: {
+    backgroundColor: 'rgba(0, 0, 0, 0.5)',
+    width: 50,
+    height: 50,
+    borderRadius: 25,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  zoomIndicator: {
+    position: 'absolute',
+    top: 50,
+    left: 20,
+    backgroundColor: 'rgba(0, 0, 0, 0.5)',
+    padding: 8,
+    borderRadius: 12,
+  },
+  zoomText: {
+    color: 'white',
+    fontSize: 14,
+  },
+  debugButton: {
+    backgroundColor: '#333',
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: 15,
+    borderRadius: 12,
+    gap: 10,
+    marginTop: 10,
   },
 });
