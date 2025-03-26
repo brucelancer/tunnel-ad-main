@@ -1,4 +1,4 @@
-import React, { useState, useRef, useEffect, useCallback } from 'react';
+import React, { useState, useRef, useEffect, useCallback, useContext, MutableRefObject } from 'react';
 import {
   View,
   Text,
@@ -16,15 +16,17 @@ import {
   TouchableOpacity,
   ScrollView,
   ActivityIndicator,
+  Platform,
 } from 'react-native';
 import { Video, ResizeMode, Audio } from 'expo-av';
 import { useRouter, useFocusEffect } from 'expo-router';
-import { Play, Share2, CheckCircle, ThumbsUp, ThumbsDown, Lock, PlayCircle, RefreshCw } from 'lucide-react-native';
+import { Play, Share2, CheckCircle, ThumbsUp, ThumbsDown, Lock, PlayCircle, RefreshCw, Crown } from 'lucide-react-native';
 import { usePoints } from '../hooks/usePoints';
 import { useReactions } from '../hooks/useReactions';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as videoService from '../tunnel-ad-main/services/videoService';
 import { useSanityAuth } from '../app/hooks/useSanityAuth';
+import { LinearGradient } from 'expo-linear-gradient';
 
 const { width: SCREEN_WIDTH, height: SCREEN_HEIGHT } = Dimensions.get('window');
 
@@ -59,6 +61,8 @@ interface VideoItemProps {
   autoScroll: boolean;
   toggleAutoScroll: () => void;
   autoScrollPulse: Animated.Value;
+  showPremiumAd: boolean;
+  isTabFocused: boolean;
 }
 
 interface VideoRefs {
@@ -81,7 +85,9 @@ const VideoItemComponent = React.memo(({
   isLocked = false, 
   autoScroll, 
   toggleAutoScroll,
-  autoScrollPulse
+  autoScrollPulse,
+  showPremiumAd,
+  isTabFocused
 }: VideoItemProps): JSX.Element => {
   const router = useRouter();
   const { addPoints, hasWatchedVideo } = usePoints();
@@ -116,6 +122,25 @@ const VideoItemComponent = React.memo(({
     return () => {
       subscription.remove();
     };
+  }, []);
+
+  // Configure audio to play in silent mode
+  useEffect(() => {
+    const configureAudio = async () => {
+      try {
+        await Audio.setAudioModeAsync({
+          playsInSilentModeIOS: true,
+          staysActiveInBackground: true,
+          interruptionModeIOS: 1, // DoNotMix
+          interruptionModeAndroid: 1, // DoNotMix
+          shouldDuckAndroid: false,
+        });
+      } catch (error) {
+        console.error('Failed to configure audio:', error);
+      }
+    };
+    
+    configureAudio();
   }, []);
 
   // Load reactions when component mounts or becomes current
@@ -229,33 +254,51 @@ const VideoItemComponent = React.memo(({
 
   // Replace the existing useEffect that responds to isCurrentVideo & isTabActive changes
   useEffect(() => {
-    if (isCurrentVideo && isTabActive) {
-      // Play and unmute the current video only if tab is active
+    if (isCurrentVideo && isTabActive && isTabFocused) {
+      // Only play and unmute if the video is current AND tab is active AND focused
       videoRef.current?.playAsync().catch(() => {});
       videoRef.current?.setIsMutedAsync(false).catch(() => {});
     } else {
-      // Stop videos that are not visible or when tab is not active
-      videoRef.current?.stopAsync().catch(() => {});
+      // Stop and mute videos that are not visible or when tab is not active/focused
+      videoRef.current?.pauseAsync().catch(() => {});
       videoRef.current?.setIsMutedAsync(true).catch(() => {});
       setShowButtons(false);
     }
     
     return () => {
       if (videoRef.current) {
-        videoRef.current.stopAsync().catch(() => {});
+        videoRef.current.pauseAsync().catch(() => {});
         videoRef.current.setIsMutedAsync(true).catch(() => {});
       }
     };
-  }, [isCurrentVideo, isTabActive]);
+  }, [isCurrentVideo, isTabActive, isTabFocused]);
 
   const handlePlaybackStatusUpdate = async (status: any) => {
     setStatus(status);
     
-    // Detect video completion and emit event
+    // Detect video completion - enable auto-scroll while still looping
     if (status.didJustFinish) {
-      setShowButtons(false);
+      console.log('Video finished, autoScroll:', autoScroll, 'isCurrentVideo:', isCurrentVideo, 'showPremiumAd:', showPremiumAd);
+      
       // Emit event that video has ended - always emit this regardless of previous watch status
       DeviceEventEmitter.emit('VIDEO_ENDED', { videoId: item.id });
+      
+      // Only trigger auto-scroll if premium ad is not showing and auto-scroll is enabled
+      if (autoScroll && isCurrentVideo && !showPremiumAd) {
+        console.log('Emitting AUTO_SCROLL_NEXT event');
+        // Add a small delay to ensure premium ad check is complete
+        setTimeout(() => {
+          if (!showPremiumAd) {
+            DeviceEventEmitter.emit('AUTO_SCROLL_NEXT', { fromVideo: item.id });
+          }
+        }, 100);
+      }
+    }
+    
+    // If premium ad is showing, ensure video stays paused
+    if (showPremiumAd && status.isPlaying) {
+      videoRef.current?.pauseAsync().catch(() => {});
+      return;
     }
     
     // Store the current position for potential resuming
@@ -323,6 +366,10 @@ const VideoItemComponent = React.memo(({
     });
   };
 
+  // Increase the vertical offset for better screen space utilization
+  const verticalVideoOffset = -SCREEN_HEIGHT * 0.085;
+  
+  // Modify the calculateVideoDimensions function to use this constant
   const calculateVideoDimensions = () => {
     const isVertical = item.type === 'vertical';
     const aspectRatio = item.aspectRatio || (isVertical ? 9/16 : 16/9);
@@ -338,14 +385,14 @@ const VideoItemComponent = React.memo(({
           width: maxWidth,
           height: heightBasedOnWidth,
           resizeMode: ResizeMode.COVER,
-          marginTop: 0
+          marginTop: verticalVideoOffset
         };
       } else {
         return {
           width: widthBasedOnHeight,
           height: maxHeight,
           resizeMode: ResizeMode.COVER,
-          marginTop: 0
+          marginTop: verticalVideoOffset
         };
       }
     } else {
@@ -356,7 +403,7 @@ const VideoItemComponent = React.memo(({
         width: maxWidth,
         height: Math.min(height, AVAILABLE_HEIGHT),
         resizeMode: ResizeMode.CONTAIN,
-        marginTop: -170 // Match test.tsx value for horizontal videos
+        marginTop: 0 // No need for marginTop as we use transform in the render method
       };
     }
   };
@@ -467,27 +514,42 @@ const VideoItemComponent = React.memo(({
       styles.videoContainer,
       item.type === 'vertical' ? styles.verticalContainer : styles.horizontalContainer
     ]}>
-      <Video
-        ref={videoRef}
-        source={{ uri: item.url }}
-        style={[styles.video, { 
-          width, 
-          height, 
-          marginTop 
-        }]}
-        resizeMode={resizeMode}
-        isLooping
-        onPlaybackStatusUpdate={handlePlaybackStatusUpdate}
-        onLoad={onLoad}
-        useNativeControls={false}
-        shouldPlay={isCurrentVideo && isTabActive && !isLocked}
-        isMuted={!isCurrentVideo || !isTabActive || isLocked}
-        volume={1.0}
-        progressUpdateIntervalMillis={500}
-      />
+      {item.type === 'horizontal' ? (
+        <View style={styles.horizontalVideoWrapper}>
+          <Video
+            ref={videoRef}
+            source={{ uri: item.url }}
+            style={[styles.video, { width, height }]}
+            resizeMode={resizeMode}
+            isLooping={true}
+            onPlaybackStatusUpdate={handlePlaybackStatusUpdate}
+            onLoad={onLoad}
+            useNativeControls={false}
+            shouldPlay={isCurrentVideo && isTabActive && !isLocked && !showPremiumAd && isTabFocused}
+            isMuted={!isCurrentVideo || !isTabActive || isLocked || !isTabFocused}
+            volume={1.0}
+            progressUpdateIntervalMillis={500}
+          />
+        </View>
+      ) : (
+        <Video
+          ref={videoRef}
+          source={{ uri: item.url }}
+          style={[styles.video, { width, height, marginTop }]}
+          resizeMode={resizeMode}
+          isLooping={true}
+          onPlaybackStatusUpdate={handlePlaybackStatusUpdate}
+          onLoad={onLoad}
+          useNativeControls={false}
+          shouldPlay={isCurrentVideo && isTabActive && !isLocked && !showPremiumAd && isTabFocused}
+          isMuted={!isCurrentVideo || !isTabActive || isLocked || !isTabFocused}
+          volume={1.0}
+          progressUpdateIntervalMillis={500}
+        />
+      )}
       <View style={[
         styles.overlay,
-        item.type === 'vertical' ? styles.verticalOverlay : styles.horizontalOverlay
+        item.type === 'vertical' ? [styles.verticalOverlay, { marginTop: verticalVideoOffset }] : styles.horizontalOverlay
       ]}>
         <View style={[styles.videoInfo, videoInfoStyle]}>
           <View style={styles.authorContainer}>
@@ -533,33 +595,28 @@ const VideoItemComponent = React.memo(({
                 {reactions.dislikes}
               </Text>
             </Pressable>
-          </View>
-          
-          {/* Auto-scroll toggle button */}
-          {isCurrentVideo && (
-            <Animated.View style={{
-              transform: [{ scale: autoScrollPulse }]
-            }}>
+            
+            {/* Auto-scroll button placed in the like container to be static */}
               <Pressable 
                 style={[
-                  styles.inlineAutoScrollButton,
-                  autoScroll && styles.inlineAutoScrollButtonActive
+                styles.autoScrollButton,
+                autoScroll && styles.autoScrollButtonActive
                 ]} 
                 onPress={toggleAutoScroll}
               >
                 <PlayCircle 
-                  color={autoScroll ? 'white' : '#1877F2'} 
-                  size={SCREEN_WIDTH * 0.045} 
+                color={autoScroll ? '#1877F2' : 'white'} 
+                fill={autoScroll ? 'rgba(24, 119, 242, 0.3)' : 'transparent'}
+                size={SCREEN_WIDTH * 0.06} 
                 />
                 <Text style={[
-                  styles.inlineAutoScrollText,
-                  autoScroll && styles.inlineAutoScrollTextActive
+                styles.actionCount, 
+                autoScroll ? styles.activeCount : null
                 ]}>
-                  {autoScroll ? 'Auto ON' : 'Auto OFF'}
+                Auto
                 </Text>
               </Pressable>
-            </Animated.View>
-          )}
+          </View>
           
           <Pressable onPress={onShare} style={styles.shareButton}>
             <Share2 color="white" size={SCREEN_WIDTH * 0.06} />
@@ -610,7 +667,10 @@ const VideoItemComponent = React.memo(({
       
       {/* Lock overlay when premium alert is shown */}
       {isLocked && isCurrentVideo && (
-        <View style={styles.lockOverlay}>
+        <View style={[
+          styles.lockOverlay,
+          item.type === 'vertical' && { marginTop: verticalVideoOffset }
+        ]}>
           <Lock color="white" size={SCREEN_WIDTH * 0.1} />
         </View>
       )}
@@ -629,15 +689,27 @@ export default function VideoFeed() {
   const [showLockedVideo, setShowLockedVideo] = useState(false);
   const [showAutoScrollModal, setShowAutoScrollModal] = useState(false);
   const [isAutoScrollEnabled, setIsAutoScrollEnabled] = useState(false);
+  const [showPremiumAd, setShowPremiumAd] = useState(false);
+  const [watchedVideosCount, setWatchedVideosCount] = useState(0);
+  const [isTabFocused, setIsTabFocused] = useState(true);
   const { user } = useSanityAuth();
+  
+  // Animation values
+  const premiumModalScale = useRef(new Animated.Value(0.3)).current;
+  const premiumModalOpacity = useRef(new Animated.Value(0)).current;
   
   const flatListRef = useRef<FlatList>(null);
   const videoRefs = useRef<VideoRefs>({});
   const initRef = useRef(false);
-  const viewConfigRef = useRef({ viewAreaCoveragePercentThreshold: 70 });
+  const premiumAdRef = useRef(false);
+  const viewConfigRef = useRef({ 
+    viewAreaCoveragePercentThreshold: 70,
+    minimumViewTime: 500
+  });
   const onViewableItemsChangedRef = useRef((info: ViewableItemsInfo) => {
     if (info.viewableItems.length > 0) {
       const index = info.viewableItems[0].index ?? 0;
+      console.log('Changed to video index:', index);
       setCurrentVideoIndex(index);
     }
   });
@@ -649,6 +721,175 @@ export default function VideoFeed() {
     videoRefs.current[id] = ref;
   };
   
+  // Track when user watches videos and show premium ad after 2 videos
+  useEffect(() => {
+    const handleVideoEnded = (event: any) => {
+      setWatchedVideosCount(prevCount => {
+        const newCount = prevCount + 1;
+        console.log('Videos watched:', newCount);
+        
+        // Show premium ad after user watches 2 videos
+        if (newCount % 2 === 0 && !premiumAdRef.current) {
+          premiumAdRef.current = true;
+          setShowPremiumAd(true);
+          
+          // Disable auto-scroll while premium ad is showing
+          // This is a temporary override that will be restored when the ad is closed
+          if (isAutoScrollEnabled) {
+            console.log('Temporarily suspending auto-scroll while premium ad is showing');
+          }
+          
+          // Pause all videos
+          Object.values(videoRefs.current).forEach(videoRef => {
+            if (videoRef && videoRef.current) {
+              videoRef.current.pauseAsync().catch(() => {});
+            }
+          });
+          
+          // Animate premium modal in
+          premiumModalScale.setValue(0.3);
+          premiumModalOpacity.setValue(0);
+          
+          Animated.parallel([
+            Animated.spring(premiumModalScale, {
+              toValue: 1,
+              tension: 50,
+              friction: 7,
+              useNativeDriver: true
+            }),
+            Animated.timing(premiumModalOpacity, {
+              toValue: 1,
+              duration: 300,
+              useNativeDriver: true
+            })
+          ]).start();
+        }
+        
+        return newCount;
+      });
+    };
+    
+    const subscription = DeviceEventEmitter.addListener('VIDEO_ENDED', handleVideoEnded);
+    
+    return () => {
+      subscription.remove();
+    };
+  }, [premiumModalScale, premiumModalOpacity, isAutoScrollEnabled]);
+  
+  // Listen for auto-scroll events - prevent scrolling when premium ad is visible
+  useEffect(() => {
+    const handleAutoScroll = (event: any) => {
+      console.log('Received AUTO_SCROLL_NEXT event', event, 'currentIndex:', currentVideoIndex, 'videos.length:', videos.length);
+      
+      // Don't process auto-scroll if premium ad is showing
+      if (showPremiumAd) {
+        console.log('Blocking auto-scroll because premium ad is showing');
+        // Ensure current video stays paused
+        const currentVideo = videos[currentVideoIndex];
+        if (currentVideo && videoRefs.current[currentVideo.id] && videoRefs.current[currentVideo.id].current) {
+          videoRefs.current[currentVideo.id].current.pauseAsync().catch(() => {});
+        }
+        return;
+      }
+      
+      // Calculate next index and ensure it's valid
+      const nextIndex = currentVideoIndex + 1;
+      
+      if (flatListRef.current && videos.length > nextIndex) {
+        console.log('Scrolling to next video, index:', nextIndex);
+        try {
+          // Ensure the scroll is limited to exactly one video
+          flatListRef.current.scrollToIndex({
+            index: nextIndex,
+            animated: true,
+            viewPosition: 0
+          });
+        } catch (error) {
+          console.error('Error scrolling to next video:', error);
+          
+          // Fallback approach if the first method fails
+          setTimeout(() => {
+            if (flatListRef.current && !showPremiumAd) {
+              try {
+                flatListRef.current.scrollToOffset({
+                  offset: nextIndex * AVAILABLE_HEIGHT,
+            animated: true
+          });
+              } catch (e) {
+                console.error('Fallback scroll failed too:', e);
+              }
+            }
+          }, 100);
+        }
+      } else {
+        console.log('Cannot auto-scroll: no more videos or flatList ref missing');
+      }
+    };
+
+    const subscription = DeviceEventEmitter.addListener('AUTO_SCROLL_NEXT', handleAutoScroll);
+
+    return () => {
+      subscription.remove();
+    };
+  }, [currentVideoIndex, videos.length, showPremiumAd]);
+  
+  // Handle closing premium ad
+  const handleClosePremiumAd = () => {
+    // Animate modal out
+    Animated.parallel([
+      Animated.timing(premiumModalScale, {
+        toValue: 0.3,
+        duration: 200,
+        useNativeDriver: true
+      }),
+      Animated.timing(premiumModalOpacity, {
+        toValue: 0,
+        duration: 200,
+        useNativeDriver: true
+      })
+    ]).start(() => {
+      setShowPremiumAd(false);
+      premiumAdRef.current = false;
+      
+      // Calculate next index
+      const nextIndex = currentVideoIndex + 1;
+      
+      // Scroll to next video if available
+      if (flatListRef.current && videos.length > nextIndex) {
+        try {
+          flatListRef.current.scrollToIndex({
+            index: nextIndex,
+            animated: true,
+            viewPosition: 0
+          });
+        } catch (error) {
+          console.error('Error scrolling to next video:', error);
+          
+          // Fallback approach
+          setTimeout(() => {
+            if (flatListRef.current) {
+              try {
+                flatListRef.current.scrollToOffset({
+                  offset: nextIndex * AVAILABLE_HEIGHT,
+                  animated: true
+                });
+              } catch (e) {
+                console.error('Fallback scroll failed:', e);
+              }
+            }
+          }, 100);
+        }
+      }
+    });
+  };
+  
+  // Handle subscribing to premium
+  const handleSubscribe = () => {
+    // Here you would implement the actual subscription flow
+    // For now, just close the ad
+    handleClosePremiumAd();
+  };
+  
   // Toggle auto-scroll
   const toggleAutoScroll = useCallback(() => {
     const newValue = !isAutoScrollEnabled;
@@ -657,23 +898,7 @@ export default function VideoFeed() {
     // Save preference
     AsyncStorage.setItem('autoScrollEnabled', String(newValue))
       .catch(err => console.error('Error saving auto-scroll preference:', err));
-      
-    // Schedule next auto-scroll if enabled
-    if (newValue && videos.length > currentVideoIndex + 1) {
-      if (autoScrollTimeoutRef.current) {
-        clearTimeout(autoScrollTimeoutRef.current);
-      }
-      
-      autoScrollTimeoutRef.current = setTimeout(() => {
-        if (flatListRef.current && videos.length > currentVideoIndex + 1) {
-          flatListRef.current.scrollToIndex({
-            index: currentVideoIndex + 1,
-            animated: true
-          });
-        }
-      }, 5000); // Auto-scroll after 5 seconds
-    }
-  }, [isAutoScrollEnabled, videos, currentVideoIndex]);
+  }, [isAutoScrollEnabled]);
   
   // Load videos from Sanity
   const loadVideos = useCallback(async (refresh = false) => {
@@ -718,12 +943,28 @@ export default function VideoFeed() {
     }
   }, [lastVideoId, hasMoreVideos, loadingMore]);
   
-  // Initial load
+  // Initial load and setting retrieval
   useEffect(() => {
+    const loadInitialData = async () => {
     if (!initRef.current) {
+        // Load auto-scroll preference
+        try {
+          const savedAutoScroll = await AsyncStorage.getItem('autoScrollEnabled');
+          if (savedAutoScroll === 'true') {
+            setIsAutoScrollEnabled(true);
+            console.log('Auto-scroll enabled from saved preference');
+          }
+        } catch (err) {
+          console.error('Error loading auto-scroll preference:', err);
+        }
+        
+        // Load videos
       loadVideos(true);
       initRef.current = true;
     }
+    };
+    
+    loadInitialData();
   }, [loadVideos]);
   
   // Configure auto-scroll animation
@@ -770,6 +1011,34 @@ export default function VideoFeed() {
     loadVideos(true);
   };
   
+  // Use useFocusEffect to handle tab focus changes
+  useFocusEffect(
+    useCallback(() => {
+      console.log('Tab focused');
+      setIsTabFocused(true);
+      
+      // Resume current video when tab is focused
+      const currentVideo = videos[currentVideoIndex];
+      if (currentVideo && videoRefs.current[currentVideo.id] && videoRefs.current[currentVideo.id].current) {
+        videoRefs.current[currentVideo.id].current.playAsync().catch(() => {});
+        videoRefs.current[currentVideo.id].current.setIsMutedAsync(false).catch(() => {});
+      }
+
+      return () => {
+        console.log('Tab unfocused');
+        setIsTabFocused(false);
+        
+        // Pause all videos and mute them when tab loses focus
+        Object.values(videoRefs.current).forEach(videoRef => {
+          if (videoRef && videoRef.current) {
+            videoRef.current.pauseAsync().catch(() => {});
+            videoRef.current.setIsMutedAsync(true).catch(() => {});
+          }
+        });
+      };
+    }, [currentVideoIndex, videos])
+  );
+  
   // Render video item
   const renderVideo = ({ item, index }: { item: VideoItem; index: number }) => (
     <VideoItemComponent
@@ -781,6 +1050,8 @@ export default function VideoFeed() {
       autoScroll={isAutoScrollEnabled}
       toggleAutoScroll={toggleAutoScroll}
       autoScrollPulse={autoScrollPulse}
+      showPremiumAd={showPremiumAd}
+      isTabFocused={isTabFocused}
     />
   );
   
@@ -815,6 +1086,8 @@ export default function VideoFeed() {
         refreshing={refreshing}
         onRefresh={handleRefresh}
         snapToAlignment="start"
+        bounces={false}
+        disableIntervalMomentum={true}
         removeClippedSubviews={true}
         maintainVisibleContentPosition={{
           minIndexForVisible: 0,
@@ -843,6 +1116,138 @@ export default function VideoFeed() {
           <ActivityIndicator size="small" color="#0070F3" />
         </View>
       )}
+      
+      {/* Premium subscription advertisement */}
+      {showPremiumAd && (
+        <Modal
+          animationType="none"
+          transparent={true}
+          visible={showPremiumAd}
+          onRequestClose={handleClosePremiumAd}
+          statusBarTranslucent={true}
+        >
+          <Pressable 
+            style={styles.premiumModalOverlay}
+            onPress={handleClosePremiumAd}
+          >
+            <Animated.View 
+              style={[
+                styles.premiumModalContent,
+                {
+                  transform: [{ scale: premiumModalScale }],
+                  opacity: premiumModalOpacity
+                }
+              ]}
+            >
+              <Pressable onPress={(e) => e.stopPropagation()}>
+                <LinearGradient
+                  colors={['#1a1a2e', '#16213e', '#0f3460']}
+                  style={styles.premiumGradient}
+                  start={{ x: 0, y: 0 }}
+                  end={{ x: 1, y: 1 }}
+                >
+                  <View style={styles.premiumHeader}>
+                    <View style={styles.premiumCrownContainer}>
+                      <Crown color="#ffb703" size={SCREEN_WIDTH * 0.06} fill="#ffb703" />
+                    </View>
+                    <Text style={styles.premiumModalTitle}>Upgrade to Premium</Text>
+                  </View>
+                  
+                  <View style={styles.premiumModalIconContainer}>
+                    <View style={styles.premiumIconCircle}>
+                      <PlayCircle 
+                        color="#1877F2" 
+                        size={Math.min(SCREEN_WIDTH * 0.15, SCREEN_HEIGHT * 0.08)} 
+                        fill="rgba(24, 119, 242, 0.2)" 
+                      />
+                    </View>
+                  </View>
+                  
+                  <Text style={styles.premiumModalHeading}>Enjoy an Ad-Free Experience</Text>
+                  
+                  <ScrollView 
+                    style={styles.premiumScrollView}
+                    contentContainerStyle={styles.premiumScrollContent}
+                    showsVerticalScrollIndicator={false}
+                    scrollEventThrottle={16}
+                    decelerationRate="fast"
+                    bounces={false}
+                  >
+                    <View style={styles.premiumFeaturesList}>
+                      <View style={styles.premiumFeatureItem}>
+                        <View style={styles.premiumCheckCircle}>
+                          <CheckCircle color="#1877F2" size={SCREEN_WIDTH * 0.04} />
+                        </View>
+                        <Text style={styles.premiumFeatureText}>Unlimited video streaming</Text>
+                      </View>
+                      
+                      <View style={styles.premiumFeatureItem}>
+                        <View style={styles.premiumCheckCircle}>
+                          <CheckCircle color="#1877F2" size={SCREEN_WIDTH * 0.04} />
+                        </View>
+                        <Text style={styles.premiumFeatureText}>No interruptions</Text>
+                      </View>
+                      
+                      <View style={styles.premiumFeatureItem}>
+                        <View style={styles.premiumCheckCircle}>
+                          <CheckCircle color="#1877F2" size={SCREEN_WIDTH * 0.04} />
+                        </View>
+                        <Text style={styles.premiumFeatureText}>HD video quality</Text>
+                      </View>
+                      
+                      <View style={styles.premiumFeatureItem}>
+                        <View style={styles.premiumCheckCircle}>
+                          <CheckCircle color="#1877F2" size={SCREEN_WIDTH * 0.04} />
+                        </View>
+                        <Text style={styles.premiumFeatureText}>Download videos for offline viewing</Text>
+                      </View>
+                    </View>
+                    
+                    <View style={styles.premiumPriceSection}>
+                      <Text style={styles.premiumPriceLabel}>Starting at</Text>
+                      <View style={styles.premiumPriceRow}>
+                        <Text style={styles.premiumPriceAmount}>$4.99</Text>
+                        <Text style={styles.premiumPricePeriod}>/month</Text>
+                      </View>
+                    </View>
+                  </ScrollView>
+                  
+                  <View style={styles.premiumButtonsContainer}>
+                    <LinearGradient
+                      colors={['#1877F2', '#0056D1']}
+                      start={{ x: 0, y: 0 }}
+                      end={{ x: 1, y: 0 }}
+                      style={styles.premiumSubscribeButton}
+                    >
+                      <Pressable 
+                        style={({ pressed }) => [
+                          styles.premiumSubscribeButtonContent,
+                          pressed && styles.premiumButtonPressed
+                        ]}
+                        onPress={handleSubscribe}
+                        android_ripple={{ color: 'rgba(255, 255, 255, 0.2)' }}
+                      >
+                        <Text style={styles.premiumSubscribeButtonText}>Subscribe Now</Text>
+                      </Pressable>
+                    </LinearGradient>
+                    
+                    <Pressable 
+                      style={({ pressed }) => [
+                        styles.premiumContinueButton,
+                        pressed && styles.premiumButtonPressed
+                      ]}
+                      onPress={handleClosePremiumAd}
+                      android_ripple={{ color: 'rgba(255, 255, 255, 0.1)' }}
+                    >
+                      <Text style={styles.premiumContinueButtonText}>Continue Watching</Text>
+                    </Pressable>
+                  </View>
+                </LinearGradient>
+              </Pressable>
+            </Animated.View>
+          </Pressable>
+        </Modal>
+      )}
     </View>
   );
 }
@@ -863,10 +1268,11 @@ const styles = StyleSheet.create({
   verticalContainer: {
     height: AVAILABLE_HEIGHT,
     width: SCREEN_WIDTH,
-    justifyContent: 'center',
+    justifyContent: 'flex-start',
     alignItems: 'center',
     backgroundColor: '#000',
     position: 'relative',
+    paddingTop: 0,
   },
   horizontalContainer: {
     height: AVAILABLE_HEIGHT,
@@ -876,6 +1282,16 @@ const styles = StyleSheet.create({
     backgroundColor: '#000',
     paddingVertical: 10,
     position: 'relative',
+    overflow: 'hidden',
+  },
+  horizontalVideoWrapper: {
+    position: 'absolute',
+    top: 270,
+    left: 0,
+    right: 0,
+    alignItems: 'center',
+    justifyContent: 'center',
+    zIndex: 1,
   },
   video: {
     position: 'absolute',
@@ -982,7 +1398,7 @@ const styles = StyleSheet.create({
     justifyContent: 'space-between',
     paddingVertical: SCREEN_HEIGHT * 0.02,
     position: 'absolute',
-    top: 0,
+    top: 0, // Reset to original position
     left: 0,
     right: 0,
     bottom: 0,
@@ -1081,26 +1497,21 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
-  inlineAutoScrollButton: {
+  autoScrollButton: {
     alignItems: 'center',
-    backgroundColor: 'rgba(0, 0, 0, 0.5)',
-    borderRadius: SCREEN_WIDTH * 0.08,
-    borderWidth: 1,
-    borderColor: '#1877F2',
-    padding: SCREEN_WIDTH * 0.015,
-    marginVertical: SCREEN_HEIGHT * 0.01,
-    width: SCREEN_WIDTH * 0.17,
+    marginTop: SCREEN_HEIGHT * 0.02,
+    gap: 4
   },
-  inlineAutoScrollButtonActive: {
-    backgroundColor: '#1877F2',
+  autoScrollButtonActive: {
+    backgroundColor: 'transparent',
   },
-  inlineAutoScrollText: {
+  autoScrollText: {
     color: 'white',
     fontSize: SCREEN_WIDTH * 0.03,
     fontFamily: 'Inter_600SemiBold',
     marginTop: 2,
   },
-  inlineAutoScrollTextActive: {
+  autoScrollTextActive: {
     color: 'white',
     fontWeight: 'bold',
   },
@@ -1150,5 +1561,171 @@ const styles = StyleSheet.create({
     fontFamily: 'Inter_400Regular',
     opacity: 0.85,
     letterSpacing: 0.5,
+  },
+  premiumModalOverlay: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+    backgroundColor: 'rgba(0, 0, 0, 0.85)',
+    paddingHorizontal: SCREEN_WIDTH * 0.05,
+  },
+  premiumModalContent: {
+    width: Math.min(SCREEN_WIDTH * 0.9, 400),
+    maxHeight: Math.min(SCREEN_HEIGHT * 0.8, 700),
+    borderRadius: 25,
+    overflow: 'hidden',
+    shadowColor: '#1877F2',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.5,
+    shadowRadius: 15,
+    elevation: 10,
+  },
+  premiumGradient: {
+    padding: SCREEN_WIDTH * 0.06,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  premiumHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginBottom: SCREEN_HEIGHT * 0.02,
+    width: '100%',
+  },
+  premiumCrownContainer: {
+    backgroundColor: 'rgba(255, 183, 3, 0.2)',
+    borderRadius: 15,
+    padding: 8,
+    marginRight: 10,
+  },
+  premiumModalTitle: {
+    color: 'white',
+    fontSize: Math.min(SCREEN_WIDTH * 0.06, 28),
+    fontWeight: 'bold',
+    textAlign: 'center',
+  },
+  premiumModalIconContainer: {
+    marginBottom: SCREEN_HEIGHT * 0.02,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  premiumIconCircle: {
+    backgroundColor: 'rgba(24, 119, 242, 0.1)',
+    borderRadius: 50,
+    padding: 15,
+    borderWidth: 2,
+    borderColor: '#1877F2',
+  },
+  premiumModalHeading: {
+    color: 'white',
+    fontSize: Math.min(SCREEN_WIDTH * 0.045, 22),
+    fontWeight: 'bold',
+    marginBottom: SCREEN_HEIGHT * 0.02,
+    textAlign: 'center',
+  },
+  premiumScrollView: {
+    width: '100%',
+    maxHeight: Math.min(SCREEN_HEIGHT * 0.35, 300),
+  },
+  premiumScrollContent: {
+    paddingBottom: 15,
+    paddingHorizontal: 5,
+  },
+  premiumFeaturesList: {
+    width: '100%',
+    marginBottom: SCREEN_HEIGHT * 0.02,
+    paddingHorizontal: 5,
+  },
+  premiumFeatureItem: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginBottom: 15,
+  },
+  premiumCheckCircle: {
+    backgroundColor: 'rgba(24, 119, 242, 0.2)',
+    borderRadius: 20,
+    padding: 5,
+    marginRight: 15,
+  },
+  premiumFeatureText: {
+    color: 'white',
+    fontSize: Math.min(SCREEN_WIDTH * 0.04, 18),
+    fontWeight: '500',
+    flexShrink: 1,
+  },
+  premiumPriceSection: {
+    alignItems: 'center',
+    marginBottom: SCREEN_HEIGHT * 0.02,
+    backgroundColor: 'rgba(255, 255, 255, 0.1)',
+    paddingVertical: 15,
+    paddingHorizontal: 30,
+    borderRadius: 15,
+    borderWidth: 1,
+    borderColor: 'rgba(255, 255, 255, 0.2)',
+    width: '100%',
+  },
+  premiumPriceLabel: {
+    color: 'rgba(255, 255, 255, 0.7)',
+    fontSize: Math.min(SCREEN_WIDTH * 0.035, 16),
+    marginBottom: 5,
+  },
+  premiumPriceRow: {
+    flexDirection: 'row',
+    alignItems: 'flex-end',
+  },
+  premiumPriceAmount: {
+    color: 'white',
+    fontSize: Math.min(SCREEN_WIDTH * 0.08, 36),
+    fontWeight: 'bold',
+  },
+  premiumPricePeriod: {
+    color: 'rgba(255, 255, 255, 0.7)',
+    fontSize: Math.min(SCREEN_WIDTH * 0.035, 16),
+    marginBottom: 8,
+    marginLeft: 2,
+  },
+  premiumButtonsContainer: {
+    width: '100%',
+    marginTop: SCREEN_HEIGHT * 0.01,
+  },
+  premiumSubscribeButton: {
+    borderRadius: 30,
+    width: '100%',
+    marginBottom: 15,
+    shadowColor: '#1877F2',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.5,
+    shadowRadius: 5,
+    elevation: 3,
+  },
+  premiumSubscribeButtonContent: {
+    width: '100%',
+    alignItems: 'center',
+    paddingVertical: Math.max(SCREEN_HEIGHT * 0.015, 12),
+    paddingHorizontal: 25,
+  },
+  premiumButtonPressed: {
+    opacity: 0.9,
+    transform: [{ scale: 0.98 }]
+  },
+  premiumSubscribeButtonText: {
+    color: 'white',
+    fontSize: Math.min(SCREEN_WIDTH * 0.045, 20),
+    fontWeight: 'bold',
+  },
+  premiumContinueButton: {
+    backgroundColor: 'transparent',
+    paddingVertical: Math.max(SCREEN_HEIGHT * 0.015, 12),
+    paddingHorizontal: 25,
+    borderRadius: 30,
+    width: '100%',
+    alignItems: 'center',
+    borderWidth: 1,
+    borderColor: 'rgba(255, 255, 255, 0.3)',
+  },
+  premiumContinueButtonText: {
+    color: 'rgba(255, 255, 255, 0.7)',
+    fontSize: Math.min(SCREEN_WIDTH * 0.04, 18),
+    fontWeight: '500',
   },
 });

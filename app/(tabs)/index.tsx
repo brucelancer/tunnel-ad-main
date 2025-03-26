@@ -2,13 +2,13 @@ import React, { useState, useRef, useEffect } from 'react';
 import { View, Text, StyleSheet, Pressable, TextInput, Animated, DeviceEventEmitter } from 'react-native';
 import { usePoints } from '@/hooks/usePoints';
 import VideoFeed from '@/components/VideoFeed';
-import ArticleFeed from '@/components/ArticleFeed';
+import Feed from '@/components/Feed';
 import { Search } from 'lucide-react-native';
 import { useRouter } from 'expo-router';
 import ScreenContainer from '../components/ScreenContainer';
 
 export default function HomeScreen() {
-  const [activeTab, setActiveTab] = useState<'videos' | 'articles'>('videos');
+  const [activeTab, setActiveTab] = useState<'videos' | 'feed'>('videos');
   const { points } = usePoints();
   const pointsScale = useRef(new Animated.Value(1)).current;
   const [displayPoints, setDisplayPoints] = useState(points);
@@ -62,7 +62,7 @@ export default function HomeScreen() {
   }, [points]);
 
   const handleSearchPress = () => {
-    router.push('/search');
+    router.push('/search' as any);
   };
 
   return (
@@ -107,11 +107,11 @@ export default function HomeScreen() {
           </Text>
         </Pressable>
         <Pressable
-          style={[styles.tab, activeTab === 'articles' && styles.activeTab]}
-          onPress={() => setActiveTab('articles')}
+          style={[styles.tab, activeTab === 'feed' && styles.activeTab]}
+          onPress={() => setActiveTab('feed')}
         >
-          <Text style={[styles.tabText, activeTab === 'articles' && styles.activeTabText]}>
-            Articles
+          <Text style={[styles.tabText, activeTab === 'feed' && styles.activeTabText]}>
+            Feed
           </Text>
         </Pressable>
       </View>
@@ -120,7 +120,7 @@ export default function HomeScreen() {
         {activeTab === 'videos' ? (
           <VideoFeed />
         ) : (
-          <ArticleFeed />
+          <Feed />
         )}
       </View>
     </View>

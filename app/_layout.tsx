@@ -25,6 +25,8 @@ export default function RootLayout() {
         <Stack screenOptions={{ headerShown: false }}>
           <Stack.Screen name="(tabs)" />
           <Stack.Screen name="screens" />
+          <Stack.Screen name="newsfeed-upload" />
+          <Stack.Screen name="feedpost-detail" />
           <Stack.Screen name="+not-found" />
         </Stack>
         <StatusBar style="light" />
