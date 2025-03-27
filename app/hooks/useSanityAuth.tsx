@@ -2,8 +2,29 @@ import { useState, useEffect } from 'react';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as sanityAuthService from '../../tunnel-ad-main/services/sanityAuthService';
 import { createClient } from '@sanity/client';
-import { SanityUser } from '../types/user';
 import { DeviceEventEmitter } from 'react-native';
+
+// Define user interface locally
+interface SanityUser {
+  _id: string;
+  email: string;
+  username: string;
+  firstName?: string;
+  lastName?: string;
+  phone?: string;
+  location?: string;
+  points: number;
+  profile?: {
+    bio?: string;
+    avatar?: any;
+    interests?: string[];
+  };
+  createdAt?: string;
+  badges?: any[];
+  rank?: string;
+  likesGiven?: number;
+  daysActive?: number;
+}
 
 export const useSanityAuth = () => {
   const [authSettings, setAuthSettings] = useState(null);
@@ -17,8 +38,7 @@ export const useSanityAuth = () => {
     dataset: 'production',
     apiVersion: '2023-03-01',
     token: 'skfYBXlqcVRszR6D3U2X3hPAMKupissIjK6LehFgtmYRkavBwU49tXYqryhOliJ7mclzM38VivW4vz75T6edrwsmwGPwgFEHxgANwxVnFNDFBq9pWjLhSd6dfB4yJNbVbgfkKlkocZ1VgYpd2ldczW64WNhqiTkclddkAxaTinVBhF9NMme0', // Replace with your actual token
-    useCdn: false,
-    permissions: ['read', 'write', 'create', 'delete', 'history']
+    useCdn: false
   });
 
   // Load auth settings on mount
@@ -99,86 +119,70 @@ export const useSanityAuth = () => {
     }
   };
 
-  // Login with email/password
-  const login = async (email: string, password: string) => {
-    setLoading(true);
-    setError(null);
-    
-    try {
-      console.log('Login attempt with:', email);
-      
-      // First try normal login
+  // Load user from storage on mount
+  useEffect(() => {
+    const loadUser = async () => {
       try {
-        const userData = await sanityAuthService.loginUser(email, password);
-        
-        if (userData && userData._id) {
-          console.log('Login successful, user data:', userData);
+        console.log('useSanityAuth: Loading user from AsyncStorage...');
+        const userString = await AsyncStorage.getItem('sanity_user');
+        if (userString) {
+          console.log('useSanityAuth: Found user data in AsyncStorage');
+          const userData = JSON.parse(userString);
+          setUser(userData);
           
-          // Ensure we have a user object with the correct structure
-          const userToStore = userData;
-          
-          // Add profile object if it doesn't exist
-          if (!userToStore.profile) {
-            userToStore.profile = {
-              avatar: null,
-              bio: '',
-              interests: []
-            };
-          }
-          
-          setUser(userToStore);
-          await AsyncStorage.setItem('user', JSON.stringify(userToStore));
-          return userToStore;
-        }
-      } catch (error: any) {
-        const loginError = error;
-        console.log('Normal login failed:', loginError);
-        
-        // Only try findUserByEmail if the error specifically indicates a user without a password
-        // NOT for regular login failures with incorrect passwords
-        if (loginError.message && loginError.message.includes('no password set')) {
-          console.log('Attempting to find user that may not have a password set');
-          
-          try {
-            const userData = await sanityAuthService.findUserByEmail(email);
-            
-            // Only allow login for users who actually need password reset
-            // This prevents normal users with incorrect passwords from logging in
-            if (userData && userData._id && userData.needsPasswordReset === true) {
-              console.log('Found user without password that needs to set one:', userData);
-              
-              // Ensure we have a user object with the correct structure
-              const userToStore = userData;
-              
-              // Add profile object if it doesn't exist
-              if (!userToStore.profile) {
-                userToStore.profile = {
-                  avatar: null,
-                  bio: '',
-                  interests: []
-                };
-              }
-              
-              setUser(userToStore);
-              await AsyncStorage.setItem('user', JSON.stringify(userToStore));
-              return userToStore;
-            } else {
-              // User exists but has a password set - they just entered it wrong
-              throw new Error('Invalid email or password');
-            }
-          } catch (findError) {
-            console.error('Could not find user by email either:', findError);
-            throw new Error('Invalid email or password');
-          }
+          // Emit an event to ensure all components are in sync
+          console.log('useSanityAuth: Emitting AUTH_STATE_CHANGED on initial load');
+          DeviceEventEmitter.emit('AUTH_STATE_CHANGED', {
+            isAuthenticated: true,
+            userData: userData
+          });
         } else {
-          // Regular authentication failure - pass through the original error
-          throw loginError;
+          console.log('useSanityAuth: No user data found in AsyncStorage');
+          setUser(null);
+          
+          // Emit an event to ensure all components know there's no authenticated user
+          DeviceEventEmitter.emit('AUTH_STATE_CHANGED', {
+            isAuthenticated: false,
+            userData: null
+          });
         }
+      } catch (err) {
+        console.error('Error loading user from storage:', err);
+        setUser(null);
+      } finally {
+        setLoading(false);
       }
+    };
+
+    loadUser();
+  }, []);
+
+  // Login function
+  const login = async (email: string, password: string) => {
+    try {
+      setLoading(true);
+      setError(null);
       
-      throw new Error('Authentication failed');
+      console.log('useSanityAuth: Attempting login with:', email);
+      const userData = await sanityAuthService.loginUser(email, password);
+      
+      if (userData) {
+        console.log('useSanityAuth: Login successful, setting user data');
+        setUser(userData);
+        
+        // Save user to storage
+        await AsyncStorage.setItem('sanity_user', JSON.stringify(userData));
+        
+        // Emit event to notify all components about authentication state change
+        DeviceEventEmitter.emit('AUTH_STATE_CHANGED', {
+          isAuthenticated: true,
+          userData: userData
+        });
+        
+        return userData;
+      }
     } catch (err: any) {
-      console.error('Login error in hook:', err);
+      console.error('useSanityAuth: Login error:', err.message);
       setError(err.message || 'Login failed');
       throw err;
     } finally {
@@ -327,20 +331,22 @@ export const useSanityAuth = () => {
     }
   };
 
-  // User logout
+  // Logout function
   const logout = async () => {
-    setLoading(true);
-    
     try {
-      await AsyncStorage.removeItem('user');
+      console.log('useSanityAuth: Logging out user');
+      await AsyncStorage.removeItem('sanity_user');
       setUser(null);
-      return true;
+      
+      // Emit event to notify all components about authentication state change
+      DeviceEventEmitter.emit('AUTH_STATE_CHANGED', {
+        isAuthenticated: false,
+        userData: null
+      });
+      
+      console.log('useSanityAuth: Logout complete');
     } catch (err) {
-      setError('Logout failed');
-      console.error('Logout error:', err);
-      throw err;
-    } finally {
-      setLoading(false);
+      console.error('Error during logout:', err);
     }
   };
 

@@ -81,7 +81,8 @@ export const fetchPosts = async (userId = '') => {
           firstName,
           lastName,
           "avatar": profile.avatar,
-          "isVerified": username == "admin" || username == "moderator"
+          "isVerified": username == "admin" || username == "moderator",
+          "isBlueVerified": defined(isBlueVerified) && isBlueVerified == true
         },
         images
       }
@@ -441,7 +442,7 @@ export const awardPoints = async (postId, points, userId = '') => {
 // Get a single post by ID with full details
 export const getPostById = async (postId, userId = '') => {
   try {
-    console.log(`Fetching post with ID: ${postId}, User ID: ${userId || 'guest'}`);
+    console.log(`Fetching post ${postId} for user ${userId || 'guest'}`);
     
     const post = await client.fetch(`
       *[_type == "post" && _id == $postId][0] {
@@ -460,18 +461,17 @@ export const getPostById = async (postId, userId = '') => {
           firstName,
           lastName,
           "avatar": profile.avatar,
-          "isVerified": username == "admin" || username == "moderator"
+          "isVerified": username == "admin" || username == "moderator",
+          "isBlueVerified": defined(isBlueVerified) && isBlueVerified == true
         },
-        "images": images[] {
-          "url": asset->url
-        },
-        "comments": comments[] {
+        images,
+        comments[]{
           _key,
           text,
           _createdAt,
           authorName,
           likes,
-          "author": author->{
+          author->{
             _id,
             username,
             firstName,
@@ -479,30 +479,27 @@ export const getPostById = async (postId, userId = '') => {
             profile {
               avatar
             },
-            "isVerified": username == "admin" || username == "moderator"
+            "isVerified": username == "admin" || username == "moderator",
+            "isBlueVerified": defined(isBlueVerified) && isBlueVerified == true
           }
         }
       }
-    `, { postId, userId: userId || '' })
+    `, { postId, userId: userId || '' });
     
     if (!post) {
-      console.log(`Post not found: ${postId}`);
-      throw new Error('Post not found');
+      console.log(`Post ${postId} not found`);
+      return null;
     }
     
-    console.log(`Successfully retrieved post ${postId}`);
+    console.log(`Post ${postId} fetched successfully`);
     
-    // Calculate time ago for post and comments
+    // Add timeAgo
     return {
       ...post,
-      timeAgo: calculateTimeAgo(post.createdAt),
-      comments: post.comments ? post.comments.map(comment => ({
-        ...comment,
-        timeAgo: calculateTimeAgo(comment.createdAt)
-      })) : []
+      timeAgo: calculateTimeAgo(post.createdAt)
     };
   } catch (error) {
-    console.error('Error fetching post by ID:', error);
+    console.error(`Error fetching post ${postId}:`, error);
     throw error;
   }
 }

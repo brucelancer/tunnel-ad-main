@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import {
   View,
   Text,
@@ -18,6 +18,7 @@ import {
 import { useRouter } from 'expo-router';
 import { LinearGradient } from 'expo-linear-gradient';
 import * as ImagePicker from 'expo-image-picker';
+import * as Location from 'expo-location';
 import {
   Image as ImageIcon,
   Camera,
@@ -29,10 +30,13 @@ import {
   UserCircle,
   Hash,
   AtSign,
-  Plus
+  Plus,
+  LogIn
 } from 'lucide-react-native';
 import { usePostFeed } from '@/app/hooks/usePostFeed';
 import { useSanityAuth } from '@/app/hooks/useSanityAuth';
+import AuthScreen from './components/AuthScreen';
+import * as sanityAuthService from '../tunnel-ad-main/services/sanityAuthService';
 
 export default function NewsfeedUpload() {
   const router = useRouter();
@@ -41,12 +45,50 @@ export default function NewsfeedUpload() {
   const [loading, setLoading] = useState(false);
   const [attachments, setAttachments] = useState<string[]>([]);
   const [location, setLocation] = useState('');
+  const [showAuthOverlay, setShowAuthOverlay] = useState(false);
+  const [isGettingLocation, setIsGettingLocation] = useState(false);
+  const [userAvatarUri, setUserAvatarUri] = useState<string | null>(null);
   
   // Get Sanity hooks
   const { createPost } = usePostFeed();
   const { user } = useSanityAuth();
 
+  // Check authentication when component mounts and process avatar
+  useEffect(() => {
+    if (!user) {
+      console.log('No user authenticated for post upload');
+      return;
+    }
+    
+    // Process user avatar
+    if (user.profile?.avatar) {
+      // If it's already a string URL, use it directly
+      if (typeof user.profile.avatar === 'string') {
+        setUserAvatarUri(user.profile.avatar);
+      }
+      // If it's a Sanity image reference, convert it to a URL
+      else if (user.profile.avatar?.asset && sanityAuthService.urlFor) {
+        try {
+          const imageUrl = sanityAuthService.urlFor(user.profile.avatar).url();
+          console.log('Processed user avatar URL:', imageUrl);
+          setUserAvatarUri(imageUrl);
+        } catch (error) {
+          console.error('Error processing avatar URL:', error);
+        }
+      }
+    } else {
+      console.log('User has no avatar set');
+      setUserAvatarUri(null);
+    }
+  }, [user]);
+
   const handlePickImage = async () => {
+    // Check for authentication first
+    if (!user) {
+      showLoginPrompt();
+      return;
+    }
+    
     try {
       const result = await ImagePicker.launchImageLibraryAsync({
         mediaTypes: ImagePicker.MediaTypeOptions.Images,
@@ -65,6 +107,12 @@ export default function NewsfeedUpload() {
   };
 
   const handleTakePhoto = async () => {
+    // Check for authentication first
+    if (!user) {
+      showLoginPrompt();
+      return;
+    }
+    
     try {
       const cameraPermission = await ImagePicker.requestCameraPermissionsAsync();
       
@@ -90,7 +138,106 @@ export default function NewsfeedUpload() {
     setAttachments(attachments.filter((_, i) => i !== index));
   };
 
+  // Show login prompt
+  const showLoginPrompt = () => {
+    Alert.alert(
+      'Login Required',
+      'You need to be logged in to create posts.',
+      [
+        { text: 'Cancel', style: 'cancel' },
+        { 
+          text: 'Login', 
+          onPress: () => setShowAuthOverlay(true)
+        }
+      ]
+    );
+  };
+
+  // Handle successful authentication
+  const handleAuthenticated = () => {
+    setShowAuthOverlay(false);
+    // Keep the user on this screen to continue creating their post
+  };
+
+  // Function to get the user's current location
+  const getCurrentLocation = async () => {
+    // Check for authentication first
+    if (!user) {
+      showLoginPrompt();
+      return;
+    }
+    
+    setIsGettingLocation(true);
+    
+    try {
+      // Request location permissions
+      const { status } = await Location.requestForegroundPermissionsAsync();
+      
+      if (status !== 'granted') {
+        Alert.alert('Permission denied', 'We need location permissions to share your location.');
+        setIsGettingLocation(false);
+        return;
+      }
+      
+      // Get current position
+      const position = await Location.getCurrentPositionAsync({
+        accuracy: Location.Accuracy.Balanced,
+      });
+      
+      const { latitude, longitude } = position.coords;
+      
+      // Use reverse geocoding to get a readable address
+      const addressResponse = await Location.reverseGeocodeAsync({
+        latitude,
+        longitude
+      });
+      
+      if (addressResponse && addressResponse.length > 0) {
+        const address = addressResponse[0];
+        
+        // Create a readable location string
+        let locationString = '';
+        
+        if (address.name) {
+          locationString += address.name;
+        }
+        
+        if (address.city) {
+          locationString += locationString ? `, ${address.city}` : address.city;
+        } else if (address.region) {
+          locationString += locationString ? `, ${address.region}` : address.region;
+        }
+        
+        if (address.country && !locationString.includes(address.country)) {
+          locationString += locationString ? `, ${address.country}` : address.country;
+        }
+        
+        // If we couldn't build a nice address, fallback to coordinates
+        if (!locationString) {
+          locationString = `${latitude.toFixed(4)}, ${longitude.toFixed(4)}`;
+        }
+        
+        setLocation(locationString);
+        console.log('Location set:', locationString);
+      } else {
+        // Fallback to raw coordinates if reverse geocoding fails
+        setLocation(`${latitude.toFixed(4)}, ${longitude.toFixed(4)}`);
+      }
+    } catch (error) {
+      console.error('Error getting location:', error);
+      Alert.alert('Error', 'Failed to get your location. Please try again.');
+    } finally {
+      setIsGettingLocation(false);
+    }
+  };
+
   const handleSubmit = async () => {
+    // Check for authentication first
+    if (!user) {
+      showLoginPrompt();
+      return;
+    }
+    
     if (!postText.trim() && attachments.length === 0) {
       Alert.alert('Error', 'Please add some text or attach media to your post.');
       return;
@@ -133,6 +280,29 @@ export default function NewsfeedUpload() {
     }
   };
 
+  // If auth overlay is shown, display the AuthScreen
+  if (showAuthOverlay) {
+    return <AuthScreen onAuthenticated={handleAuthenticated} />;
+  }
+
+  // Show login prompt banner if not authenticated
+  const renderLoginPrompt = () => {
+    if (!user) {
+      return (
+        <Pressable 
+          style={styles.loginPrompt}
+          onPress={showLoginPrompt}
+        >
+          <LogIn size={20} color="white" />
+          <Text style={styles.loginPromptText}>
+            Login to create posts
+          </Text>
+        </Pressable>
+      );
+    }
+    return null;
+  };
+
   return (
     <SafeAreaView style={styles.container}>
       <StatusBar barStyle="light-content" />
@@ -146,10 +316,10 @@ export default function NewsfeedUpload() {
         <Pressable 
           style={[
             styles.submitButton, 
-            (!postText.trim() && attachments.length === 0) && styles.submitButtonDisabled
+            (!postText.trim() && attachments.length === 0 || !user) && styles.submitButtonDisabled
           ]} 
           onPress={handleSubmit}
-          disabled={loading || (!postText.trim() && attachments.length === 0)}
+          disabled={loading || (!postText.trim() && attachments.length === 0) || !user}
         >
           {loading ? (
             <ActivityIndicator size="small" color="#fff" />
@@ -158,6 +328,9 @@ export default function NewsfeedUpload() {
           )}
         </Pressable>
       </View>
+      
+      {/* Login prompt banner */}
+      {renderLoginPrompt()}
       
       <KeyboardAvoidingView 
         behavior={Platform.OS === 'ios' ? 'padding' : undefined}
@@ -170,16 +343,18 @@ export default function NewsfeedUpload() {
         >
           {/* User info */}
           <View style={styles.userInfoContainer}>
-            {user?.profile?.avatar ? (
+            {userAvatarUri ? (
               <Image 
-                source={{ uri: user.profile.avatar }} 
+                source={{ uri: userAvatarUri }} 
                 style={styles.userAvatar} 
               />
             ) : (
-              <UserCircle size={40} color="#888" />
+              <View style={styles.userAvatarPlaceholder}>
+                <UserCircle size={40} color="#888" />
+              </View>
             )}
             <View style={styles.userTextContainer}>
-              <Text style={styles.userName}>{user ? user.username : 'You'}</Text>
+              <Text style={styles.userName}>{user ? (user.firstName && user.lastName ? `${user.firstName} ${user.lastName}` : user.username) : 'You'}</Text>
               <View style={styles.privacySelector}>
                 <Text style={styles.privacyText}>Public</Text>
               </View>
@@ -189,12 +364,13 @@ export default function NewsfeedUpload() {
           {/* Post text input */}
           <TextInput
             style={styles.postInput}
-            placeholder="What's on your mind?"
+            placeholder={user ? "What's on your mind?" : "Login to share your thoughts..."}
             placeholderTextColor="#888"
             multiline
             value={postText}
             onChangeText={setPostText}
-            autoFocus
+            editable={!!user}
+            autoFocus={!!user}
           />
           
           {/* Attachments preview */}
@@ -288,14 +464,21 @@ export default function NewsfeedUpload() {
               
               <Pressable 
                 style={styles.actionButton}
-                onPress={() => setLocation('Current Location')}
+                onPress={getCurrentLocation}
+                disabled={isGettingLocation}
               >
                 <LinearGradient
                   colors={['rgba(0,223,216,0.1)', 'rgba(0,223,216,0.2)']}
                   style={styles.actionButtonGradient}
                 >
-                  <MapPin size={24} color="#00DFD8" />
-                  <Text style={[styles.actionButtonText, { color: '#00DFD8' }]}>Location</Text>
+                  {isGettingLocation ? (
+                    <ActivityIndicator size="small" color="#00DFD8" />
+                  ) : (
+                    <MapPin size={24} color="#00DFD8" />
+                  )}
+                  <Text style={[styles.actionButtonText, { color: '#00DFD8' }]}>
+                    {isGettingLocation ? 'Getting location...' : 'Location'}
+                  </Text>
                 </LinearGradient>
               </Pressable>
             </ScrollView>
@@ -507,6 +690,29 @@ const styles = StyleSheet.create({
     width: 40,
     height: 40,
     borderRadius: 20,
-    marginRight: 12,
+    backgroundColor: '#333',
+  },
+  userAvatarPlaceholder: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    backgroundColor: 'rgba(255,255,255,0.1)',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  loginPrompt: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: 'rgba(0,112,243,0.2)',
+    paddingVertical: 10,
+    borderBottomWidth: 1,
+    borderBottomColor: 'rgba(0,112,243,0.3)',
+  },
+  loginPromptText: {
+    color: 'white',
+    fontSize: 16,
+    marginLeft: 10,
+    fontFamily: 'Inter_500Medium',
   },
 }); 

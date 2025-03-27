@@ -49,7 +49,8 @@ export const usePostFeed = () => {
         name: post.author?.username || (post.author?.firstName ? `${post.author.firstName} ${post.author.lastName || ''}` : 'Unknown User'),
         username: '@' + (post.author?.username || 'unknown'),
         avatar: post.author?.avatar ? urlFor(post.author.avatar).url() : 'https://randomuser.me/api/portraits/men/32.jpg',
-        isVerified: post.author?.isVerified || false
+        isVerified: post.author?.isVerified || false,
+        isBlueVerified: post.author?.isBlueVerified || false
       },
       images: imageUrls,
       // Preserve the raw comments array if present for detail views

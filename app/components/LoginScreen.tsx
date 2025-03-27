@@ -16,6 +16,7 @@ import {
   useWindowDimensions,
   ActivityIndicator,
 } from 'react-native';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import { LinearGradient } from 'expo-linear-gradient';
 import { Mail, Lock, Eye, EyeOff, ArrowRight } from 'lucide-react-native';
 import { useSanityAuth } from '../hooks/useSanityAuth';
@@ -36,7 +37,11 @@ export default function LoginScreen({ onAuthenticated, onSwitchToSignup, onForgo
   const [error, setError] = useState('');
 
   // Get auth functions and settings from Sanity
-  const { login, googleLogin, loading, authSettings } = useSanityAuth();
+  const { login, loading } = useSanityAuth();
+  
+  // Temporarily disabled Google login and authSettings until implemented
+  const googleLogin = undefined;
+  const authSettings = null;
 
   // Animation values
   const fadeAnim = useRef(new Animated.Value(0)).current;
@@ -113,11 +118,10 @@ export default function LoginScreen({ onAuthenticated, onSwitchToSignup, onForgo
         throw new Error('Invalid credentials');
       }
       
-      console.log('Login successful, navigating...');
+      console.log('Login successful, user data:', JSON.stringify(user));
       
-      // Special handling for users who are logging in for the first time
-      // (created directly in Sanity without a password)
-      if (user.needsPasswordReset) {
+      // Use TypeScript type guard to check for optional property
+      if ('needsPasswordReset' in user && user.needsPasswordReset) {
         console.log('User needs to set a password, showing message...');
         
         // Show a more clear message to the user
@@ -129,13 +133,20 @@ export default function LoginScreen({ onAuthenticated, onSwitchToSignup, onForgo
         }, 5000);
       }
       
+      // Store user in AsyncStorage directly for redundancy
+      await AsyncStorage.setItem('sanity_user', JSON.stringify(user));
+      
       // Emit auth state change event with user data
+      console.log('Emitting AUTH_STATE_CHANGED event with isAuthenticated: true');
       DeviceEventEmitter.emit('AUTH_STATE_CHANGED', { 
         isAuthenticated: true,
         userData: user
       });
       
-      onAuthenticated();
+      // Small delay to ensure state updates before navigation
+      setTimeout(() => {
+        onAuthenticated();
+      }, 100);
     } catch (err: any) {
       console.error('Login error in UI:', err);
       
@@ -151,6 +162,14 @@ export default function LoginScreen({ onAuthenticated, onSwitchToSignup, onForgo
   };
 
   const handleGoogleSignIn = async () => {
+    // Temporarily disabled
+    setError('Google sign-in is currently unavailable');
+    setTimeout(() => {
+      setError('');
+    }, 5000);
+    
+    // Original implementation kept for reference
+    /*
     try {
       // Mock Google auth data - in a real app, this would come from Google Auth SDK
       // For testing purposes, use real test data with a valid email format
@@ -188,6 +207,7 @@ export default function LoginScreen({ onAuthenticated, onSwitchToSignup, onForgo
         setError('');
       }, 5000);
     }
+    */
   };
 
   const renderInputField = (

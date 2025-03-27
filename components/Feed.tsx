@@ -14,7 +14,12 @@ import {
   TextInput,
   KeyboardAvoidingView,
   ScrollView,
-  useWindowDimensions
+  useWindowDimensions,
+  Modal,
+  TouchableWithoutFeedback,
+  PanResponder,
+  GestureResponderEvent,
+  PanResponderGestureState
 } from 'react-native';
 import { usePointsStore } from '@/store/usePointsStore';
 import { useRouter } from 'expo-router';
@@ -30,14 +35,45 @@ import {
   MoreVertical,
   Camera,
   ThumbsUp,
-  MapPin
+  MapPin,
+  UserCircle,
+  Check,
+  BadgeCheck
 } from 'lucide-react-native';
 import { usePostFeed } from '@/app/hooks/usePostFeed';
+import { PinchGestureHandler, State, GestureHandlerRootView } from 'react-native-gesture-handler';
+import { urlFor } from '@/tunnel-ad-main/services/postService';
+import Svg, { Path } from 'react-native-svg';
 
 const { width: SCREEN_WIDTH } = Dimensions.get('window');
 
+// Extend the user type to include isBlueVerified
+interface UserData {
+  id: string;
+  name: string;
+  username: string;
+  avatar: string;
+  isVerified: boolean;
+  isBlueVerified?: boolean; // Optional property for blue verification mark
+}
+
+// Extend the post data interface to use the updated user type
+interface PostData {
+  id: string;
+  user: UserData;
+  content: string;
+  images: string[];
+  location?: string;
+  timeAgo: string;
+  likes: number;
+  comments: number;
+  points: number;
+  hasLiked: boolean;
+  hasSaved: boolean;
+}
+
 // Mock data for the social feed
-const FEED_POSTS = [
+const FEED_POSTS: PostData[] = [
   {
     id: '1',
     user: {
@@ -121,6 +157,23 @@ const FEED_POSTS = [
   }
 ];
 
+// Tunnel verification mark component
+const TunnelVerifiedMark = ({ size = 10 }) => (
+  <Svg width={size * 1.5} height={size * 1.5} viewBox="0 0 24 24" fill="none">
+    {/* Simpler jagged/notched circle background */}
+    <Path 
+      d="M12 2L14 5.1L17.5 3.5L17 7.3L21 8L18.9 11L21 14L17 14.7L17.5 18.5L14 16.9L12 20L10 16.9L6.5 18.5L7 14.7L3 14L5.1 11L3 8L7 7.3L6.5 3.5L10 5.1L12 2Z" 
+      fill="#1877F2" 
+    />
+    {/* Checkmark */}
+    <Path 
+      d="M10 13.17l-2.59-2.58L6 12l4 4 8-8-1.41-1.42L10 13.17z" 
+      fill="#FFFFFF" 
+      strokeWidth="0"
+    />
+  </Svg>
+);
+
 export default function Feed() {
   // Use the post feed hook for Sanity data
   const { 
@@ -145,7 +198,136 @@ export default function Feed() {
   const [posts, setPosts] = useState(FEED_POSTS);
   const [newPostText, setNewPostText] = useState('');
   const scrollY = useRef(new Animated.Value(0)).current;
+  const [imageIndexes, setImageIndexes] = useState<Record<string, number>>({});
   
+  // Image viewer modal state
+  const [modalVisible, setModalVisible] = useState(false);
+  const [selectedImage, setSelectedImage] = useState<string | null>(null);
+  const [currentImageIndex, setCurrentImageIndex] = useState(0);
+  const [currentPostImages, setCurrentPostImages] = useState<string[]>([]);
+
+  // Animation values for zooming and panning
+  const scale = useRef(new Animated.Value(1)).current;
+  const translateX = useRef(new Animated.Value(0)).current;
+  const translateY = useRef(new Animated.Value(0)).current;
+  
+  // Create a base scale value for the initial scale
+  const baseScale = useRef(new Animated.Value(1)).current;
+  // Create a pinch scale value for the current pinch gesture
+  const pinchScale = useRef(new Animated.Value(1)).current;
+  // Combined scale for the image
+  const combinedScale = Animated.multiply(baseScale, pinchScale);
+
+  // Handle pinch gesture end - incorporate pinch scale into base scale
+  const onPinchEnd = () => {
+    // Get current values
+    let currentPinchScale = 1;
+    let currentBaseScale = 1;
+    
+    // Extract current values using listeners
+    const pinchListener = pinchScale.addListener(({ value }) => {
+      currentPinchScale = value;
+    });
+    const baseListener = baseScale.addListener(({ value }) => {
+      currentBaseScale = value;
+    });
+    
+    // Remove listeners
+    pinchScale.removeListener(pinchListener);
+    baseScale.removeListener(baseListener);
+    
+    // Update base scale with the combined scale
+    baseScale.setValue(currentBaseScale * currentPinchScale);
+    // Reset pinch scale
+    pinchScale.setValue(1);
+  };
+
+  // Create a pan responder for the viewer with panning and double-tap
+  const viewerPanResponder = useRef(
+    PanResponder.create({
+      onStartShouldSetPanResponder: () => true,
+      onPanResponderGrant: () => {
+        // Store initial pan values
+        let xOffset = 0;
+        let yOffset = 0;
+        
+        translateX.addListener(({ value }) => {
+          xOffset = value;
+        });
+        translateY.addListener(({ value }) => {
+          yOffset = value;
+        });
+        
+        translateX.setOffset(xOffset);
+        translateY.setOffset(yOffset);
+        translateX.setValue(0);
+        translateY.setValue(0);
+      },
+      onPanResponderMove: (_, gesture) => {
+        // Update pan position
+        translateX.setValue(gesture.dx);
+        translateY.setValue(gesture.dy);
+      },
+      onPanResponderRelease: (_, gesture) => {
+        // Apply offset to value
+        translateX.flattenOffset();
+        translateY.flattenOffset();
+        
+        // Detect swipe to dismiss
+        if (Math.abs(gesture.dy) > 100 && Math.abs(gesture.vy) > 0.5) {
+          setModalVisible(false);
+        }
+      },
+      onPanResponderTerminate: () => {
+        // Reset on termination
+        translateX.flattenOffset();
+        translateY.flattenOffset();
+      },
+    })
+  ).current;
+
+  // Reset zoom and pan values when modal is closed
+  useEffect(() => {
+    if (!modalVisible) {
+      // Reset to initial state
+      baseScale.setValue(1);
+      pinchScale.setValue(1);
+      translateX.setValue(0);
+      translateY.setValue(0);
+    }
+  }, [modalVisible]);
+
+  // Handler for pinch gesture (zooming)
+  const onPinchGestureEvent = Animated.event(
+    [{ nativeEvent: { scale: pinchScale } }],
+    { useNativeDriver: true }
+  );
+
+  // Handler for double tap (reset zoom)
+  const lastTap = useRef(0);
+  const handleImagePress = (imageUri: string, allImages: string[], initialIndex: number) => {
+    const now = Date.now();
+    const DOUBLE_TAP_DELAY = 300;
+    
+    if (modalVisible) {
+      // In the modal, handle double tap to reset zoom
+      if (now - lastTap.current < DOUBLE_TAP_DELAY) {
+        // Double tap detected
+        baseScale.setValue(1);
+        pinchScale.setValue(1);
+        translateX.setValue(0);
+        translateY.setValue(0);
+      }
+      lastTap.current = now;
+    } else {
+      // Opening the modal with the selected image
+      setSelectedImage(imageUri);
+      setCurrentPostImages(allImages);
+      setCurrentImageIndex(initialIndex);
+      setModalVisible(true);
+    }
+  };
+
   // Update local posts state when Sanity posts change
   useEffect(() => {
     if (sanityPosts && sanityPosts.length > 0) {
@@ -373,9 +555,52 @@ export default function Feed() {
     });
   };
 
+  // Handle image swipe in modal
+  const handleSwipe = (direction: 'left' | 'right') => {
+    if (currentPostImages.length <= 1) return;
+    
+    let newIndex = currentImageIndex;
+    if (direction === 'left' && currentImageIndex < currentPostImages.length - 1) {
+      newIndex = currentImageIndex + 1;
+    } else if (direction === 'right' && currentImageIndex > 0) {
+      newIndex = currentImageIndex - 1;
+    }
+    
+    if (newIndex !== currentImageIndex) {
+      setCurrentImageIndex(newIndex);
+      setSelectedImage(currentPostImages[newIndex]);
+    }
+  };
+
+  // State to track current scale value
+  const [currentScale, setCurrentScale] = useState(1);
+  
+  // Add listener to scale value
+  useEffect(() => {
+    const scaleListener = scale.addListener(({ value }) => {
+      setCurrentScale(value);
+    });
+    
+    return () => {
+      scale.removeListener(scaleListener);
+    };
+  }, []);
+
+  // Handle double tap to zoom
+  const handleDoubleTap = () => {
+    // Toggle between zoomed in and zoomed out
+    Animated.spring(scale, {
+      toValue: currentScale > 1.5 ? 1 : 2,
+      friction: 3,
+      useNativeDriver: true,
+    }).start();
+  };
+
   const renderPostCard = ({ item }: { item: typeof FEED_POSTS[0] }) => {
     const isLiked = likedPosts[item.id] || item.hasLiked;
     const isSaved = savedPosts[item.id] || item.hasSaved;
+    // Determine if user is verified from Sanity data
+    const isVerified = item.user.isVerified || item.user.isBlueVerified;
     
     return (
       <View style={[styles.postContainer, { width: cardWidth }]}>
@@ -391,11 +616,11 @@ export default function Feed() {
           <View style={styles.userInfo}>
             <View style={styles.nameContainer}>
               <Text style={styles.userName}>{item.user.name}</Text>
-              {item.user.isVerified ? (
-                <View style={styles.verifiedBadge}>
-                  <ThumbsUp size={8} color="#fff" />
+              {isVerified && (
+                <View style={[styles.verifiedBadge, item.user.isBlueVerified && styles.blueVerifiedBadge]}>
+                  <TunnelVerifiedMark size={14} />
                 </View>
-              ) : null}
+              )}
             </View>
             <View style={styles.userHandleContainer}>
               <Text style={styles.userHandle}>{item.user.username}</Text>
@@ -422,115 +647,105 @@ export default function Feed() {
           </View>
         ) : null}
         
-        {/* Images - handle multiple images with improved responsiveness */}
-        {item.images.length > 0 ? (
-          <Pressable
-            style={[
-              styles.imageContainer,
-              item.images.length > 1 ? styles.multipleImagesContainer : null
-            ]}
-            onPress={() => handlePostPress(item)}
-          >
-            {item.images.length === 1 ? (
-              <Image 
-                source={{ uri: item.images[0] }} 
-                style={[
-                  styles.singleImage, 
-                  { 
-                    height: imageHeight,
-                    borderRadius: isTablet ? 16 : 12
-                  }
-                ]}
-              />
-            ) : item.images.length === 2 ? (
-              // Special layout for exactly 2 images - side by side
-              <View style={styles.twoImagesGrid}>
-                <Image 
-                  source={{ uri: item.images[0] }} 
-                  style={[
-                    styles.halfImage, 
-                    { height: imageHeight, marginRight: 2 }
-                  ]}
-                />
-                <Image 
-                  source={{ uri: item.images[1] }} 
-                  style={[
-                    styles.halfImage, 
-                    { height: imageHeight, marginLeft: 2 }
-                  ]}
-                />
-              </View>
-            ) : item.images.length === 3 ? (
-              // Special layout for exactly 3 images
-              <View style={styles.threeImagesGrid}>
-                <Image 
-                  source={{ uri: item.images[0] }} 
-                  style={[
-                    styles.mainImageThree, 
-                    { height: imageHeight }
-                  ]}
-                />
-                <View style={styles.secondaryImagesContainerThree}>
-                  <Image 
-                    source={{ uri: item.images[1] }} 
-                    style={[
-                      styles.secondaryImageThree,
-                      { height: imageHeight / 2 - 2, marginBottom: 4 }
-                    ]}
-                  />
-                  <Image 
-                    source={{ uri: item.images[2] }} 
-                    style={[
-                      styles.secondaryImageThree,
-                      { height: imageHeight / 2 - 2 }
-                    ]}
-                  />
+        {/* Images - use exact same implementation as feedpost-detail but add tap to zoom */}
+        {item.images.length > 0 && (
+          <View style={styles.imageContainer}>
+            {/* Grid layout for exactly 4 images */}
+            {item.images.length === 4 ? (
+              <View style={styles.gridContainer}>
+                <View style={styles.gridRow}>
+                  <Pressable 
+                    style={styles.gridItem}
+                    onPress={() => handleImagePress(item.images[0], item.images, 0)}
+                  >
+                    <Image
+                      source={{ uri: item.images[0] }}
+                      style={styles.gridImage}
+                    />
+                  </Pressable>
+                  <Pressable 
+                    style={styles.gridItem}
+                    onPress={() => handleImagePress(item.images[1], item.images, 1)}
+                  >
+                    <Image
+                      source={{ uri: item.images[1] }}
+                      style={styles.gridImage}
+                    />
+                  </Pressable>
+                </View>
+                <View style={styles.gridRow}>
+                  <Pressable 
+                    style={styles.gridItem}
+                    onPress={() => handleImagePress(item.images[2], item.images, 2)}
+                  >
+                    <Image
+                      source={{ uri: item.images[2] }}
+                      style={styles.gridImage}
+                    />
+                  </Pressable>
+                  <Pressable 
+                    style={styles.gridItem}
+                    onPress={() => handleImagePress(item.images[3], item.images, 3)}
+                  >
+                    <Image
+                      source={{ uri: item.images[3] }}
+                      style={styles.gridImage}
+                    />
+                  </Pressable>
                 </View>
               </View>
             ) : (
-              // Layout for 4+ images
-              <View style={styles.imageGrid}>
-                <Image 
-                  source={{ uri: item.images[0] }} 
-                  style={[styles.mainImage, { height: imageHeight }]}
-                />
-                <View style={styles.secondaryImagesContainer}>
-                  <Image 
-                    source={{ uri: item.images[1] }} 
-                    style={[styles.secondaryImage, { height: imageHeight }]}
+              // Original horizontal scroll for 1-3 images
+              <FlatList
+                horizontal
+                pagingEnabled
+                showsHorizontalScrollIndicator={false}
+                data={item.images}
+                keyExtractor={(_, index) => `image-${index}`}
+                renderItem={({ item: image, index }) => (
+                  <View style={{ width: cardWidth }}>
+                    <Pressable 
+                      onPress={() => handleImagePress(image, item.images, index)}
+                    >
+                      <Image
+                        source={{ uri: image }}
+                        style={styles.image}
+                      />
+                    </Pressable>
+                  </View>
+                )}
+                onMomentumScrollEnd={(e) => {
+                  const offset = e.nativeEvent.contentOffset.x;
+                  const index = Math.round(offset / cardWidth);
+                  setImageIndexes(prev => ({...prev, [item.id]: index}));
+                }}
+              />
+            )}
+            
+            {/* Dots indicator for multi-image posts with horizontal scrolling (not for grid) */}
+            {item.images.length > 1 && item.images.length !== 4 && (
+              <View style={styles.dotsContainer}>
+                {item.images.map((_, index) => (
+                  <View
+                    key={index}
+                    style={[
+                      styles.dot,
+                      (imageIndexes[item.id] === undefined ? index === 0 : index === imageIndexes[item.id]) && styles.activeDot
+                    ]}
                   />
-                  {item.images.length > 2 ? (
-                    <View style={styles.moreImagesOverlay}>
-                      <Text style={styles.moreImagesText}>+{item.images.length - 2}</Text>
-                    </View>
-                  ) : null}
-                </View>
+                ))}
               </View>
             )}
             
-            {/* Video play indicator if needed */}
-            {item.images[0]?.includes('video') && (
-              <View style={styles.videoIndicator}>
-                <View style={styles.playButton}>
-                  <LinearGradient
-                    colors={['rgba(0,112,243,0.8)', 'rgba(0,112,243,0.6)']}
-                    style={styles.playButtonGradient}
-                  >
-                    <Text style={styles.playButtonIcon}>▶</Text>
-                  </LinearGradient>
-                </View>
+            {/* Points badge */}
+            <View style={styles.pointsBadgeContainer}>
+              <View style={styles.pointsBadge}>
+                <Award size={14} color="#FFD700" />
+                <Text style={styles.pointsText}>{item.points} pts</Text>
               </View>
-            )}
-          </Pressable>
-        ) : null}
-        
-        {/* Points badge */}
-        <View style={styles.pointsBadgeContainer}>
-          <View style={styles.pointsBadge}>
-            <Award size={14} color="#FFD700" />
-            <Text style={styles.pointsText}>{item.points} pts</Text>
+            </View>
           </View>
-        </View>
+        )}
         
         {/* Engagement actions */}
         <View style={styles.actionsContainer}>
@@ -598,10 +813,17 @@ export default function Feed() {
   const CreatePostComponent = () => (
     <View style={[styles.createPostContainer, { width: cardWidth }]}>
       <View style={styles.createPostHeader}>
-        <Image 
-          source={{ uri: 'https://randomuser.me/api/portraits/men/85.jpg' }} 
-          style={styles.currentUserAvatar} 
-        />
+        {/* Show actual user avatar if available, otherwise show placeholder */}
+        {user && user.profile?.avatar ? (
+          <Image 
+            source={{ uri: urlFor(user.profile.avatar).url() }} 
+            style={styles.currentUserAvatar} 
+          />
+        ) : (
+          <View style={[styles.currentUserAvatar, styles.placeholderAvatar]}>
+            <UserCircle size={20} color="#666" />
+          </View>
+        )}
         <Pressable
           style={styles.postInputContainer}
           onPress={() => router.push("/newsfeed-upload" as any)}
@@ -687,6 +909,100 @@ export default function Feed() {
         numColumns={numColumns}
         columnWrapperStyle={isTablet ? styles.columnWrapper : undefined}
       />
+      
+      {/* Image Viewer Modal with GestureHandlerRootView */}
+      <Modal
+        visible={modalVisible}
+        transparent={true}
+        onRequestClose={() => setModalVisible(false)}
+        animationType="fade"
+      >
+        <GestureHandlerRootView style={{ flex: 1 }}>
+          <View style={styles.modalContainer}>
+            <TouchableWithoutFeedback onPress={() => setModalVisible(false)}>
+              <View style={styles.modalBackdrop} />
+            </TouchableWithoutFeedback>
+            
+            <View style={styles.imageViewer}>
+              {/* Navigation buttons */}
+              {currentPostImages.length > 1 && (
+                <>
+                  {currentImageIndex > 0 && (
+                    <Pressable 
+                      style={[styles.navButton, styles.leftNavButton]} 
+                      onPress={() => handleSwipe('right')}
+                    >
+                      <Text style={styles.navButtonText}>‹</Text>
+                    </Pressable>
+                  )}
+                  
+                  {currentImageIndex < currentPostImages.length - 1 && (
+                    <Pressable 
+                      style={[styles.navButton, styles.rightNavButton]} 
+                      onPress={() => handleSwipe('left')}
+                    >
+                      <Text style={styles.navButtonText}>›</Text>
+                    </Pressable>
+                  )}
+                </>
+              )}
+              
+              {/* Close button */}
+              <Pressable 
+                style={styles.closeButton} 
+                onPress={() => setModalVisible(false)}
+              >
+                <Text style={styles.closeButtonText}>✕</Text>
+              </Pressable>
+              
+              {/* Image with pinch zoom */}
+              {selectedImage && (
+                <PinchGestureHandler
+                  onGestureEvent={onPinchGestureEvent}
+                  onHandlerStateChange={({ nativeEvent }) => {
+                    if (nativeEvent.oldState === State.ACTIVE) {
+                      onPinchEnd();
+                    }
+                  }}
+                >
+                  <Animated.View 
+                    style={styles.pinchableView}
+                    {...viewerPanResponder.panHandlers}
+                  >
+                    <TouchableWithoutFeedback 
+                      onPress={() => handleImagePress(selectedImage, currentPostImages, currentImageIndex)}
+                    >
+                      <Animated.Image
+                        source={{ uri: selectedImage }}
+                        style={[
+                          styles.modalImage,
+                          {
+                            transform: [
+                              { scale: combinedScale },
+                              { translateX },
+                              { translateY },
+                            ],
+                          },
+                        ]}
+                        resizeMode="contain"
+                      />
+                    </TouchableWithoutFeedback>
+                  </Animated.View>
+                </PinchGestureHandler>
+              )}
+              
+              {/* Image counter */}
+              {currentPostImages.length > 1 && (
+                <View style={styles.imageCounter}>
+                  <Text style={styles.imageCounterText}>
+                    {currentImageIndex + 1} / {currentPostImages.length}
+                  </Text>
+                </View>
+              )}
+            </View>
+          </View>
+        </GestureHandlerRootView>
+      </Modal>
     </KeyboardAvoidingView>
   );
 }
@@ -860,13 +1176,16 @@ const styles = StyleSheet.create({
     alignItems: 'center',
   },
   verifiedBadge: {
-    width: 14,
-    height: 14,
-    borderRadius: 7,
-    backgroundColor: '#0070F3',
+    width: 20,
+    height: 20,
+    borderRadius: 0, // Remove border radius for custom shape
+    backgroundColor: 'transparent', // Make background transparent since SVG has its own background
     alignItems: 'center',
     justifyContent: 'center',
     marginLeft: 6,
+  },
+  blueVerifiedBadge: {
+    backgroundColor: 'transparent', // Keep transparent for SVG shape
   },
   userHandle: {
     color: '#777',
@@ -902,109 +1221,42 @@ const styles = StyleSheet.create({
     fontFamily: 'Inter_400Regular',
     marginLeft: 4,
   },
-  // Image styling
+  // Updated image styling
   imageContainer: {
     width: '100%',
     position: 'relative',
+    marginBottom: 16,
   },
-  singleImage: {
+  image: {
     width: '100%',
-    height: undefined,
-    aspectRatio: 16/9,
+    height: 300,
     resizeMode: 'cover',
+    borderRadius: 16,
+    marginHorizontal: 0,
   },
-  multipleImagesContainer: {
-    aspectRatio: 16/9,
-  },
-  twoImagesGrid: {
+  dotsContainer: {
     flexDirection: 'row',
-    height: '100%',
-    width: '100%',
-  },
-  halfImage: {
-    flex: 1,
-    height: '100%',
-    resizeMode: 'cover',
-  },
-  threeImagesGrid: {
-    flexDirection: 'row',
-    height: '100%',
-  },
-  mainImageThree: {
-    flex: 2,
-    height: '100%',
-    resizeMode: 'cover',
-    marginRight: 4,
-  },
-  secondaryImagesContainerThree: {
-    flex: 1,
-    height: '100%',
-  },
-  secondaryImageThree: {
-    width: '100%',
-    height: '50%',
-    resizeMode: 'cover',
-  },
-  imageGrid: {
-    flex: 1,
-    flexDirection: 'row',
-    height: '100%',
-  },
-  mainImage: {
-    flex: 2,
-    height: '100%',
-    resizeMode: 'cover',
-    marginRight: 2,
-  },
-  secondaryImagesContainer: {
-    flex: 1,
-    height: '100%',
-    position: 'relative',
-    marginLeft: 2,
-  },
-  secondaryImage: {
-    width: '100%',
-    height: '100%',
-    resizeMode: 'cover',
-  },
-  moreImagesOverlay: {
-    ...StyleSheet.absoluteFillObject,
-    backgroundColor: 'rgba(0,0,0,0.6)',
     justifyContent: 'center',
     alignItems: 'center',
+    marginTop: 16,
   },
-  moreImagesText: {
-    color: 'white',
-    fontSize: 22,
-    fontFamily: 'Inter_700Bold',
+  dot: {
+    width: 8,
+    height: 8,
+    borderRadius: 4,
+    backgroundColor: '#444',
+    marginHorizontal: 3,
   },
-  // Video indicator styling
-  videoIndicator: {
-    ...StyleSheet.absoluteFillObject,
-    justifyContent: 'center',
-    alignItems: 'center',
+  activeDot: {
+    backgroundColor: '#0070F3',
+    width: 10,
+    height: 10,
+    borderRadius: 5,
   },
-  playButton: {
-    width: 60,
-    height: 60,
-    borderRadius: 30,
-    overflow: 'hidden',
-  },
-  playButtonGradient: {
-    width: '100%',
-    height: '100%',
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-  playButtonIcon: {
-    color: 'white',
-    fontSize: 24,
-  },
-  // Points badge
   pointsBadgeContainer: {
     position: 'absolute',
     top: 12,
-    right: 12,
+    right: 28,
   },
   pointsBadge: {
     flexDirection: 'row',
@@ -1018,7 +1270,7 @@ const styles = StyleSheet.create({
   },
   pointsText: {
     color: '#FFD700',
-    fontSize: 12,
+    fontSize: 13,
     fontFamily: 'Inter_600SemiBold',
     marginLeft: 4,
   },
@@ -1060,5 +1312,124 @@ const styles = StyleSheet.create({
     fontSize: 16,
     fontFamily: 'Inter_400Regular',
     marginTop: 16,
+  },
+  // Add modal styles
+  modalContainer: {
+    flex: 1,
+    backgroundColor: 'rgba(0,0,0,0.9)',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  modalBackdrop: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
+    bottom: 0,
+  },
+  imageViewer: {
+    width: '100%',
+    height: '100%',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  pinchableView: {
+    width: '100%',
+    height: '100%',
+    overflow: 'hidden',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  modalImage: {
+    width: '100%',
+    height: '100%',
+  },
+  closeButton: {
+    position: 'absolute',
+    top: 40,
+    right: 20,
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    backgroundColor: 'rgba(0,0,0,0.5)',
+    justifyContent: 'center',
+    alignItems: 'center',
+    zIndex: 10,
+  },
+  closeButtonText: {
+    color: 'white',
+    fontSize: 18,
+    fontWeight: 'bold',
+  },
+  navButton: {
+    position: 'absolute',
+    top: '50%',
+    width: 50,
+    height: 50,
+    borderRadius: 25,
+    backgroundColor: 'rgba(0,0,0,0.5)',
+    justifyContent: 'center',
+    alignItems: 'center',
+    zIndex: 10,
+    marginTop: -25,
+  },
+  leftNavButton: {
+    left: 20,
+  },
+  rightNavButton: {
+    right: 20,
+  },
+  navButtonText: {
+    color: 'white',
+    fontSize: 30,
+    fontWeight: 'bold',
+  },
+  imageCounter: {
+    position: 'absolute',
+    bottom: 40,
+    padding: 10,
+    backgroundColor: 'rgba(0,0,0,0.5)',
+    borderRadius: 20,
+  },
+  imageCounterText: {
+    color: 'white',
+    fontSize: 14,
+    fontFamily: 'Inter_500Medium',
+  },
+  placeholderAvatar: {
+    backgroundColor: '#333',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  gridContainer: {
+    flexDirection: 'column',
+    justifyContent: 'space-between',
+    width: '100%',
+    height: 350,
+    borderRadius: 12,
+    overflow: 'hidden',
+    padding: 1.5,
+    // backgroundColor: 'gray',
+    marginBottom: 8,
+  },
+  gridRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    width: '100%',
+    height: '49.5%',
+  },
+  gridItem: {
+    width: '49.5%',
+    height: '100%',
+    borderWidth: 0,
+    borderColor: 'transparent',
+    margin: 1,
+    borderRadius: 2,
+    overflow: 'hidden',
+  },
+  gridImage: {
+    width: '100%',
+    height: '100%',
+    borderRadius: 0,
   },
 }); 

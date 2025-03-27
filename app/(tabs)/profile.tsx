@@ -51,6 +51,15 @@ import * as sanityAuthService from '../../tunnel-ad-main/services/sanityAuthServ
 
 const { width: SCREEN_WIDTH, height: SCREEN_HEIGHT } = Dimensions.get('window');
 
+// ======= IMPORTANT: Log whenever user data changes =======
+const logUserDataChanges = (userData: any, source: string) => {
+  console.log(`PROFILE: User data updated from ${source}:`, 
+    userData ? 
+    `ID: ${userData._id}, Username: ${userData.username}, Auth: true` : 
+    'No user data (null)'
+  );
+};
+
 const BADGES = [
   {
     id: '1',
@@ -110,6 +119,9 @@ export default function ProfileScreen() {
   
   // Get user data from Sanity auth hook
   const { user, logout } = useSanityAuth();
+  
+  // Add local state to cache user data for display
+  const [userDisplay, setUserDisplay] = useState<any>(null);
 
   useEffect(() => {
     setDisplayPoints(points);
@@ -134,9 +146,13 @@ export default function ProfileScreen() {
   useEffect(() => {
     if (user) {
       console.log("Profile screen received user data from useSanityAuth:", user);
+      logUserDataChanges(user, "useSanityAuth hook");
       
       // Update authenticated state
       setIsAuthenticated(true);
+      
+      // Cache user data in local state for display
+      setUserDisplay(user);
       
       // Update points display
       if (user.points !== undefined) {
@@ -144,7 +160,9 @@ export default function ProfileScreen() {
       }
     } else {
       console.log("No user data in useSanityAuth hook");
-      setIsAuthenticated(false);
+      // Don't set isAuthenticated to false here, as we might still be loading
+      // Check storage before deciding there's no user
+      refreshUserData();
     }
     
     // Listen for AUTH_STATE_CHANGED events
@@ -153,17 +171,25 @@ export default function ProfileScreen() {
       
       // Update authentication state if it's provided
       if (event?.isAuthenticated !== undefined) {
+        console.log("Setting isAuthenticated to:", event.isAuthenticated);
         setIsAuthenticated(event.isAuthenticated);
       }
       
       // If user data was included in the event, use it directly
       if (event?.userData) {
         console.log("Using user data from event in profile screen:", event.userData);
+        logUserDataChanges(event.userData, "AUTH_STATE_CHANGED event");
+        
+        // Cache user data in local state for display
+        setUserDisplay(event.userData);
         
         // Update points if different
         if (event.userData.points !== undefined) {
           setDisplayPoints(event.userData.points);
         }
+      } else if (event?.isAuthenticated === false) {
+        // Clear cached user data when logged out
+        setUserDisplay(null);
       }
     });
 
@@ -247,23 +273,37 @@ export default function ProfileScreen() {
   const refreshUserData = async () => {
     try {
       setRefreshing(true);
-      // Force a re-check of user session
-      const userString = await AsyncStorage.getItem('user');
-      if (userString) {
-        const userData = JSON.parse(userString);
-        console.log('refreshUserData found user data:', userData);
-        
-        // Update local authentication state first
+      
+      // Check if we have user data from the auth hook
+      if (user) {
+        console.log('refreshUserData: Found user in useSanityAuth hook:', user);
+        logUserDataChanges(user, "refreshUserData - from hook");
         setIsAuthenticated(true);
-        
-        // Emit event with the user data to force update across components
-        DeviceEventEmitter.emit('AUTH_STATE_CHANGED', { 
-          isAuthenticated: true,
-          userData: userData 
-        });
+        setUserDisplay(user);
       } else {
-        console.log('No user data found in AsyncStorage');
-        setIsAuthenticated(false);
+        // Fall back to checking AsyncStorage directly
+        console.log('refreshUserData: No user in hook, checking AsyncStorage...');
+        const userString = await AsyncStorage.getItem('sanity_user');
+        
+        if (userString) {
+          const userData = JSON.parse(userString);
+          console.log('refreshUserData: Found user data in AsyncStorage:', userData);
+          logUserDataChanges(userData, "refreshUserData - from AsyncStorage");
+          
+          // Update local authentication state first
+          setIsAuthenticated(true);
+          setUserDisplay(userData);
+          
+          // Emit event with the user data to force update across components
+          DeviceEventEmitter.emit('AUTH_STATE_CHANGED', { 
+            isAuthenticated: true,
+            userData: userData 
+          });
+        } else {
+          console.log('No user data found in AsyncStorage');
+          setIsAuthenticated(false);
+          setUserDisplay(null);
+        }
       }
     } catch (error) {
       console.error('Error refreshing user data:', error);
@@ -425,6 +465,10 @@ export default function ProfileScreen() {
     return <AuthScreen onAuthenticated={() => setIsAuthenticated(true)} />;
   }
 
+  // Safe access to user data for display
+  const profileData = userDisplay || {};
+  const userProfile = profileData.profile || {};
+  
   return (
     <View style={styles.container}>
       <StatusBar barStyle="light-content" />
@@ -468,9 +512,9 @@ export default function ProfileScreen() {
                   handleDoubleTap();
                 }}
               >
-                {user?.profile?.avatar && (
+                {userProfile?.avatar && (
                   <Image
-                    source={{ uri: getImageUrl(user.profile.avatar) }}
+                    source={{ uri: getImageUrl(userProfile.avatar) }}
                     style={[
                       styles.modalImage,
                       { transform: [{ scale: imageScale }] }
@@ -541,14 +585,14 @@ export default function ProfileScreen() {
         {/* Profile Header */}
         <View style={styles.profileHeader}>
           <Pressable 
-            onPress={() => user?.profile?.avatar && setShowImageModal(true)}
+            onPress={() => userProfile?.avatar && setShowImageModal(true)}
             style={styles.profileImageContainer}
             android_ripple={{ color: 'rgba(0, 112, 243, 0.2)', foreground: true }}
           >
-            {user?.profile?.avatar ? (
+            {userProfile?.avatar ? (
               <>
                 <Image
-                  source={{ uri: getImageUrl(user.profile.avatar) }}
+                  source={{ uri: getImageUrl(userProfile.avatar) }}
                   style={styles.profileImage}
                 />
                 <View style={styles.profileImageOverlay}>
@@ -562,12 +606,12 @@ export default function ProfileScreen() {
             )}
           </Pressable>
           <Text style={styles.profileName}>
-            {user?.firstName && user.lastName 
-              ? `${user.firstName} ${user.lastName}` 
-              : user?.username || 'User'}
+            {profileData?.firstName && profileData.lastName 
+              ? `${profileData.firstName} ${profileData.lastName}` 
+              : profileData?.username || 'User'}
           </Text>
           <Text style={styles.profileUsername}>
-            @{user?.username || 'username'}
+            @{profileData?.username || 'username'}
           </Text>
           
           <View style={styles.pointsContainer}>
@@ -578,27 +622,27 @@ export default function ProfileScreen() {
                 { transform: [{ scale: scaleAnim }] }
               ]}
             >
-              {user?.points || displayPoints}
+              {profileData?.points || displayPoints}
             </Animated.Text>
           </View>
         </View>
 
         {/* User Bio Section */}
-        {user?.profile?.bio && (
+        {userProfile?.bio && (
           <View style={styles.section}>
             <Text style={styles.sectionTitle}>About</Text>
             <View style={styles.bioContainer}>
-              <Text style={styles.bioText}>{user.profile.bio}</Text>
+              <Text style={styles.bioText}>{userProfile.bio}</Text>
             </View>
           </View>
         )}
 
         {/* User Interests Section */}
-        {user?.profile?.interests && user.profile.interests.length > 0 && (
+        {userProfile?.interests && userProfile.interests.length > 0 && (
           <View style={styles.section}>
             <Text style={styles.sectionTitle}>Interests</Text>
             <View style={styles.interestsContainer}>
-              {user.profile.interests.map((interest: string, index: number) => (
+              {userProfile.interests.map((interest: string, index: number) => (
                 <View key={index} style={styles.interestTag}>
                   <Text style={styles.interestText}>{interest}</Text>
                 </View>
@@ -611,30 +655,30 @@ export default function ProfileScreen() {
         <View style={styles.section}>
           <Text style={styles.sectionTitle}>Personal Information</Text>
           <View style={styles.contactContainer}>
-            {user?.firstName && (
+            {profileData?.firstName && (
               <View style={styles.contactItem}>
                 <User color="#0070F3" size={20} />
                 <View style={styles.contactTextContainer}>
                   <Text style={styles.contactLabel}>First Name</Text>
-                  <Text style={styles.contactValue}>{user.firstName}</Text>
+                  <Text style={styles.contactValue}>{profileData.firstName}</Text>
                 </View>
               </View>
             )}
-            {user?.lastName && (
+            {profileData?.lastName && (
               <View style={styles.contactItem}>
                 <User color="#0070F3" size={20} />
                 <View style={styles.contactTextContainer}>
                   <Text style={styles.contactLabel}>Last Name</Text>
-                  <Text style={styles.contactValue}>{user.lastName}</Text>
+                  <Text style={styles.contactValue}>{profileData.lastName}</Text>
                 </View>
               </View>
             )}
-            {user?.username && (
+            {profileData?.username && (
               <View style={styles.contactItem}>
                 <User color="#0070F3" size={20} />
                 <View style={styles.contactTextContainer}>
                   <Text style={styles.contactLabel}>Username</Text>
-                  <Text style={styles.contactValue}>@{user.username}</Text>
+                  <Text style={styles.contactValue}>@{profileData.username}</Text>
                 </View>
               </View>
             )}
@@ -649,21 +693,21 @@ export default function ProfileScreen() {
               <Mail color="#0070F3" size={20} />
               <View style={styles.contactTextContainer}>
                 <Text style={styles.contactLabel}>Email</Text>
-                <Text style={styles.contactValue}>{user?.email || 'No email provided'}</Text>
+                <Text style={styles.contactValue}>{profileData?.email || 'No email provided'}</Text>
               </View>
             </View>
             <View key="phone" style={styles.contactItem}>
               <Phone color="#0070F3" size={20} />
               <View style={styles.contactTextContainer}>
                 <Text style={styles.contactLabel}>Phone</Text>
-                <Text style={styles.contactValue}>{user?.phone || 'No phone provided'}</Text>
+                <Text style={styles.contactValue}>{profileData?.phone || 'No phone provided'}</Text>
               </View>
             </View>
             <View key="location" style={styles.contactItem}>
               <MapPin color="#0070F3" size={20} />
               <View style={styles.contactTextContainer}>
                 <Text style={styles.contactLabel}>Location</Text>
-                <Text style={styles.contactValue}>{user?.location || 'No location provided'}</Text>
+                <Text style={styles.contactValue}>{profileData?.location || 'No location provided'}</Text>
               </View>
             </View>
           </View>
@@ -675,13 +719,13 @@ export default function ProfileScreen() {
             {renderStatCard(
               <Award color="#0070F3" size={24} />,
               'Badges',
-              user?.badges?.length || '4'
+              profileData?.badges?.length || '4'
             )}
             {renderStatCard(
               <Clock color="#0070F3" size={24} />,
               'Days Active',
-              user?.daysActive || (user?.createdAt ? 
-                Math.ceil((new Date().getTime() - new Date(user.createdAt).getTime()) / (1000 * 60 * 60 * 24)).toString() : 
+              profileData?.daysActive || (profileData?.createdAt ? 
+                Math.ceil((new Date().getTime() - new Date(profileData.createdAt).getTime()) / (1000 * 60 * 60 * 24)).toString() : 
                 '12')
             )}
           </View>
@@ -689,12 +733,12 @@ export default function ProfileScreen() {
             {renderStatCard(
               <Heart color="#0070F3" size={24} />,
               'Likes Given',
-              user?.likesGiven || '27'
+              profileData?.likesGiven || '27'
             )}
             {renderStatCard(
               <BarChart2 color="#0070F3" size={24} />,
               'Rank',
-              user?.rank || (user?.points && user.points > 500 ? 'Gold' : user?.points && user.points > 100 ? 'Silver' : 'Bronze')
+              profileData?.rank || (profileData?.points && profileData.points > 500 ? 'Gold' : profileData?.points && profileData.points > 100 ? 'Silver' : 'Bronze')
             )}
           </View>
         </View>
@@ -702,13 +746,13 @@ export default function ProfileScreen() {
         {/* Badges Section */}
         <View style={styles.section}>
           <Text style={styles.sectionTitle}>Your Badges</Text>
-          {user?.badges && user.badges.length > 0 ? (
+          {profileData?.badges && profileData.badges.length > 0 ? (
             <ScrollView
               horizontal
               showsHorizontalScrollIndicator={false}
               contentContainerStyle={styles.badgesContainer}
             >
-              {user.badges.map((badge: { id: string; icon: string; name: string; description: string }) => (
+              {profileData.badges.map((badge: { id: string; icon: string; name: string; description: string }) => (
                 <View key={badge.id} style={styles.badge}>
                   <Text style={styles.badgeIcon}>{badge.icon}</Text>
                   <Text style={styles.badgeName}>{badge.name}</Text>
@@ -816,6 +860,49 @@ export default function ProfileScreen() {
         {/* Debug Section */}
         <View style={styles.debugSection}>
           <Pressable
+            style={[styles.debugButton]}
+            onPress={() => {
+              // Display user ID and authentication details
+              if (userDisplay) {
+                Alert.alert(
+                  'User Details',
+                  `ID: ${userDisplay._id}\nEmail: ${userDisplay.email}\nCreated: ${userDisplay.createdAt ? new Date(userDisplay.createdAt).toLocaleString() : 'N/A'}\nProfile: ${userDisplay.profile ? 'Yes' : 'No'}\nAvatar: ${userDisplay.profile?.avatar ? 'Yes' : 'No'}\nHook User: ${user ? 'Available' : 'Not Available'}`,
+                  [{ text: 'OK' }]
+                );
+              } else {
+                Alert.alert('No User', 'No user is currently logged in or data is incomplete');
+              }
+            }}
+          >
+            <Text style={styles.resetButtonText}>
+              Show User Details (Debug)
+            </Text>
+          </Pressable>
+          
+          <Pressable
+            style={[styles.debugButton, {marginTop: 10, backgroundColor: '#555'}]}
+            onPress={async () => {
+              try {
+                // Directly check AsyncStorage
+                const userStr = await AsyncStorage.getItem('sanity_user');
+                Alert.alert(
+                  'Storage Check',
+                  userStr ? 
+                    `Found user in storage:\n${userStr.substring(0, 150)}...` : 
+                    'No user data in AsyncStorage',
+                  [{ text: 'OK' }]
+                );
+              } catch (e) {
+                Alert.alert('Error', 'Failed to check storage: ' + e);
+              }
+            }}
+          >
+            <Text style={styles.resetButtonText}>
+              Check Storage (Debug)
+            </Text>
+          </Pressable>
+          
+          <Pressable
             style={[
               styles.resetButton,
               showResetConfirm && styles.resetButtonConfirm
@@ -824,27 +911,6 @@ export default function ProfileScreen() {
           >
             <Text style={styles.resetButtonText}>
               {showResetConfirm ? 'Confirm Reset' : 'Reset All Data (Debug)'}
-            </Text>
-          </Pressable>
-          
-          {/* Add diagnostic button */}
-          <Pressable
-            style={[styles.debugButton]}
-            onPress={() => {
-              // Display user ID and authentication details
-              if (user) {
-                Alert.alert(
-                  'User Details',
-                  `ID: ${user._id}\nEmail: ${user.email}\nCreated: ${user.createdAt ? new Date(user.createdAt).toLocaleString() : 'N/A'}\nProfile: ${user.profile ? 'Yes' : 'No'}\nAvatar: ${user.profile?.avatar ? 'Yes' : 'No'}`,
-                  [{ text: 'OK' }]
-                );
-              } else {
-                Alert.alert('No User', 'No user is currently logged in');
-              }
-            }}
-          >
-            <Text style={styles.resetButtonText}>
-              Show User Details (Debug)
             </Text>
           </Pressable>
         </View>

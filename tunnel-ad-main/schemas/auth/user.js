@@ -124,6 +124,13 @@ export default {
       title: 'Needs Password Reset',
       type: 'boolean',
       initialValue: false,
+    },
+    {
+      name: 'isBlueVerified',
+      title: 'Blue Verification Mark',
+      type: 'boolean',
+      description: 'Special blue verification badge for select users',
+      initialValue: false,
     }
   ],
   preview: {

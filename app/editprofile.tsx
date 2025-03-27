@@ -377,6 +377,12 @@ export default function EditProfileScreen() {
               userInfo.lastName
             )}
             {renderInfoField(
+              <User color="#1877F2" size={20} />,
+              'Username',
+              'username',
+              userInfo.username
+            )}
+            {renderInfoField(
               <Mail color="#1877F2" size={20} />,
               'Email',
               'email',
