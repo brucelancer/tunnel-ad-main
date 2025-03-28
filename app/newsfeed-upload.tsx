@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import {
   View,
   Text,
@@ -13,9 +13,11 @@ import {
   StatusBar,
   useWindowDimensions,
   ActivityIndicator,
-  Alert
+  Alert,
+  BackHandler
 } from 'react-native';
-import { useRouter } from 'expo-router';
+import { useRouter, useFocusEffect } from 'expo-router';
+import { usePreventRemove } from '@react-navigation/native';
 import { LinearGradient } from 'expo-linear-gradient';
 import * as ImagePicker from 'expo-image-picker';
 import * as Location from 'expo-location';
@@ -31,7 +33,9 @@ import {
   Hash,
   AtSign,
   Plus,
-  LogIn
+  LogIn,
+  LayoutGrid,
+  Columns
 } from 'lucide-react-native';
 import { usePostFeed } from '@/app/hooks/usePostFeed';
 import { useSanityAuth } from '@/app/hooks/useSanityAuth';
@@ -48,6 +52,7 @@ export default function NewsfeedUpload() {
   const [showAuthOverlay, setShowAuthOverlay] = useState(false);
   const [isGettingLocation, setIsGettingLocation] = useState(false);
   const [userAvatarUri, setUserAvatarUri] = useState<string | null>(null);
+  const [layoutMode, setLayoutMode] = useState<'slide' | 'grid'>('slide');
   
   // Get Sanity hooks
   const { createPost } = usePostFeed();
@@ -249,6 +254,7 @@ export default function NewsfeedUpload() {
       // If we have createPost from our hook and user is logged in
       if (createPost && user) {
         console.log(`Submitting post with ${attachments.length} images and location: ${location || 'none'}`);
+        console.log(`Layout mode for 4 images: ${layoutMode}`);
         
         // Show upload progress for longer uploads with images
         let progressMessage = 'Uploading...';
@@ -257,8 +263,13 @@ export default function NewsfeedUpload() {
           // Show a toast or some UI indication here
         }
         
-        // Create the post with location data
-        await createPost(postText, location, attachments);
+        // Create post content with metadata for layout preference
+        const enhancedContent = attachments.length === 4 
+          ? `${postText}\n\n<!-- layoutMode:${layoutMode} -->`
+          : postText;
+        
+        // Create the post with location data and layout preference in metadata
+        await createPost(enhancedContent, location, attachments);
         
         Alert.alert('Success', 'Your post has been shared!', [
           { text: 'OK', onPress: () => router.back() }
@@ -279,6 +290,136 @@ export default function NewsfeedUpload() {
       setLoading(false);
     }
   };
+
+  // Render layout switcher for 4 images
+  const renderLayoutSwitcher = () => {
+    if (attachments.length !== 4) return null;
+
+    return (
+      <View style={styles.layoutSwitcherContainer}>
+        <Text style={styles.layoutSwitcherTitle}>Choose layout:</Text>
+        <View style={styles.layoutOptions}>
+          <Pressable 
+            style={[
+              styles.layoutOption, 
+              layoutMode === 'slide' && styles.layoutOptionSelected
+            ]}
+            onPress={() => setLayoutMode('slide')}
+          >
+            <Columns size={22} color={layoutMode === 'slide' ? "#0070F3" : "#777"} />
+            <Text style={[
+              styles.layoutOptionText,
+              layoutMode === 'slide' && styles.layoutOptionTextSelected
+            ]}>
+              Slide View
+            </Text>
+          </Pressable>
+          
+          <Pressable 
+            style={[
+              styles.layoutOption, 
+              layoutMode === 'grid' && styles.layoutOptionSelected
+            ]}
+            onPress={() => setLayoutMode('grid')}
+          >
+            <LayoutGrid size={22} color={layoutMode === 'grid' ? "#0070F3" : "#777"} />
+            <Text style={[
+              styles.layoutOptionText,
+              layoutMode === 'grid' && styles.layoutOptionTextSelected
+            ]}>
+              Grid View
+            </Text>
+          </Pressable>
+        </View>
+      </View>
+    );
+  };
+
+  // Render a preview of the grid layout
+  const renderGridPreview = () => {
+    if (attachments.length !== 4 || layoutMode !== 'grid') return null;
+
+    return (
+      <View style={styles.gridPreviewContainer}>
+        <Text style={styles.previewTitle}>Grid View Preview</Text>
+        <View style={styles.gridPreview}>
+          <View style={styles.gridPreviewRow}>
+            <Image source={{ uri: attachments[0] }} style={styles.gridPreviewImage} />
+            <Image source={{ uri: attachments[1] }} style={styles.gridPreviewImage} />
+          </View>
+          <View style={styles.gridPreviewRow}>
+            <Image source={{ uri: attachments[2] }} style={styles.gridPreviewImage} />
+            <Image source={{ uri: attachments[3] }} style={styles.gridPreviewImage} />
+          </View>
+        </View>
+        <Text style={styles.previewNote}>
+          All 4 images will be displayed in a grid when others view your post.
+        </Text>
+      </View>
+    );
+  };
+
+  // Check if user has unsaved content
+  const hasUnsavedContent = useCallback(() => {
+    return postText.trim().length > 0 || attachments.length > 0;
+  }, [postText, attachments]);
+
+  // Common confirmation dialog for discarding post
+  const showDiscardConfirmation = (onDiscard: () => void) => {
+    Alert.alert(
+      'Discard Post?',
+      'You have unsaved content. Are you sure you want to leave and discard this post?',
+      [
+        { text: 'Cancel', style: 'cancel' },
+        { 
+          text: 'Discard', 
+          style: 'destructive',
+          onPress: onDiscard
+        }
+      ]
+    );
+  };
+
+  // Use React Navigation's prevention system to block all kinds of navigations
+  usePreventRemove(
+    hasUnsavedContent(), // Only prevent navigation if we have content
+    () => {
+      // Return a promise that resolves when the user makes a decision
+      return new Promise((resolve) => {
+        showDiscardConfirmation(() => {
+          // If they confirm discard, resolve the promise to allow navigation
+          resolve(true);
+        });
+      });
+    }
+  );
+
+  // Handle back button press with confirmation if needed
+  const handleBackPress = () => {
+    if (hasUnsavedContent()) {
+      showDiscardConfirmation(() => router.back());
+    } else {
+      router.back();
+    }
+  };
+
+  // Handle hardware back button press on Android
+  useEffect(() => {
+    const backAction = () => {
+      if (hasUnsavedContent()) {
+        showDiscardConfirmation(() => router.back());
+        return true; // Prevent default behavior
+      }
+      // Let the default back action happen (go back)
+      return false;
+    };
+
+    // Add event listener for hardware back press
+    const backHandler = BackHandler.addEventListener('hardwareBackPress', backAction);
+
+    // Clean up event listener on component unmount
+    return () => backHandler.remove();
+  }, [hasUnsavedContent]);
 
   // If auth overlay is shown, display the AuthScreen
   if (showAuthOverlay) {
@@ -309,7 +450,7 @@ export default function NewsfeedUpload() {
       
       {/* Header */}
       <View style={styles.header}>
-        <Pressable onPress={() => router.back()} style={styles.backButton}>
+        <Pressable onPress={handleBackPress} style={styles.backButton}>
           <ArrowLeft size={24} color="#fff" />
         </Pressable>
         <Text style={styles.headerTitle}>Create Post</Text>
@@ -373,10 +514,17 @@ export default function NewsfeedUpload() {
             autoFocus={!!user}
           />
           
+          {/* Layout switcher for 4 images */}
+          {renderLayoutSwitcher()}
+          
+          {/* Grid preview for 4 images in grid mode */}
+          {renderGridPreview()}
+          
           {/* Attachments preview */}
           {attachments.length > 0 && (
             <View style={styles.attachmentsContainer}>
-              {attachments.map((uri, index) => (
+              {/* Only render standard preview if not in grid preview mode */}
+              {!(attachments.length === 4 && layoutMode === 'grid') && attachments.map((uri, index) => (
                 <View key={index} style={styles.attachmentWrapper}>
                   <Image source={{ uri }} style={styles.attachmentImage} />
                   <Pressable 
@@ -714,5 +862,85 @@ const styles = StyleSheet.create({
     fontSize: 16,
     marginLeft: 10,
     fontFamily: 'Inter_500Medium',
+  },
+  layoutSwitcherContainer: {
+    marginBottom: 20,
+    padding: 16,
+    backgroundColor: 'rgba(255,255,255,0.05)',
+    borderRadius: 12,
+  },
+  layoutSwitcherTitle: {
+    color: 'white',
+    fontSize: 16,
+    fontFamily: 'Inter_600SemiBold',
+    marginBottom: 12,
+  },
+  layoutOptions: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 12,
+  },
+  layoutOption: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    padding: 12,
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.1)',
+    borderRadius: 12,
+    backgroundColor: 'rgba(255,255,255,0.03)',
+  },
+  layoutOptionSelected: {
+    borderColor: '#0070F3',
+    backgroundColor: 'rgba(0,112,243,0.1)',
+  },
+  layoutOptionText: {
+    color: '#777',
+    fontSize: 14,
+    fontFamily: 'Inter_500Medium',
+    marginLeft: 8,
+  },
+  layoutOptionTextSelected: {
+    color: '#0070F3',
+    fontFamily: 'Inter_600SemiBold',
+  },
+  gridPreviewContainer: {
+    marginBottom: 20,
+    padding: 16,
+    backgroundColor: 'rgba(255,255,255,0.05)',
+    borderRadius: 12,
+  },
+  gridPreview: {
+    width: '100%',
+    height: 200,
+    backgroundColor: 'white',
+    borderRadius: 8,
+    padding: 1.5,
+    overflow: 'hidden',
+  },
+  gridPreviewRow: {
+    flexDirection: 'row',
+    width: '100%',
+    height: '50%',
+  },
+  gridPreviewImage: {
+    width: '50%',
+    height: '100%',
+    margin: 1,
+    borderRadius: 2,
+  },
+  previewTitle: {
+    color: '#0070F3',
+    fontSize: 16,
+    fontFamily: 'Inter_600SemiBold',
+    marginBottom: 8,
+  },
+  previewNote: {
+    color: '#777',
+    fontSize: 14,
+    fontFamily: 'Inter_400Regular',
+    marginTop: 8,
   },
 }); 

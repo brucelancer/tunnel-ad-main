@@ -1,4 +1,4 @@
-import React, { useState, useRef, useEffect } from 'react';
+import React, { useState, useRef, useEffect, useCallback } from 'react';
 import { 
   View, 
   Text, 
@@ -19,7 +19,8 @@ import {
   TouchableWithoutFeedback,
   PanResponder,
   GestureResponderEvent,
-  PanResponderGestureState
+  PanResponderGestureState,
+  TouchableOpacity
 } from 'react-native';
 import { usePointsStore } from '@/store/usePointsStore';
 import { useRouter } from 'expo-router';
@@ -38,12 +39,15 @@ import {
   MapPin,
   UserCircle,
   Check,
-  BadgeCheck
+  BadgeCheck,
+  X,
+  Clock
 } from 'lucide-react-native';
 import { usePostFeed } from '@/app/hooks/usePostFeed';
 import { PinchGestureHandler, State, GestureHandlerRootView } from 'react-native-gesture-handler';
-import { urlFor } from '@/tunnel-ad-main/services/postService';
+import { urlFor, getSanityClient } from '@/tunnel-ad-main/services/postService';
 import Svg, { Path } from 'react-native-svg';
+import * as sanityAuthService from '@/tunnel-ad-main/services/sanityAuthService';
 
 const { width: SCREEN_WIDTH } = Dimensions.get('window');
 
@@ -55,6 +59,9 @@ interface UserData {
   avatar: string;
   isVerified: boolean;
   isBlueVerified?: boolean; // Optional property for blue verification mark
+  bio?: string;
+  joinDate?: string;
+  location?: string;
 }
 
 // Extend the post data interface to use the updated user type
@@ -173,6 +180,459 @@ const TunnelVerifiedMark = ({ size = 10 }) => (
     />
   </Svg>
 );
+
+// User Profile Popup component
+interface UserProfilePopupProps {
+  visible: boolean;
+  onClose: () => void;
+  userData: UserData | null;
+}
+
+// Extended user data interface for detailed profile
+interface DetailedUserData extends UserData {
+  posts?: number;
+  followers?: number;
+  following?: number;
+  badges?: { id: string; name: string; icon: string }[];
+  joinDate?: string;
+  memberSince?: string;
+  points?: number;
+  bio?: string;
+  interests?: string[];
+  likesCount?: number;
+}
+
+const UserProfilePopup = ({ visible, onClose, userData }: UserProfilePopupProps) => {
+  const [loading, setLoading] = useState(false);
+  const [following, setFollowing] = useState(false);
+  const [detailedUser, setDetailedUser] = useState<DetailedUserData | null>(null);
+  const { width: windowWidth, height: windowHeight } = useWindowDimensions();
+  const router = useRouter();
+  const { user: currentUser } = usePostFeed();
+
+  // Animation values
+  const slideAnim = useRef(new Animated.Value(windowHeight)).current;
+  const backdropOpacity = useRef(new Animated.Value(0)).current;
+
+  // Fetch detailed user data
+  const fetchUserDetails = useCallback(async (userId: string) => {
+    try {
+      setLoading(true);
+      
+      // Get client from service
+      const client = getSanityClient();
+      if (!client) {
+        console.error('Failed to get Sanity client');
+        return;
+      }
+      
+      // Fetch from Sanity directly
+      const userDetail = await client.fetch(`
+        *[_type == "user" && _id == $userId][0] {
+          _id,
+          username,
+          firstName,
+          lastName,
+          email,
+          phone,
+          location,
+          points,
+          createdAt,
+          "avatar": profile.avatar,
+          "bio": profile.bio,
+          "interests": profile.interests,
+          "isVerified": username == "admin" || username == "moderator",
+          "isBlueVerified": isBlueVerified,
+          "postsCount": count(*[_type == "post" && author._ref == $userId]),
+          "likesCount": count(*[_type == "like" && user._ref == $userId])
+        }
+      `, { userId });
+      
+      if (!userDetail) {
+        console.warn(`No user found with ID: ${userId}`);
+        return;
+      }
+      
+      console.log('Fetched user details:', JSON.stringify(userDetail, null, 2));
+      
+      // Format the user data
+      const formattedUser: DetailedUserData = {
+        id: userDetail._id || userId,
+        name: userDetail.firstName && userDetail.lastName 
+          ? `${userDetail.firstName} ${userDetail.lastName}`.trim() 
+          : userDetail.username || 'User',
+        username: userDetail.username ? `@${userDetail.username}` : '@user',
+        avatar: userDetail.avatar ? urlFor(userDetail.avatar).url() : 'https://randomuser.me/api/portraits/lego/1.jpg',
+        isVerified: userDetail.isVerified || false,
+        isBlueVerified: userDetail.isBlueVerified || false,
+        bio: userDetail.bio || "No bio provided",
+        interests: userDetail.interests || [],
+        location: userDetail.location || 'Unknown location',
+        posts: userDetail.postsCount || 0,
+        likesCount: userDetail.likesCount || 0,
+        followers: Math.floor(Math.random() * 100) + 20, // Placeholder
+        following: Math.floor(Math.random() * 50) + 10, // Placeholder
+        memberSince: userDetail.createdAt 
+          ? formatDate(userDetail.createdAt) 
+          : 'June 2022',
+        points: userDetail.points || 0,
+        badges: generateBadges(userDetail)
+      };
+      
+      console.log('Formatted user data:', JSON.stringify(formattedUser, null, 2));
+      setDetailedUser(formattedUser);
+    } catch (error) {
+      console.error('Error fetching user details:', error);
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  // Format date for member since display
+  const formatDate = (dateString: string) => {
+    try {
+      const date = new Date(dateString);
+      return date.toLocaleDateString('en-US', { month: 'long', year: 'numeric' });
+    } catch {
+      return 'Unknown date';
+    }
+  };
+
+  // Generate badges based on user activity
+  const generateBadges = (user: any) => {
+    const badges = [];
+    
+    // Early adopter badge
+    if (user.createdAt && new Date(user.createdAt) < new Date('2023-01-01')) {
+      badges.push({ id: 'early', name: 'Early Adopter', icon: '🚀' });
+    }
+    
+    // Content creator badge
+    if (user.postsCount && user.postsCount > 10) {
+      badges.push({ id: 'creator', name: 'Content Creator', icon: '✍️' });
+    }
+    
+    // Verified account badge
+    if (user.isVerified || user.isBlueVerified) {
+      badges.push({ id: 'verified', name: 'Verified Account', icon: '✓' });
+    }
+    
+    // Points master badge
+    if (user.points && user.points > 100) {
+      badges.push({ id: 'points', name: 'Points Master', icon: '🏆' });
+    }
+    
+    // Add default badge if none
+    if (badges.length === 0) {
+      badges.push({ id: 'member', name: 'Community Member', icon: '👋' });
+    }
+    
+    return badges;
+  };
+
+  useEffect(() => {
+    if (visible && userData) {
+      // Fetch detailed user data when popup becomes visible
+      fetchUserDetails(userData.id);
+      
+      // Start animations when modal becomes visible
+      Animated.parallel([
+        Animated.timing(backdropOpacity, {
+          toValue: 1,
+          duration: 300,
+          useNativeDriver: true,
+        }),
+        Animated.spring(slideAnim, {
+          toValue: 0,
+          tension: 50,
+          friction: 12,
+          useNativeDriver: true,
+        }),
+      ]).start();
+    } else {
+      // Reset animations when modal is hidden
+      Animated.parallel([
+        Animated.timing(backdropOpacity, {
+          toValue: 0,
+          duration: 200,
+          useNativeDriver: true,
+        }),
+        Animated.timing(slideAnim, {
+          toValue: windowHeight,
+          duration: 250,
+          useNativeDriver: true,
+        }),
+      ]).start();
+    }
+  }, [visible, userData, windowHeight]);
+
+  // Handle view full profile
+  const handleViewFullProfile = useCallback(() => {
+    if (userData) {
+      onClose();
+      // Navigate to full profile
+      router.push({
+        pathname: "/user-profile" as any,
+        params: { id: userData.id }
+      });
+    }
+  }, [userData, router]);
+
+  // Handle follow/unfollow
+  const handleFollowToggle = useCallback(() => {
+    setLoading(true);
+    // Simulate API call
+    setTimeout(() => {
+      setFollowing(!following);
+      setLoading(false);
+    }, 800);
+  }, [following]);
+
+  // Pan responder for swipe to dismiss
+  const panResponder = useRef(
+    PanResponder.create({
+      onStartShouldSetPanResponder: () => true,
+      onPanResponderMove: (_, gestureState) => {
+        if (gestureState.dy > 0) {
+          // Only allow downward swiping
+          slideAnim.setValue(gestureState.dy);
+        }
+      },
+      onPanResponderRelease: (_, gestureState) => {
+        if (gestureState.dy > 100 || gestureState.vy > 1) {
+          // If swiped down far enough or with enough velocity, close the modal
+          onClose();
+        } else {
+          // Otherwise snap back to open position
+          Animated.spring(slideAnim, {
+            toValue: 0,
+            tension: 50,
+            friction: 12,
+            useNativeDriver: true,
+          }).start();
+        }
+      },
+    })
+  ).current;
+
+  // Use detailed user data if available, otherwise fall back to basic data
+  const displayUser = detailedUser || userData;
+  
+  if (!displayUser) return null;
+
+  return (
+    <Modal
+      visible={visible}
+      transparent={true}
+      animationType="none"
+      onRequestClose={onClose}
+    >
+      <View style={styles.popupModalContainer}>
+        {/* Backdrop - touchable to dismiss */}
+        <TouchableWithoutFeedback onPress={onClose}>
+          <Animated.View 
+            style={[
+              styles.popupBackdrop,
+              { opacity: backdropOpacity }
+            ]} 
+          />
+        </TouchableWithoutFeedback>
+        
+        {/* Profile Card */}
+        <Animated.View 
+          style={[
+            styles.profilePopupCard,
+            { 
+              transform: [{ translateY: slideAnim }],
+              maxWidth: windowWidth > 500 ? 500 : '100%',
+              width: windowWidth > 500 ? 500 : windowWidth,
+            }
+          ]}
+          {...panResponder.panHandlers}
+        >
+          {/* Handle for pull-down interaction */}
+          <View style={styles.popupHandle} />
+          
+          {/* Header with close button */}
+          <View style={styles.popupHeader}>
+            <Text style={styles.popupTitle}>Profile</Text>
+            <TouchableOpacity 
+              style={styles.popupCloseButton}
+              onPress={onClose}
+              hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+            >
+              <X size={22} color="#888" />
+            </TouchableOpacity>
+          </View>
+          
+          {loading && (
+            <View style={styles.popupLoading}>
+              <ActivityIndicator size="large" color="#0070F3" />
+            </View>
+          )}
+          
+          {!loading && (
+            <ScrollView 
+              style={styles.popupScrollView}
+              contentContainerStyle={styles.popupContent}
+              showsVerticalScrollIndicator={false}
+            >
+              {/* Profile header with image, name, verification */}
+              <View style={styles.popupProfileHeader}>
+                <Image 
+                  source={{ uri: displayUser.avatar }} 
+                  style={styles.popupProfileImage}
+                />
+                <View style={styles.popupProfileInfo}>
+                  <View style={styles.popupNameContainer}>
+                    <Text style={styles.popupProfileName}>{displayUser.name}</Text>
+                    {displayUser.isVerified && (
+                      <View style={[styles.verifiedBadge, displayUser.isBlueVerified && styles.blueVerifiedBadge]}>
+                        <TunnelVerifiedMark size={14} />
+                      </View>
+                    )}
+                  </View>
+                  <Text style={styles.popupProfileUsername}>{displayUser.username}</Text>
+                </View>
+              </View>
+              
+              {/* Stats section */}
+              <View style={styles.popupStatsSection}>
+                <View style={styles.statItem}>
+                  <Heart size={16} color="#FF3B30" />
+                  <Text style={styles.statValue}>{detailedUser?.likesCount || '0'}</Text>
+                  <Text style={styles.statLabel}>Likes</Text>
+                </View>
+                <View style={styles.statDivider} />
+                <View style={styles.statItem}>
+                  <MessageCircle size={16} color="#0070F3" />
+                  <Text style={styles.statValue}>{detailedUser?.posts || '0'}</Text>
+                  <Text style={styles.statLabel}>Posts</Text>
+                </View>
+                <View style={styles.statDivider} />
+                <View style={styles.statItem}>
+                  <Award size={16} color="#FFD700" />
+                  <Text style={styles.statValue}>{detailedUser?.points || '0'}</Text>
+                  <Text style={styles.statLabel}>Points</Text>
+                </View>
+              </View>
+              
+              {/* Bio section */}
+              <View style={styles.popupBioSection}>
+                <Text style={styles.popupBioText}>
+                  {detailedUser?.bio || displayUser.bio || "This user hasn't added a bio yet."}
+                </Text>
+              </View>
+              
+              {/* Interests section if available */}
+              {detailedUser?.interests && detailedUser.interests.length > 0 && (
+                <View style={styles.popupInterestsContainer}>
+                  {detailedUser.interests.map((interest, index) => (
+                    <View key={index} style={styles.popupInterestTag}>
+                      <Text style={styles.popupInterestText}>{interest}</Text>
+                    </View>
+                  ))}
+                </View>
+              )}
+              
+              {/* User details */}
+              {displayUser.location && (
+                <View style={styles.popupInfoItem}>
+                  <MapPin size={16} color="#0070F3" />
+                  <Text style={styles.popupInfoText}>{displayUser.location}</Text>
+                </View>
+              )}
+              
+              {/* Member since */}
+              <View style={styles.popupInfoItem}>
+                <Clock size={16} color="#0070F3" />
+                <Text style={styles.popupInfoText}>
+                  Member since {detailedUser?.memberSince || displayUser.joinDate || "June 2022"}
+                </Text>
+              </View>
+              
+              {/* Badges - using real data if available */}
+              <View style={styles.popupBadgesSection}>
+                <Text style={styles.popupSectionTitle}>Badges</Text>
+                <ScrollView 
+                  horizontal
+                  showsHorizontalScrollIndicator={false}
+                  contentContainerStyle={styles.popupBadgesList}
+                >
+                  {detailedUser?.badges ? (
+                    detailedUser.badges.map((badge, index) => (
+                      <View key={index} style={styles.popupBadge}>
+                        <Text style={styles.popupBadgeIcon}>{badge.icon}</Text>
+                        <Text style={styles.popupBadgeName}>{badge.name}</Text>
+                      </View>
+                    ))
+                  ) : (
+                    <>
+                      <View style={styles.popupBadge}>
+                        <Text style={styles.popupBadgeIcon}>🌟</Text>
+                        <Text style={styles.popupBadgeName}>Top Creator</Text>
+                      </View>
+                      <View style={styles.popupBadge}>
+                        <Text style={styles.popupBadgeIcon}>💯</Text>
+                        <Text style={styles.popupBadgeName}>100 Posts</Text>
+                      </View>
+                      <View style={styles.popupBadge}>
+                        <Text style={styles.popupBadgeIcon}>🏆</Text>
+                        <Text style={styles.popupBadgeName}>Trendsetter</Text>
+                      </View>
+                    </>
+                  )}
+                </ScrollView>
+              </View>
+            </ScrollView>
+          )}
+          
+          {/* Action buttons */}
+          <View style={styles.popupActionsContainer}>
+            <TouchableOpacity
+              style={[
+                styles.popupActionButton, 
+                following ? styles.unfollowButton : styles.followButton
+              ]}
+              onPress={handleFollowToggle}
+              disabled={loading}
+            >
+              {loading ? (
+                <ActivityIndicator size="small" color="#FFF" />
+              ) : (
+                <Text style={following ? styles.unfollowButtonText : styles.followButtonText}>
+                  {following ? 'Following' : 'Follow'}
+                </Text>
+              )}
+            </TouchableOpacity>
+            
+            <TouchableOpacity
+              style={[styles.popupActionButton, styles.messageButton]}
+              onPress={() => {
+                onClose();
+                if (displayUser) {
+                  router.push({
+                    pathname: "/chat" as any,
+                    params: { id: displayUser.id }
+                  });
+                }
+              }}
+            >
+              <Text style={styles.messageButtonText}>Message</Text>
+            </TouchableOpacity>
+            
+            <TouchableOpacity
+              style={[styles.popupActionButton, styles.viewProfileButton]}
+              onPress={handleViewFullProfile}
+            >
+              <Text style={styles.viewProfileButtonText}>View Full Profile</Text>
+            </TouchableOpacity>
+          </View>
+        </Animated.View>
+      </View>
+    </Modal>
+  );
+};
 
 export default function Feed() {
   // Use the post feed hook for Sanity data
@@ -547,12 +1007,24 @@ export default function Feed() {
     });
   };
 
+  // User profile popup state
+  const [profilePopupVisible, setProfilePopupVisible] = useState(false);
+  const [selectedUser, setSelectedUser] = useState<UserData | null>(null);
+
+  // Handle user profile press
   const handleUserProfile = (userId: string) => {
-    // Navigate to user profile
-    router.push({
-      pathname: "/user-profile" as any,
-      params: { id: userId }
-    });
+    // Find the user data from posts
+    const post = posts.find(post => post.user.id === userId);
+    if (post) {
+      setSelectedUser(post.user);
+      setProfilePopupVisible(true);
+    } else {
+      // Fallback to navigating to user profile page
+      router.push({
+        pathname: "/user-profile" as any,
+        params: { id: userId }
+      });
+    }
   };
 
   // Handle image swipe in modal
@@ -781,6 +1253,17 @@ export default function Feed() {
             >
               <Share2 size={20} color="#888" />
             </Pressable>
+            
+            <Pressable 
+              style={styles.actionButton}
+              onPress={() => router.push({
+                pathname: "/chat" as any,
+                params: { id: item.user.id }
+              })}
+              hitSlop={{top: 10, bottom: 10, left: 10, right: 10}}
+            >
+              <Send size={20} color="#888" />
+            </Pressable>
           </View>
           
           <View style={styles.actionGroup}>
@@ -1003,6 +1486,13 @@ export default function Feed() {
           </View>
         </GestureHandlerRootView>
       </Modal>
+      
+      {/* User Profile Popup */}
+      <UserProfilePopup 
+        visible={profilePopupVisible}
+        onClose={() => setProfilePopupVisible(false)}
+        userData={selectedUser}
+      />
     </KeyboardAvoidingView>
   );
 }
@@ -1431,5 +1921,257 @@ const styles = StyleSheet.create({
     width: '100%',
     height: '100%',
     borderRadius: 0,
+  },
+  // User Profile Popup Styles
+  popupModalContainer: {
+    flex: 1,
+    justifyContent: 'flex-end',
+    alignItems: 'center',
+  },
+  popupBackdrop: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
+    bottom: 0,
+    backgroundColor: 'rgba(0, 0, 0, 0.7)',
+  },
+  profilePopupCard: {
+    backgroundColor: '#111',
+    borderTopLeftRadius: 24,
+    borderTopRightRadius: 24,
+    overflow: 'hidden',
+    maxHeight: '80%',
+    paddingBottom: Platform.OS === 'ios' ? 40 : 20, // Extra padding for iOS
+  },
+  popupHandle: {
+    width: 40,
+    height: 5,
+    borderRadius: 3,
+    backgroundColor: '#333',
+    alignSelf: 'center',
+    marginTop: 10,
+    marginBottom: 10,
+  },
+  popupHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingHorizontal: 20,
+    paddingVertical: 15,
+    borderBottomWidth: 1,
+    borderBottomColor: '#222',
+  },
+  popupTitle: {
+    color: 'white',
+    fontSize: 18,
+    fontFamily: 'Inter_600SemiBold',
+  },
+  popupCloseButton: {
+    padding: 5,
+  },
+  popupScrollView: {
+    maxHeight: '100%',
+  },
+  popupContent: {
+    paddingBottom: 20,
+  },
+  popupProfileHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    padding: 20,
+    paddingBottom: 15,
+  },
+  popupProfileImage: {
+    width: 70,
+    height: 70,
+    borderRadius: 35,
+    borderWidth: 2,
+    borderColor: '#1877F2',
+  },
+  popupProfileInfo: {
+    marginLeft: 15,
+    flex: 1,
+  },
+  popupNameContainer: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    flexWrap: 'wrap',
+  },
+  popupProfileName: {
+    color: 'white',
+    fontSize: 20,
+    fontFamily: 'Inter_700Bold',
+    marginRight: 8,
+  },
+  popupProfileUsername: {
+    color: '#888',
+    fontSize: 14,
+    fontFamily: 'Inter_400Regular',
+    marginTop: 2,
+  },
+  popupStatsSection: {
+    flexDirection: 'row',
+    paddingVertical: 15,
+    paddingHorizontal: 20,
+    borderTopWidth: 1,
+    borderBottomWidth: 1,
+    borderColor: '#222',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+  },
+  statItem: {
+    flex: 1,
+    alignItems: 'center',
+  },
+  statValue: {
+    color: 'white',
+    fontSize: 16,
+    fontFamily: 'Inter_700Bold',
+    marginTop: 5,
+  },
+  statLabel: {
+    color: '#888',
+    fontSize: 12,
+    fontFamily: 'Inter_400Regular',
+    marginTop: 2,
+  },
+  statDivider: {
+    width: 1,
+    height: 30,
+    backgroundColor: '#222',
+  },
+  popupBioSection: {
+    padding: 20,
+    paddingBottom: 15,
+  },
+  popupBioText: {
+    color: 'white',
+    fontSize: 14,
+    fontFamily: 'Inter_400Regular',
+    lineHeight: 20,
+  },
+  popupInfoItem: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: 20,
+    marginBottom: 10,
+  },
+  popupInfoText: {
+    color: '#ccc',
+    fontSize: 14,
+    fontFamily: 'Inter_400Regular',
+    marginLeft: 10,
+  },
+  popupBadgesSection: {
+    paddingHorizontal: 20,
+    paddingTop: 15,
+    paddingBottom: 10,
+  },
+  popupSectionTitle: {
+    color: 'white',
+    fontSize: 16,
+    fontFamily: 'Inter_600SemiBold',
+    marginBottom: 10,
+  },
+  popupBadgesList: {
+    paddingBottom: 5,
+    paddingRight: 20,
+  },
+  popupBadge: {
+    alignItems: 'center',
+    marginRight: 20,
+    backgroundColor: '#1E1E1E',
+    borderRadius: 12,
+    padding: 10,
+    width: 90,
+  },
+  popupBadgeIcon: {
+    fontSize: 24,
+    marginBottom: 5,
+  },
+  popupBadgeName: {
+    color: 'white',
+    fontSize: 12,
+    fontFamily: 'Inter_500Medium',
+    textAlign: 'center',
+  },
+  popupActionsContainer: {
+    flexDirection: 'row',
+    padding: 20,
+    paddingTop: 15,
+    borderTopWidth: 1,
+    borderTopColor: '#222',
+    gap: 10,
+  },
+  popupActionButton: {
+    flex: 1,
+    paddingVertical: 12,
+    borderRadius: 30,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  followButton: {
+    backgroundColor: '#0070F3',
+  },
+  unfollowButton: {
+    backgroundColor: '#222',
+    borderWidth: 1,
+    borderColor: '#0070F3',
+  },
+  followButtonText: {
+    color: 'white',
+    fontSize: 14,
+    fontFamily: 'Inter_600SemiBold',
+  },
+  unfollowButtonText: {
+    color: '#0070F3',
+    fontSize: 14,
+    fontFamily: 'Inter_600SemiBold',
+  },
+  messageButton: {
+    backgroundColor: '#222',
+    borderWidth: 1,
+    borderColor: '#0070F3',
+  },
+  messageButtonText: {
+    color: '#0070F3',
+    fontSize: 14,
+    fontFamily: 'Inter_600SemiBold',
+  },
+  viewProfileButton: {
+    backgroundColor: '#222',
+    borderWidth: 1,
+    borderColor: '#333',
+  },
+  viewProfileButtonText: {
+    color: 'white',
+    fontSize: 14,
+    fontFamily: 'Inter_600SemiBold',
+  },
+  popupLoading: {
+    padding: 30,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  popupInterestsContainer: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    paddingHorizontal: 20,
+    marginBottom: 15,
+    marginTop: -5,
+  },
+  popupInterestTag: {
+    backgroundColor: '#1E1E1E',
+    paddingVertical: 5,
+    paddingHorizontal: 10,
+    borderRadius: 20,
+    marginRight: 8,
+    marginBottom: 8,
+  },
+  popupInterestText: {
+    color: '#0070F3',
+    fontSize: 12,
+    fontFamily: 'Inter_500Medium',
   },
 }); 

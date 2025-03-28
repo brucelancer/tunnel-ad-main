@@ -1,7 +1,7 @@
 import React from 'react';
 import { View, StyleSheet, TouchableOpacity, Dimensions } from 'react-native';
 import { Tabs } from 'expo-router';
-import { Home, Gift, User, Coins, Plus } from 'lucide-react-native';
+import { Home, Gift, User, Coins, Plus, MessageSquare } from 'lucide-react-native';
 import { LinearGradient } from 'expo-linear-gradient';
 
 const { width, height } = Dimensions.get('window');
@@ -50,6 +50,13 @@ export default function TabLayout() {
           tabBarIcon: ({ color }) => <Coins color={color} size={24} />,
         }}
       />
+      <Tabs.Screen
+        name="conversations-main"
+        options={{
+          title: 'Messages',
+          tabBarIcon: ({ color }) => <MessageSquare color={color} size={24} />,
+        }}
+      />
       {/* Tunnelling tab with floating button */}
       <Tabs.Screen
         name="tunnelling"
@@ -82,7 +89,6 @@ export default function TabLayout() {
           ),
         }}
       />
-      
       
       <Tabs.Screen
         name="redeem"
