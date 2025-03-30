@@ -20,7 +20,10 @@ import {
   PanResponder,
   GestureResponderEvent,
   PanResponderGestureState,
-  TouchableOpacity
+  TouchableOpacity,
+  DeviceEventEmitter,
+  Alert,
+  Keyboard
 } from 'react-native';
 import { usePointsStore } from '@/store/usePointsStore';
 import { useRouter } from 'expo-router';
@@ -41,13 +44,16 @@ import {
   Check,
   BadgeCheck,
   X,
-  Clock
+  Clock,
+  AlertTriangle
 } from 'lucide-react-native';
 import { usePostFeed } from '@/app/hooks/usePostFeed';
 import { PinchGestureHandler, State, GestureHandlerRootView } from 'react-native-gesture-handler';
 import { urlFor, getSanityClient } from '@/tunnel-ad-main/services/postService';
 import Svg, { Path } from 'react-native-svg';
 import * as sanityAuthService from '@/tunnel-ad-main/services/sanityAuthService';
+import FloatingChatButton from './FloatingChatButton';
+import { eventEmitter } from '../app/utils/eventEmitter';
 
 const { width: SCREEN_WIDTH } = Dimensions.get('window');
 
@@ -486,9 +492,12 @@ const UserProfilePopup = ({ visible, onClose, userData }: UserProfilePopupProps)
                 <View style={styles.popupProfileInfo}>
                   <View style={styles.popupNameContainer}>
                     <Text style={styles.popupProfileName}>{displayUser.name}</Text>
-                    {displayUser.isVerified && (
-                      <View style={[styles.verifiedBadge, displayUser.isBlueVerified && styles.blueVerifiedBadge]}>
-                        <TunnelVerifiedMark size={14} />
+                    {(displayUser.isVerified || displayUser.isBlueVerified) && (
+                      <View style={[
+                        styles.popupVerifiedBadge, 
+                        displayUser.isBlueVerified && styles.popupBlueVerifiedBadge
+                      ]}>
+                        <TunnelVerifiedMark size={20} />
                       </View>
                     )}
                   </View>
@@ -611,6 +620,9 @@ const UserProfilePopup = ({ visible, onClose, userData }: UserProfilePopupProps)
               onPress={() => {
                 onClose();
                 if (displayUser) {
+                  // Emit an event to update unread count in the FloatingChatButton
+                  eventEmitter.emit('messages-seen');
+                  
                   router.push({
                     pathname: "/chat" as any,
                     params: { id: displayUser.id }
@@ -634,7 +646,116 @@ const UserProfilePopup = ({ visible, onClose, userData }: UserProfilePopupProps)
   );
 };
 
+// Add interfaces for component props
+interface PostActionsMenuProps {
+  visible: boolean;
+  onClose: () => void;
+  onReport: () => void;
+  onDelete: () => void;
+  canDelete: boolean;
+  isOwnPost: boolean; // Add this new prop
+}
+
+// Add a menu modal component for post actions
+const PostActionsMenu: React.FC<PostActionsMenuProps> = ({ visible, onClose, onReport, onDelete, canDelete, isOwnPost }) => {
+  return (
+    <Modal
+      transparent={true}
+      visible={visible}
+      animationType="fade"
+      onRequestClose={onClose}
+    >
+      <TouchableWithoutFeedback onPress={onClose}>
+        <View style={styles.menuModalOverlay}>
+          <TouchableWithoutFeedback>
+            <View style={styles.menuModalContent}>
+              {/* Only show the Report Post option if it's not the user's own post */}
+              {!isOwnPost && (
+                <Pressable 
+                  style={styles.menuItem}
+                  onPress={onReport}
+                >
+                  <Text style={styles.menuItemText}>Report Post</Text>
+                </Pressable>
+              )}
+              
+              {canDelete && (
+                <Pressable 
+                  style={[styles.menuItem, styles.deleteMenuItem]}
+                  onPress={onDelete}
+                >
+                  <Text style={styles.deleteMenuItemText}>Delete Post</Text>
+                </Pressable>
+              )}
+              
+              <Pressable 
+                style={[styles.menuItem, styles.cancelMenuItem]}
+                onPress={onClose}
+              >
+                <Text style={styles.menuItemText}>Cancel</Text>
+              </Pressable>
+            </View>
+          </TouchableWithoutFeedback>
+        </View>
+      </TouchableWithoutFeedback>
+    </Modal>
+  );
+};
+
+// Type the expected user object from useSanityAuth
+interface SanityUser {
+  _id: string;
+  username?: string;
+  firstName?: string;
+  lastName?: string;
+  email?: string;
+  points?: number;
+  profile?: {
+    avatar?: any;
+    bio?: string;
+    interests?: string[];
+  };
+  isVerified?: boolean;
+  isBlueVerified?: boolean;
+}
+
+// Before the submitReport function, add this interface:
+interface ReportDocument {
+  _type: string;
+  post: { 
+    _type: string; 
+    _ref: string;
+  };
+  reason: string;
+  status: string;
+  createdAt: string;
+  reportedBy?: { 
+    _type: string; 
+    _ref: string;
+  };
+}
+
 export default function Feed() {
+  const [posts, setPosts] = useState<typeof FEED_POSTS>([]);
+  const [refreshing, setRefreshing] = useState(false);
+  const [imageIndexes, setImageIndexes] = useState<{[key: string]: number}>({});
+  const [likedPosts, setLikedPosts] = useState<{[key: string]: boolean}>({});
+  const [savedPosts, setSavedPosts] = useState<{[key: string]: boolean}>({});
+  const [awardedPosts, setAwardedPosts] = useState<{[key: string]: number}>({});
+  const [imageViewerVisible, setImageViewerVisible] = useState(false);
+  const [selectedImages, setSelectedImages] = useState<string[]>([]);
+  const [selectedIndex, setSelectedIndex] = useState(0);
+  const [scale, setScale] = useState(new Animated.Value(1));
+  const [currentScale, setCurrentScale] = useState(1);
+  const [postInput, setPostInput] = useState('');
+  const [postImages, setPostImages] = useState<string[]>([]);
+  const [postLocation, setPostLocation] = useState('');
+  const [createPostVisible, setCreatePostVisible] = useState(false);
+  
+  // State for menu actions
+  const [menuVisible, setMenuVisible] = useState(false);
+  const [selectedPostId, setSelectedPostId] = useState<string>('');
+  
   // Use the post feed hook for Sanity data
   const { 
     posts: sanityPosts, 
@@ -651,14 +772,7 @@ export default function Feed() {
   const { addPoints } = usePointsStore();
   const router = useRouter();
   const { width: windowWidth, height: windowHeight } = useWindowDimensions();
-  const [refreshing, setRefreshing] = useState(false);
-  const [likedPosts, setLikedPosts] = useState<Record<string, boolean>>({});
-  const [savedPosts, setSavedPosts] = useState<Record<string, boolean>>({});
-  // Use Sanity posts if available, otherwise use mock data
-  const [posts, setPosts] = useState(FEED_POSTS);
-  const [newPostText, setNewPostText] = useState('');
   const scrollY = useRef(new Animated.Value(0)).current;
-  const [imageIndexes, setImageIndexes] = useState<Record<string, number>>({});
   
   // Image viewer modal state
   const [modalVisible, setModalVisible] = useState(false);
@@ -667,7 +781,6 @@ export default function Feed() {
   const [currentPostImages, setCurrentPostImages] = useState<string[]>([]);
 
   // Animation values for zooming and panning
-  const scale = useRef(new Animated.Value(1)).current;
   const translateX = useRef(new Animated.Value(0)).current;
   const translateY = useRef(new Animated.Value(0)).current;
   
@@ -950,12 +1063,12 @@ export default function Feed() {
 
   // Handle post creation - using Sanity if authenticated
   const handlePostSubmit = async () => {
-    if (!newPostText.trim()) return;
+    if (!postInput.trim()) return;
     
     if (user) {
       // Use Sanity create post functionality
-      await createPost(newPostText);
-      setNewPostText('');
+      await createPost(postInput);
+      setPostInput('');
     } else {
       // Add new post to the local feed for demo purposes
       const newPost = {
@@ -965,9 +1078,10 @@ export default function Feed() {
           name: 'You',
           username: '@me',
           avatar: 'https://randomuser.me/api/portraits/men/85.jpg',
-          isVerified: false
+          isVerified: false,
+          isBlueVerified: false
         },
-        content: newPostText,
+        content: postInput,
         images: [],
         location: '',
         timeAgo: 'Just now',
@@ -979,7 +1093,7 @@ export default function Feed() {
       };
       
       setPosts([newPost, ...posts]);
-      setNewPostText('');
+      setPostInput('');
       addPoints(5); // Award points for posting
     }
   };
@@ -1044,9 +1158,6 @@ export default function Feed() {
     }
   };
 
-  // State to track current scale value
-  const [currentScale, setCurrentScale] = useState(1);
-  
   // Add listener to scale value
   useEffect(() => {
     const scaleListener = scale.addListener(({ value }) => {
@@ -1068,11 +1179,142 @@ export default function Feed() {
     }).start();
   };
 
+  // REFRESH_FEED event setup
+  useEffect(() => {
+    const handleRefreshEvent = () => {
+      console.log('REFRESH_FEED event received');
+      if (user) {
+        console.log('Authenticated user, refreshing posts from Sanity');
+        handleSanityRefresh();
+      } else {
+        console.log('Demo mode, refreshing with mock data');
+        // For demo mode, manually trigger refresh
+        setRefreshing(true);
+        
+        // Create a temporary post to show immediate feedback
+        const tempPost = {
+          id: `new-post-${Date.now()}`,
+          user: {
+            id: 'currentUser',
+            name: 'You',
+            username: '@me',
+            avatar: 'https://randomuser.me/api/portraits/men/85.jpg',
+            isVerified: false,
+            isBlueVerified: false
+          },
+          content: "Just posted new content!",
+          images: [],
+          location: '',
+          timeAgo: 'Just now',
+          likes: 0,
+          comments: 0,
+          points: 0,
+          hasLiked: false,
+          hasSaved: false
+        };
+        
+        // Add the temporary post until real data loads
+        setPosts(current => [tempPost, ...current]);
+      }
+      
+      // Trigger visual refresh
+      handleRefresh();
+    };
+
+    console.log('Setting up REFRESH_FEED event listener');
+    DeviceEventEmitter.addListener('REFRESH_FEED', handleRefreshEvent);
+
+    return () => {
+      console.log('Removing REFRESH_FEED event listener');
+      DeviceEventEmitter.removeAllListeners('REFRESH_FEED');
+    };
+  }, [user, handleSanityRefresh, handleRefresh]);
+
+  // Handle post menu
+  const handleShowMenu = (postId: string) => {
+    setSelectedPostId(postId);
+    setMenuVisible(true);
+  };
+
+  const handleCloseMenu = () => {
+    setMenuVisible(false);
+  };
+
+  // Handle report - navigate to dedicated report page
+  const handleReport = () => {
+    setMenuVisible(false);
+    // Navigate to dedicated report page passing the post ID
+    router.push({
+      pathname: "/report" as any,
+      params: { postId: selectedPostId }
+    });
+  };
+
+  // Handle delete post
+  const handleDeletePost = async () => {
+    setMenuVisible(false);
+    
+    // Ensure we have a valid selectedPostId
+    if (!selectedPostId) {
+      console.error('No post ID selected for deletion');
+      return;
+    }
+    
+    // Confirm deletion
+    Alert.alert(
+      'Delete Post',
+      'Are you sure you want to delete this post? This action cannot be undone.',
+      [
+        { text: 'Cancel', style: 'cancel' },
+        { 
+          text: 'Delete', 
+          style: 'destructive', 
+          onPress: async () => {
+            try {
+              const selectedPost = posts.find(post => post.id === selectedPostId);
+              if (!selectedPost) return;
+              
+              if (getSanityClient && user) {
+                const client = getSanityClient();
+                
+                // Delete the post from Sanity - selectedPostId is now a string
+                await client.delete(selectedPostId);
+                
+                // Update the local state to remove the post
+                setPosts(currentPosts => 
+                  currentPosts.filter(post => post.id !== selectedPostId)
+                );
+                
+                // Refresh the feed to make sure it's updated
+                handleSanityRefresh();
+                
+                Alert.alert('Success', 'Your post has been deleted.');
+              } else {
+                // Demo mode
+                setPosts(currentPosts => 
+                  currentPosts.filter(post => post.id !== selectedPostId)
+                );
+                
+                Alert.alert('Post Deleted (Demo)', 'In the full app, this post would be removed from the database.');
+              }
+            } catch (error) {
+              console.error('Error deleting post:', error);
+              Alert.alert('Error', 'Failed to delete post. Please try again.');
+            }
+          }
+        }
+      ]
+    );
+  };
+
+  // Update rendering of post cards to include menu button
   const renderPostCard = ({ item }: { item: typeof FEED_POSTS[0] }) => {
     const isLiked = likedPosts[item.id] || item.hasLiked;
     const isSaved = savedPosts[item.id] || item.hasSaved;
-    // Determine if user is verified from Sanity data
     const isVerified = item.user.isVerified || item.user.isBlueVerified;
+    
+    // Check if this post belongs to the current user safely
+    const isOwnPost = user && user._id && user._id === item.user.id;
     
     return (
       <View style={[styles.postContainer, { width: cardWidth }]}>
@@ -1100,7 +1342,11 @@ export default function Feed() {
             </View>
           </View>
           <View style={{flexDirection: 'row', alignItems: 'center'}}>
-            <Pressable style={styles.moreButton} hitSlop={{top: 10, bottom: 10, left: 10, right: 10}}>
+            <Pressable 
+              style={styles.moreButton} 
+              hitSlop={{top: 10, bottom: 10, left: 10, right: 10}}
+              onPress={() => handleShowMenu(item.id)}
+            >
               <MoreVertical size={16} color="#888" />
             </Pressable>
           </View>
@@ -1256,10 +1502,16 @@ export default function Feed() {
             
             <Pressable 
               style={styles.actionButton}
-              onPress={() => router.push({
-                pathname: "/chat" as any,
-                params: { id: item.user.id }
-              })}
+              onPress={() => {
+                // Emit an event to update unread count in the FloatingChatButton
+                // This is preemptive as messages will be marked as seen on the chat screen
+                eventEmitter.emit('messages-seen');
+                
+                router.push({
+                  pathname: "/chat" as any,
+                  params: { id: item.user.id }
+                });
+              }}
               hitSlop={{top: 10, bottom: 10, left: 10, right: 10}}
             >
               <Send size={20} color="#888" />
@@ -1493,6 +1745,19 @@ export default function Feed() {
         onClose={() => setProfilePopupVisible(false)}
         userData={selectedUser}
       />
+      
+      {/* Post actions menu */}
+      <PostActionsMenu
+        visible={menuVisible}
+        onClose={handleCloseMenu}
+        onReport={handleReport}
+        onDelete={handleDeletePost}
+        canDelete={user && selectedPostId !== '' ? posts.find(p => p.id === selectedPostId)?.user.id === user._id : false}
+        isOwnPost={user && selectedPostId !== '' ? posts.find(p => p.id === selectedPostId)?.user.id === user._id : false}
+      />
+      
+      {/* Add FloatingChatButton */}
+      <FloatingChatButton />
     </KeyboardAvoidingView>
   );
 }
@@ -1666,16 +1931,14 @@ const styles = StyleSheet.create({
     alignItems: 'center',
   },
   verifiedBadge: {
-    width: 20,
-    height: 20,
-    borderRadius: 0, // Remove border radius for custom shape
-    backgroundColor: 'transparent', // Make background transparent since SVG has its own background
+    backgroundColor: 'transparent',
+    borderRadius: 12,
+    padding: 3,
     alignItems: 'center',
     justifyContent: 'center',
-    marginLeft: 6,
   },
   blueVerifiedBadge: {
-    backgroundColor: 'transparent', // Keep transparent for SVG shape
+    backgroundColor: 'transparent',
   },
   userHandle: {
     color: '#777',
@@ -1899,7 +2162,6 @@ const styles = StyleSheet.create({
     borderRadius: 12,
     overflow: 'hidden',
     padding: 1.5,
-    // backgroundColor: 'gray',
     marginBottom: 8,
   },
   gridRow: {
@@ -2173,5 +2435,59 @@ const styles = StyleSheet.create({
     color: '#0070F3',
     fontSize: 12,
     fontFamily: 'Inter_500Medium',
+  },
+  // Separate styles for popup verification badges
+  popupVerifiedBadge: {
+    backgroundColor: 'transparent',
+    borderRadius: 12,
+    padding: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  popupBlueVerifiedBadge: {
+    backgroundColor: 'transparent',
+  },
+  // Menu styles
+  menuModalOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(0, 0, 0, 0.7)',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  menuModalContent: {
+    width: '80%',
+    backgroundColor: '#222',
+    borderRadius: 16,
+    padding: 8,
+    elevation: 5,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.25,
+    shadowRadius: 4,
+  },
+  menuItem: {
+    paddingVertical: 16,
+    paddingHorizontal: 20,
+    borderBottomWidth: 1,
+    borderBottomColor: 'rgba(255,255,255,0.1)',
+  },
+  menuItemText: {
+    color: 'white',
+    fontSize: 16,
+    fontFamily: 'Inter_500Medium',
+    textAlign: 'center',
+  },
+  deleteMenuItem: {
+    borderBottomWidth: 1,
+    borderBottomColor: 'rgba(255,0,0,0.1)',
+  },
+  deleteMenuItemText: {
+    color: '#FF3B30',
+    fontSize: 16,
+    fontFamily: 'Inter_600SemiBold',
+    textAlign: 'center',
+  },
+  cancelMenuItem: {
+    borderBottomWidth: 0,
   },
 }); 

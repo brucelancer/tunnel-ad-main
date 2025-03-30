@@ -1,11 +1,11 @@
 import React from 'react';
-import { View, StyleSheet, SafeAreaView } from 'react-native';
-import SearchScreen from './components/SearchScreen';
+import { View, StyleSheet } from 'react-native';
+import ReportScreen from './components/ReportScreen';
 
-export default function SearchPage() {
+export default function ReportPage() {
   return (
     <View style={styles.container}>
-      <SearchScreen />
+      <ReportScreen />
     </View>
   );
 }

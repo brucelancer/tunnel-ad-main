@@ -16,6 +16,8 @@ import {
   Modal,
   TouchableOpacity,
   Alert,
+  FlatList,
+  ActivityIndicator,
 } from 'react-native';
 import { usePoints } from '../../hooks/usePoints';
 import { useReactions } from '../../hooks/useReactions';
@@ -40,6 +42,10 @@ import {
   X,
   ZoomIn,
   ZoomOut,
+  List,
+  Grid,
+  MessageCircle,
+  Bookmark,
 } from 'lucide-react-native';
 import { BlurView } from 'expo-blur';
 import { useRouter, useFocusEffect } from 'expo-router';
@@ -48,8 +54,25 @@ import AuthScreen from '../components/AuthScreen';
 import { useSanityAuth } from '../hooks/useSanityAuth';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as sanityAuthService from '../../tunnel-ad-main/services/sanityAuthService';
+import { createClient } from '@sanity/client';
+import Svg, { Path } from 'react-native-svg';
 
 const { width: SCREEN_WIDTH, height: SCREEN_HEIGHT } = Dimensions.get('window');
+
+// Tunnel verification mark component
+const TunnelVerifiedMark = ({ size = 10 }) => (
+  <Svg width={size * 1.5} height={size * 1.5} viewBox="0 0 24 24" fill="none">
+    <Path 
+      d="M12 2L14 5.1L17.5 3.5L17 7.3L21 8L18.9 11L21 14L17 14.7L17.5 18.5L14 16.9L12 20L10 16.9L6.5 18.5L7 14.7L3 14L5.1 11L3 8L7 7.3L6.5 3.5L10 5.1L12 2Z" 
+      fill="#1877F2" 
+    />
+    <Path 
+      d="M10 13.17l-2.59-2.58L6 12l4 4 8-8-1.41-1.42L10 13.17z" 
+      fill="#FFFFFF" 
+      strokeWidth="0"
+    />
+  </Svg>
+);
 
 // ======= IMPORTANT: Log whenever user data changes =======
 const logUserDataChanges = (userData: any, source: string) => {
@@ -102,6 +125,27 @@ const FAQ_ITEMS = [
   },
 ];
 
+interface PostData {
+  id: string;
+  user: {
+    id: string;
+    name: string;
+    username: string;
+    avatar: string;
+    isVerified: boolean;
+    isBlueVerified?: boolean;
+  };
+  content: string;
+  images: string[];
+  location?: string;
+  timeAgo: string;
+  likes: number;
+  comments: number;
+  points: number;
+  hasLiked: boolean;
+  hasSaved: boolean;
+}
+
 export default function ProfileScreen() {
   const { points, resetPoints } = usePoints();
   const { resetReactions } = useReactions();
@@ -116,6 +160,9 @@ export default function ProfileScreen() {
   const [showImageModal, setShowImageModal] = useState(false);
   const [imageScale, setImageScale] = useState(1);
   const lastTapTimeRef = useRef(0);
+  const [viewType, setViewType] = useState<'grid' | 'list'>('grid');
+  const [userPosts, setUserPosts] = useState<PostData[]>([]);
+  const [postsLoading, setPostsLoading] = useState(false);
   
   // Get user data from Sanity auth hook
   const { user, logout } = useSanityAuth();
@@ -274,36 +321,54 @@ export default function ProfileScreen() {
     try {
       setRefreshing(true);
       
+      // Always check AsyncStorage for the most recent user data
+      const userString = await AsyncStorage.getItem('sanity_user');
+      let storageUserData = null;
+      
+      if (userString) {
+        storageUserData = JSON.parse(userString);
+        console.log('refreshUserData: Found user data in AsyncStorage:', storageUserData);
+        logUserDataChanges(storageUserData, "refreshUserData - from AsyncStorage");
+      }
+      
       // Check if we have user data from the auth hook
       if (user) {
         console.log('refreshUserData: Found user in useSanityAuth hook:', user);
         logUserDataChanges(user, "refreshUserData - from hook");
         setIsAuthenticated(true);
-        setUserDisplay(user);
-      } else {
-        // Fall back to checking AsyncStorage directly
-        console.log('refreshUserData: No user in hook, checking AsyncStorage...');
-        const userString = await AsyncStorage.getItem('sanity_user');
         
-        if (userString) {
-          const userData = JSON.parse(userString);
-          console.log('refreshUserData: Found user data in AsyncStorage:', userData);
-          logUserDataChanges(userData, "refreshUserData - from AsyncStorage");
-          
-          // Update local authentication state first
-          setIsAuthenticated(true);
-          setUserDisplay(userData);
-          
-          // Emit event with the user data to force update across components
-          DeviceEventEmitter.emit('AUTH_STATE_CHANGED', { 
-            isAuthenticated: true,
-            userData: userData 
-          });
-        } else {
-          console.log('No user data found in AsyncStorage');
-          setIsAuthenticated(false);
-          setUserDisplay(null);
+        // Merge hook user with storage user to ensure we have all fields
+        // Storage data takes precedence as it might be more recent
+        const mergedUser = {
+          ...user,
+          ...(storageUserData || {}),
+          points: (storageUserData?.points ?? user.points) || 0,
+          phone: (storageUserData?.phone ?? user.phone) || '',
+          location: (storageUserData?.location ?? user.location) || '',
+          isBlueVerified: (storageUserData?.isBlueVerified ?? user.isBlueVerified) || false
+        };
+        
+        // Make sure to update the user display with merged data
+        setUserDisplay(mergedUser);
+        
+        // Update points display
+        if (mergedUser.points !== undefined) {
+          setDisplayPoints(mergedUser.points);
         }
+      } else if (storageUserData) {
+        // No user in hook but found in storage
+        setIsAuthenticated(true);
+        setUserDisplay(storageUserData);
+        
+        // Emit event with the user data to force update across components
+        DeviceEventEmitter.emit('AUTH_STATE_CHANGED', { 
+          isAuthenticated: true,
+          userData: storageUserData 
+        });
+      } else {
+        console.log('No user data found in AsyncStorage or hook');
+        setIsAuthenticated(false);
+        setUserDisplay(null);
       }
     } catch (error) {
       console.error('Error refreshing user data:', error);
@@ -460,6 +525,246 @@ export default function ProfileScreen() {
     lastTapTimeRef.current = now;
   };
 
+  // Fetch user posts - would be called in useEffect after user data is loaded
+  const fetchUserPosts = async () => {
+    if (!userDisplay || !userDisplay._id) return;
+    
+    try {
+      setPostsLoading(true);
+      
+      // Create a Sanity client directly using createClient
+      const client = createClient({
+        projectId: '21is7976',
+        dataset: 'production',
+        useCdn: false,
+        apiVersion: '2023-03-01'
+      });
+      
+      if (!client) {
+        console.error('Failed to create Sanity client');
+        return;
+      }
+      
+      const userPostsData = await client.fetch(`
+        *[_type == "post" && author._ref == $userId] | order(createdAt desc) {
+          _id,
+          content,
+          location,
+          createdAt,
+          likesCount,
+          commentsCount,
+          points,
+          "hasLiked": count(likes[_ref == $currentUserId]) > 0,
+          "hasSaved": count(savedBy[_ref == $currentUserId]) > 0,
+          "author": author->{
+            _id,
+            username,
+            firstName,
+            lastName,
+            "avatar": profile.avatar,
+            "isVerified": username == "admin" || username == "moderator",
+            "isBlueVerified": defined(isBlueVerified) && isBlueVerified == true
+          },
+          images
+        }
+      `, { 
+        userId: userDisplay._id,
+        currentUserId: userDisplay._id || ''
+      });
+      
+      // Format posts
+      const formattedPosts = userPostsData.map((post: any) => {
+        // Handle image URLs
+        let imageUrls: string[] = [];
+        if (post.images && post.images.length > 0) {
+          imageUrls = post.images.map((img: any) => {
+            if (typeof img === 'string') {
+              return img;
+            } else if (img.url) {
+              return img.url;
+            } else if (img.asset && img.asset._ref) {
+              // Use the sanityAuthService.urlFor function
+              return sanityAuthService.urlFor(img).url();
+            }
+            return '';
+          }).filter((url: string) => url);
+        }
+        
+        return {
+          id: post._id,
+          content: post.content || '',
+          location: post.location || '',
+          timeAgo: calculateTimeAgo(post.createdAt),
+          likes: post.likesCount || 0,
+          comments: post.commentsCount || 0,
+          points: post.points || 0,
+          hasLiked: post.hasLiked || false,
+          hasSaved: post.hasSaved || false,
+          user: {
+            id: post.author?._id || 'unknown',
+            name: post.author?.username || (post.author?.firstName ? `${post.author.firstName} ${post.author.lastName || ''}` : 'Unknown User'),
+            username: '@' + (post.author?.username || 'unknown'),
+            // Use the sanityAuthService.urlFor function
+            avatar: post.author?.avatar ? sanityAuthService.urlFor(post.author.avatar).url() : 'https://randomuser.me/api/portraits/men/32.jpg',
+            isVerified: post.author?.isVerified || false,
+            isBlueVerified: post.author?.isBlueVerified || false
+          },
+          images: imageUrls,
+        };
+      });
+      
+      setUserPosts(formattedPosts);
+    } catch (error) {
+      console.error('Error fetching user posts:', error);
+    } finally {
+      setPostsLoading(false);
+    }
+  };
+
+  // Calculate time ago helper
+  const calculateTimeAgo = (dateString: string) => {
+    if (!dateString) return 'Recently';
+    
+    const date = new Date(dateString);
+    const now = new Date();
+    const secondsAgo = Math.floor((now.getTime() - date.getTime()) / 1000);
+    
+    if (secondsAgo < 60) return 'Just now';
+    const minutesAgo = Math.floor(secondsAgo / 60);
+    if (minutesAgo < 60) return `${minutesAgo}m ago`;
+    const hoursAgo = Math.floor(minutesAgo / 60);
+    if (hoursAgo < 24) return `${hoursAgo}h ago`;
+    const daysAgo = Math.floor(hoursAgo / 24);
+    if (daysAgo < 30) return `${daysAgo}d ago`;
+    const monthsAgo = Math.floor(daysAgo / 30);
+    if (monthsAgo < 12) return `${monthsAgo}mo ago`;
+    return `${Math.floor(monthsAgo / 12)}y ago`;
+  };
+
+  // Fetch posts when user data is loaded
+  useEffect(() => {
+    if (userDisplay && userDisplay._id) {
+      fetchUserPosts();
+    }
+  }, [userDisplay]);
+
+  // Toggle view type between grid and list
+  const toggleViewType = () => {
+    setViewType(viewType === 'grid' ? 'list' : 'grid');
+  };
+
+  // Render post grid item
+  const renderGridItem = ({ item }: { item: PostData }) => {
+    return (
+      <Pressable 
+        style={styles.gridItem}
+        onPress={() => router.push({
+          pathname: "/feedpost-detail" as any,
+          params: { id: item.id }
+        })}
+      >
+        {item.images && item.images.length > 0 ? (
+          <Image 
+            source={{ uri: item.images[0] }}
+            style={styles.gridItemImage}
+          />
+        ) : (
+          <View style={styles.gridItemTextOnly}>
+            <Text 
+              style={styles.gridItemContent}
+              numberOfLines={4}
+            >
+              {item.content}
+            </Text>
+          </View>
+        )}
+        
+        {/* Multiple images indicator */}
+        {item.images && item.images.length > 1 && (
+          <View style={styles.multipleImagesIndicator}>
+            <Text style={styles.multipleImagesText}>+{item.images.length - 1}</Text>
+          </View>
+        )}
+      </Pressable>
+    );
+  };
+  
+  // Render post list item
+  const renderListItem = ({ item }: { item: PostData }) => {
+    return (
+      <View style={styles.listItem}>
+        {/* Content */}
+        <Text style={styles.listItemContent}>{item.content}</Text>
+        
+        {/* Images */}
+        {item.images && item.images.length > 0 && (
+          <View style={styles.listItemImagesContainer}>
+            {item.images.length === 1 ? (
+              <Image 
+                source={{ uri: item.images[0] }}
+                style={styles.listItemSingleImage}
+              />
+            ) : (
+              <FlatList
+                data={item.images}
+                horizontal
+                pagingEnabled
+                showsHorizontalScrollIndicator={false}
+                keyExtractor={(_, index) => `image-${index}`}
+                renderItem={({ item: imageUri }) => (
+                  <Image 
+                    source={{ uri: imageUri }}
+                    style={[styles.listItemMultipleImage, { width: SCREEN_WIDTH - 32 }]}
+                  />
+                )}
+              />
+            )}
+          </View>
+        )}
+        
+        {/* Location */}
+        {item.location && (
+          <View style={styles.listItemLocation}>
+            <MapPin size={12} color="#888" />
+            <Text style={styles.listItemLocationText}>{item.location}</Text>
+          </View>
+        )}
+        
+        {/* Actions */}
+        <View style={styles.listItemActions}>
+          <View style={styles.listItemActionGroup}>
+            <View style={styles.listItemAction}>
+              <Heart 
+                size={16} 
+                color={item.hasLiked ? '#FF3B30' : '#888'} 
+                fill={item.hasLiked ? '#FF3B30' : 'transparent'} 
+              />
+              <Text style={styles.listItemActionText}>{item.likes}</Text>
+            </View>
+            
+            <View style={styles.listItemAction}>
+              <MessageCircle size={16} color="#888" />
+              <Text style={styles.listItemActionText}>{item.comments}</Text>
+            </View>
+            
+            <View style={styles.listItemAction}>
+              <Award size={16} color="#FFD700" />
+              <Text style={styles.listItemActionText}>{item.points}</Text>
+            </View>
+          </View>
+          
+          <View style={styles.listItemAction}>
+            <Bookmark 
+              size={16} 
+              color={item.hasSaved ? '#1877F2' : '#888'} 
+              fill={item.hasSaved ? '#1877F2' : 'transparent'} 
+            />
+          </View>
+        </View>
+      </View>
+    );
+  };
+
   // If not authenticated, show the auth screen
   if (!isAuthenticated) {
     return <AuthScreen onAuthenticated={() => setIsAuthenticated(true)} />;
@@ -469,6 +774,90 @@ export default function ProfileScreen() {
   const profileData = userDisplay || {};
   const userProfile = profileData.profile || {};
   
+  // Add the UserPopup component to display user details in a popup
+  const UserPopup = ({ visible, user, onClose }: { visible: boolean, user: any, onClose: () => void }) => {
+    if (!visible) return null;
+    
+    return (
+      <Modal
+        transparent={true}
+        visible={visible}
+        onRequestClose={onClose}
+        animationType="fade"
+      >
+        <Pressable style={styles.modalOverlay} onPress={onClose}>
+          <Pressable 
+            style={styles.userPopup}
+            onPress={(e) => e.stopPropagation()}
+          >
+            <View style={styles.userPopupHeader}>
+              <View style={styles.userPopupRow}>
+                <Image 
+                  source={{ uri: user?.avatar ? getImageUrl(user.avatar) : 'https://randomuser.me/api/portraits/men/32.jpg' }}
+                  style={styles.userPopupAvatar}
+                />
+                <View style={styles.userPopupInfo}>
+                  <View style={styles.userPopupNameRow}>
+                    <Text style={styles.userPopupName}>
+                      {user?.username || 'User'}
+                    </Text>
+                    {(user?.isVerified || user?.isBlueVerified) && (
+                      <View style={styles.popupVerifiedBadge}>
+                        <TunnelVerifiedMark size={16} />
+                      </View>
+                    )}
+                  </View>
+                  <Text style={styles.userPopupUsername}>
+                    {user?.firstName && user?.lastName 
+                      ? `${user.firstName} ${user.lastName}` 
+                      : '@' + (user?.username || 'user')}
+                  </Text>
+                </View>
+              </View>
+              <Pressable style={styles.userPopupCloseButton} onPress={onClose}>
+                <X size={20} color="#888" />
+              </Pressable>
+            </View>
+            
+            <View style={styles.userPopupBody}>
+              {user?.bio && (
+                <Text style={styles.userPopupBio}>{user.bio}</Text>
+              )}
+              
+              <View style={styles.userPopupStats}>
+                <View style={styles.userPopupStat}>
+                  <Text style={styles.userPopupStatValue}>{user?.posts || '0'}</Text>
+                  <Text style={styles.userPopupStatLabel}>Posts</Text>
+                </View>
+                <View style={styles.userPopupStat}>
+                  <Text style={styles.userPopupStatValue}>{user?.followers || '0'}</Text>
+                  <Text style={styles.userPopupStatLabel}>Followers</Text>
+                </View>
+                <View style={styles.userPopupStat}>
+                  <Text style={styles.userPopupStatValue}>{user?.following || '0'}</Text>
+                  <Text style={styles.userPopupStatLabel}>Following</Text>
+                </View>
+              </View>
+              
+              <Pressable
+                style={styles.userPopupViewButton}
+                onPress={() => {
+                  onClose();
+                  router.push({
+                    pathname: "/user-profile" as any,
+                    params: { id: user._id }
+                  });
+                }}
+              >
+                <Text style={styles.userPopupViewButtonText}>View Profile</Text>
+              </Pressable>
+            </View>
+          </Pressable>
+        </Pressable>
+      </Modal>
+    );
+  };
+
   return (
     <View style={styles.container}>
       <StatusBar barStyle="light-content" />
@@ -605,14 +994,42 @@ export default function ProfileScreen() {
               </View>
             )}
           </Pressable>
-          <Text style={styles.profileName}>
-            {profileData?.firstName && profileData.lastName 
-              ? `${profileData.firstName} ${profileData.lastName}` 
-              : profileData?.username || 'User'}
-          </Text>
-          <Text style={styles.profileUsername}>
-            @{profileData?.username || 'username'}
-          </Text>
+          <View style={styles.nameAndVerificationContainer}>
+            <Text style={styles.profileName}>
+              {profileData?.username || 'User'}
+            </Text>
+            {(profileData?.isVerified || profileData?.isBlueVerified) && (
+              <View style={[
+                styles.blueVerifiedContainer,
+                { backgroundColor: profileData?.isBlueVerified ? 'rgba(24, 119, 242, 0.1)' : 'rgba(0, 0, 0, 0.1)' }
+              ]}>
+                <TunnelVerifiedMark size={18} />
+              </View>
+            )}
+          </View>
+          
+          {/* Full Name Display */}
+          {(profileData?.firstName || profileData?.lastName) && (
+            <View style={styles.fullNameContainer}>
+              <Text style={styles.fullNameText}>
+                {`${profileData?.firstName || ''} ${profileData?.lastName || ''}`.trim()}
+              </Text>
+            </View>
+          )}
+          
+          {profileData?.location && (
+            <View style={styles.locationContainer}>
+              <MapPin size={14} color="#888" />
+              <Text style={styles.locationText}>{profileData.location}</Text>
+            </View>
+          )}
+          
+          {profileData?.phone && (
+            <View style={styles.phoneContainer}>
+              <Phone size={14} color="#888" />
+              <Text style={styles.phoneText}>{profileData.phone}</Text>
+            </View>
+          )}
           
           <View style={styles.pointsContainer}>
             <Text style={styles.pointsLabel}>Your Points</Text>
@@ -651,66 +1068,84 @@ export default function ProfileScreen() {
           </View>
         )}
         
-        {/* Personal Information Section */}
+        {/* User Content Section */}
         <View style={styles.section}>
-          <Text style={styles.sectionTitle}>Personal Information</Text>
-          <View style={styles.contactContainer}>
-            {profileData?.firstName && (
-              <View style={styles.contactItem}>
-                <User color="#0070F3" size={20} />
-                <View style={styles.contactTextContainer}>
-                  <Text style={styles.contactLabel}>First Name</Text>
-                  <Text style={styles.contactValue}>{profileData.firstName}</Text>
-                </View>
-              </View>
-            )}
-            {profileData?.lastName && (
-              <View style={styles.contactItem}>
-                <User color="#0070F3" size={20} />
-                <View style={styles.contactTextContainer}>
-                  <Text style={styles.contactLabel}>Last Name</Text>
-                  <Text style={styles.contactValue}>{profileData.lastName}</Text>
-                </View>
-              </View>
-            )}
-            {profileData?.username && (
-              <View style={styles.contactItem}>
-                <User color="#0070F3" size={20} />
-                <View style={styles.contactTextContainer}>
-                  <Text style={styles.contactLabel}>Username</Text>
-                  <Text style={styles.contactValue}>@{profileData.username}</Text>
-                </View>
-              </View>
-            )}
+          <View style={styles.contentHeader}>
+            <Text style={styles.sectionTitle}>Your Content</Text>
+            <Pressable 
+              style={styles.viewToggleButton}
+              onPress={toggleViewType}
+            >
+              {viewType === 'grid' ? (
+                <List size={20} color="#0070F3" />
+              ) : (
+                <Grid size={20} color="#0070F3" />
+              )}
+            </Pressable>
           </View>
+          
+          {postsLoading ? (
+            <View style={styles.loadingContentContainer}>
+              <ActivityIndicator size="small" color="#0070F3" />
+              <Text style={styles.loadingContentText}>Loading your content...</Text>
+            </View>
+          ) : userPosts.length === 0 ? (
+            <View style={styles.emptyContentContainer}>
+              <Award size={40} color="#333" />
+              <Text style={styles.emptyContentTitle}>No Posts Yet</Text>
+              <Text style={styles.emptyContentText}>
+                You haven't shared any posts yet. Your posts will appear here.
+              </Text>
+              <Pressable
+                style={styles.createPostButton}
+                onPress={() => router.push('/newsfeed-upload' as any)}
+              >
+                <Text style={styles.createPostButtonText}>Create Post</Text>
+              </Pressable>
+            </View>
+          ) : (
+            viewType === 'grid' ? (
+              <FlatList
+                key="grid"
+                data={userPosts}
+                numColumns={3}
+                renderItem={renderGridItem}
+                keyExtractor={item => item.id}
+                scrollEnabled={false}
+                contentContainerStyle={styles.gridContainer}
+              />
+            ) : (
+              <FlatList
+                key="list"
+                data={userPosts}
+                numColumns={1}
+                renderItem={renderListItem}
+                keyExtractor={item => item.id}
+                scrollEnabled={false}
+                contentContainerStyle={styles.listContainer}
+              />
+            )
+          )}
         </View>
 
-        {/* Contact Info Section */}
+        {/* Privacy Settings Section */}
         <View style={styles.section}>
-          <Text style={styles.sectionTitle}>Contact Information</Text>
-          <View style={styles.contactContainer}>
-            <View key="email" style={styles.contactItem}>
-              <Mail color="#0070F3" size={20} />
-              <View style={styles.contactTextContainer}>
-                <Text style={styles.contactLabel}>Email</Text>
-                <Text style={styles.contactValue}>{profileData?.email || 'No email provided'}</Text>
+          <Text style={styles.sectionTitle}>Privacy Settings</Text>
+          <Pressable 
+            style={styles.privacyCard}
+            onPress={() => router.push('/privacy-settings' as any)}
+          >
+            <View style={styles.privacyHeader}>
+              <View style={styles.privacyIconContainer}>
+                <Shield color="#0070F3" size={20} />
               </View>
+              <Text style={styles.privacyTitle}>Manage Privacy Preferences</Text>
+              <ChevronRight color="#888" size={18} />
             </View>
-            <View key="phone" style={styles.contactItem}>
-              <Phone color="#0070F3" size={20} />
-              <View style={styles.contactTextContainer}>
-                <Text style={styles.contactLabel}>Phone</Text>
-                <Text style={styles.contactValue}>{profileData?.phone || 'No phone provided'}</Text>
-              </View>
-            </View>
-            <View key="location" style={styles.contactItem}>
-              <MapPin color="#0070F3" size={20} />
-              <View style={styles.contactTextContainer}>
-                <Text style={styles.contactLabel}>Location</Text>
-                <Text style={styles.contactValue}>{profileData?.location || 'No location provided'}</Text>
-              </View>
-            </View>
-          </View>
+            <Text style={styles.privacyDescription}>
+              Control what information is visible to others and how your data is used
+            </Text>
+          </Pressable>
         </View>
 
         {/* Stats Section */}
@@ -974,17 +1409,54 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     opacity: 0,
   },
+  nameAndVerificationContainer: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginBottom: 10,
+  },
   profileName: {
     color: 'white',
-    fontSize: 24,
+    fontSize: 28,
     fontFamily: 'Inter_700Bold',
-    marginBottom: 10,
+  },
+  verificationContainer: {
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+  blueVerifiedContainer: {
+    marginLeft: 8,
+  },
+  verifiedContainer: {
+    marginLeft: 8,
   },
   profileUsername: {
     color: 'white',
     fontSize: 16,
     fontFamily: 'Inter_500Medium',
     opacity: 0.8,
+  },
+  locationContainer: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginTop: 5,
+    marginBottom: 10,
+  },
+  locationText: {
+    color: '#888',
+    fontSize: 12,
+    fontFamily: 'Inter_400Regular',
+    marginLeft: 5,
+  },
+  phoneContainer: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginBottom: 10,
+  },
+  phoneText: {
+    color: '#888',
+    fontSize: 12,
+    fontFamily: 'Inter_400Regular',
+    marginLeft: 5,
   },
   pointsContainer: {
     flexDirection: 'row',
@@ -1229,7 +1701,7 @@ const styles = StyleSheet.create({
     flex: 1,
     justifyContent: 'center',
     alignItems: 'center',
-    backgroundColor: 'rgba(0, 0, 0, 0.8)',
+    backgroundColor: 'rgba(0, 0, 0, 0.5)',
   },
   modalCloseArea: {
     width: '100%',
@@ -1296,5 +1768,308 @@ const styles = StyleSheet.create({
     borderRadius: 12,
     gap: 10,
     marginTop: 10,
+  },
+  contentHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 15,
+  },
+  viewToggleButton: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    backgroundColor: 'rgba(0, 112, 243, 0.1)',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  loadingContentContainer: {
+    padding: 40,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  loadingContentText: {
+    color: '#888',
+    fontSize: 14,
+    fontFamily: 'Inter_400Regular',
+    marginTop: 10,
+  },
+  emptyContentContainer: {
+    padding: 40,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#111',
+    borderRadius: 15,
+  },
+  emptyContentTitle: {
+    color: 'white',
+    fontSize: 18,
+    fontFamily: 'Inter_600SemiBold',
+    marginTop: 15,
+    marginBottom: 8,
+  },
+  emptyContentText: {
+    color: '#888',
+    fontSize: 14,
+    fontFamily: 'Inter_400Regular',
+    textAlign: 'center',
+    marginBottom: 20,
+  },
+  createPostButton: {
+    backgroundColor: '#0070F3',
+    paddingVertical: 12,
+    paddingHorizontal: 20,
+    borderRadius: 20,
+  },
+  createPostButtonText: {
+    color: 'white',
+    fontSize: 16,
+    fontFamily: 'Inter_600SemiBold',
+  },
+  gridContainer: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    marginHorizontal: -5,
+  },
+  gridItem: {
+    width: (SCREEN_WIDTH - 50) / 3,
+    height: (SCREEN_WIDTH - 50) / 3,
+    margin: 5,
+    borderRadius: 10,
+    overflow: 'hidden',
+    backgroundColor: '#111',
+  },
+  gridItemImage: {
+    width: '100%',
+    height: '100%',
+    resizeMode: 'cover',
+  },
+  gridItemTextOnly: {
+    width: '100%',
+    height: '100%',
+    justifyContent: 'center',
+    alignItems: 'center',
+    padding: 10,
+    backgroundColor: 'rgba(0, 112, 243, 0.1)',
+  },
+  gridItemContent: {
+    color: 'white',
+    fontSize: 12,
+    fontFamily: 'Inter_400Regular',
+    textAlign: 'center',
+  },
+  multipleImagesIndicator: {
+    position: 'absolute',
+    top: 5,
+    right: 5,
+    backgroundColor: 'rgba(0, 0, 0, 0.6)',
+    borderRadius: 10,
+    width: 24,
+    height: 24,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  multipleImagesText: {
+    color: 'white',
+    fontSize: 10,
+    fontFamily: 'Inter_600SemiBold',
+  },
+  listContainer: {
+    marginTop: 10,
+  },
+  listItem: {
+    backgroundColor: '#111',
+    borderRadius: 15,
+    padding: 15,
+    marginBottom: 15,
+  },
+  listItemContent: {
+    color: 'white',
+    fontSize: 14,
+    fontFamily: 'Inter_400Regular',
+    lineHeight: 20,
+    marginBottom: 10,
+  },
+  listItemImagesContainer: {
+    borderRadius: 10,
+    overflow: 'hidden',
+    marginBottom: 10,
+  },
+  listItemSingleImage: {
+    width: '100%',
+    height: 200,
+    resizeMode: 'cover',
+  },
+  listItemMultipleImage: {
+    height: 200,
+    resizeMode: 'cover',
+  },
+  listItemLocation: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginBottom: 10,
+  },
+  listItemLocationText: {
+    color: '#888',
+    fontSize: 12,
+    fontFamily: 'Inter_400Regular',
+    marginLeft: 5,
+  },
+  listItemActions: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    paddingTop: 10,
+    borderTopWidth: 1,
+    borderTopColor: 'rgba(255, 255, 255, 0.1)',
+  },
+  listItemActionGroup: {
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+  listItemAction: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginRight: 15,
+  },
+  listItemActionText: {
+    color: '#888',
+    fontSize: 12,
+    fontFamily: 'Inter_400Regular',
+    marginLeft: 5,
+  },
+  privacyCard: {
+    backgroundColor: '#111',
+    borderRadius: 15,
+    padding: 15,
+    marginBottom: 15,
+  },
+  privacyHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+  },
+  privacyIconContainer: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    backgroundColor: 'rgba(0, 112, 243, 0.1)',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  privacyTitle: {
+    color: 'white',
+    fontSize: 16,
+    fontFamily: 'Inter_600SemiBold',
+  },
+  privacyDescription: {
+    color: '#888',
+    fontSize: 12,
+    fontFamily: 'Inter_400Regular',
+    marginTop: 5,
+  },
+  fullNameContainer: {
+    marginTop: 5,
+    marginBottom: 10,
+  },
+  fullNameText: {
+    color: 'white',
+    fontSize: 16,
+    fontFamily: 'Inter_400Regular',
+  },
+  userPopup: {
+    backgroundColor: 'white',
+    borderRadius: 15,
+    padding: 20,
+    width: SCREEN_WIDTH * 0.9,
+    maxHeight: SCREEN_HEIGHT * 0.7,
+  },
+  userPopupHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginBottom: 15,
+  },
+  userPopupRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    flex: 1,
+  },
+  userPopupAvatar: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    marginRight: 10,
+  },
+  userPopupInfo: {
+    flexDirection: 'column',
+  },
+  userPopupNameRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+  userPopupName: {
+    color: 'black',
+    fontSize: 16,
+    fontFamily: 'Inter_600SemiBold',
+  },
+  popupVerifiedBadge: {
+    marginLeft: 5,
+    backgroundColor: 'rgba(24, 119, 242, 0.1)',
+    borderRadius: 10,
+    padding: 2,
+  },
+  userPopupUsername: {
+    color: 'black',
+    fontSize: 14,
+    fontFamily: 'Inter_400Regular',
+  },
+  userPopupBody: {
+    marginBottom: 15,
+  },
+  userPopupBio: {
+    color: 'black',
+    fontSize: 14,
+    fontFamily: 'Inter_400Regular',
+    marginBottom: 10,
+  },
+  userPopupStats: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    marginVertical: 15,
+  },
+  userPopupStat: {
+    alignItems: 'center',
+  },
+  userPopupStatValue: {
+    color: 'black',
+    fontSize: 16,
+    fontFamily: 'Inter_700Bold',
+  },
+  userPopupStatLabel: {
+    color: 'black',
+    fontSize: 12,
+    fontFamily: 'Inter_400Regular',
+  },
+  userPopupViewButton: {
+    backgroundColor: '#0070F3',
+    paddingVertical: 12,
+    paddingHorizontal: 20,
+    borderRadius: 20,
+    alignItems: 'center',
+    marginTop: 10,
+  },
+  userPopupViewButtonText: {
+    color: 'white',
+    fontSize: 16,
+    fontFamily: 'Inter_600SemiBold',
+  },
+  userPopupCloseButton: {
+    backgroundColor: 'rgba(0, 0, 0, 0.1)',
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    justifyContent: 'center',
+    alignItems: 'center',
   },
 });

@@ -108,6 +108,12 @@ export default {
           initialValue: 'Enter your email address and we\'ll send you instructions to reset your password'
         },
         {
+          name: 'buttonText',
+          title: 'Button Text',
+          type: 'string',
+          initialValue: 'Send Reset Link'
+        },
+        {
           name: 'successTitle',
           title: 'Success Title',
           type: 'string',
@@ -118,6 +124,12 @@ export default {
           title: 'Success Message',
           type: 'string',
           initialValue: 'We\'ve sent password reset instructions to your email address. Please check your inbox.'
+        },
+        {
+          name: 'resendText',
+          title: 'Resend Text',
+          type: 'string',
+          initialValue: 'Didn\'t receive the email? Send again'
         }
       ]
     },

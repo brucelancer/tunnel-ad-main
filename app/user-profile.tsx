@@ -117,7 +117,7 @@ interface PostData {
 }
 
 // Add new component for typing animation to the top of the file
-const TypingAnimatedText = ({ text, style, delay = 50 }) => {
+const TypingAnimatedText = ({ text, style, delay = 50 }: { text: string, style: any, delay?: number }) => {
   const [displayedText, setDisplayedText] = useState('');
   const [currentIndex, setCurrentIndex] = useState(0);
   
@@ -548,11 +548,6 @@ export default function UserProfileScreen() {
           <View style={styles.listItemUserInfo}>
             <View style={styles.listItemUserNameRow}>
               <Text style={styles.listItemUserName}>{item.user.name}</Text>
-              {item.user.isVerified && (
-                <View style={styles.listItemVerifiedBadge}>
-                  <TunnelVerifiedMark size={10} />
-                </View>
-              )}
             </View>
             <View style={styles.listItemSubheaderRow}>
               <Text style={styles.listItemUsername}>{item.user.username}</Text>
@@ -680,12 +675,21 @@ export default function UserProfileScreen() {
                 />
                 <View style={styles.headerTextContainer}>
                   <View style={styles.headerNameContainer}>
-                    <Text style={[styles.headerName, windowWidth > 768 && styles.tabletHeaderText]}>{userData.name}</Text>
-                    {userData.isVerified && (
-                      <View style={[styles.verifiedBadge, userData.isBlueVerified && styles.blueVerifiedBadge]}>
-                        <TunnelVerifiedMark size={windowWidth > 768 ? 14 : 12} />
-                      </View>
-                    )}
+                    <Text style={[styles.headerName, windowWidth > 768 && styles.tabletHeaderText]}>
+                      {userData?.name || 'User'}
+                    </Text>
+                    <View style={styles.verificationBadges}>
+                      {userData?.isBlueVerified && (
+                        <View style={styles.blueVerifiedBadge}>
+                          <TunnelVerifiedMark size={windowWidth > 768 ? 14 : 12} />
+                        </View>
+                      )}
+                      {userData?.isVerified && !userData?.isBlueVerified && (
+                        <View style={styles.verifiedBadge}>
+                          <TunnelVerifiedMark size={windowWidth > 768 ? 14 : 12} />
+                        </View>
+                      )}
+                    </View>
                   </View>
                   <Text style={[styles.headerUsername, windowWidth > 768 && { fontSize: 14 }]}>{userData.username}</Text>
                 </View>
@@ -767,27 +771,26 @@ export default function UserProfileScreen() {
                     }
                   ]}
                 />
-                {userData?.isVerified && (
-                  <View style={[
-                    styles.avatarBadge,
-                    userData.isBlueVerified && styles.blueBadge,
-                    {
-                      width: windowWidth > 768 ? 30 : 24,
-                      height: windowWidth > 768 ? 30 : 24,
-                      borderRadius: windowWidth > 768 ? 15 : 12,
-                      bottom: 0,
-                      right: 0,
-                    }
-                  ]}>
-                    <TunnelVerifiedMark size={windowWidth > 768 ? 20 : 16} />
-                  </View>
-                )}
               </View>
               
               <View style={[styles.userInfoContainer, windowWidth > 768 && { paddingHorizontal: 16 }]}>
                 {/* Restore name, username and bio sections */}
                 <View style={styles.nameContainer}>
                   <Text style={[styles.userName, { fontSize: nameTextSize }]}>{userData?.name}</Text>
+                  {(userData?.isVerified || userData?.isBlueVerified) && (
+                    <View style={[
+                      styles.nameBadgeContainer,
+                      { 
+                        backgroundColor: 'transparent',
+                        marginLeft: windowWidth > 768 ? 12 : 8,
+                        padding: 2,
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                      }
+                    ]}>
+                      <TunnelVerifiedMark size={windowWidth > 768 ? 24 : 20} />
+                    </View>
+                  )}
                 </View>
                 <Text style={[styles.userUsername, windowWidth > 768 && { fontSize: 18 }]}>{userData?.username}</Text>
                 
@@ -818,6 +821,13 @@ export default function UserProfileScreen() {
                     <View style={styles.userMetaItem}>
                       <MapPin size={windowWidth > 768 ? 16 : 14} color="#888" />
                       <Text style={[styles.userMetaText, windowWidth > 768 && { fontSize: 15 }]}>{userData.location}</Text>
+                    </View>
+                  )}
+                  
+                  {userData?.phone && (
+                    <View style={styles.userMetaItem}>
+                      <Phone size={windowWidth > 768 ? 16 : 14} color="#888" />
+                      <Text style={[styles.userMetaText, windowWidth > 768 && { fontSize: 15 }]}>{userData.phone}</Text>
                     </View>
                   )}
                   
@@ -1288,6 +1298,7 @@ const styles = StyleSheet.create({
   headerNameContainer: {
     flexDirection: 'row',
     alignItems: 'center',
+    marginBottom: 4,
   },
   headerName: {
     color: 'white',
@@ -1341,26 +1352,13 @@ const styles = StyleSheet.create({
     borderWidth: 3,
     borderColor: '#1877F2',
   },
-  avatarBadge: {
-    position: 'absolute',
-    bottom: 0,
-    right: 0,
-    width: 24,
-    height: 24,
-    borderRadius: 12,
-    backgroundColor: 'green',
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  blueBadge: {
-    backgroundColor: '#1877F2',
-  },
   userInfoContainer: {
     marginBottom: 20,
   },
   nameContainer: {
     flexDirection: 'row',
     alignItems: 'center',
+    marginBottom: 4,
   },
   userName: {
     color: 'white',
@@ -1581,9 +1579,6 @@ const styles = StyleSheet.create({
     color: 'white',
     fontSize: 15,
     fontFamily: 'Inter_600SemiBold',
-  },
-  listItemVerifiedBadge: {
-    marginLeft: 6,
   },
   listItemSubheaderRow: {
     flexDirection: 'row',
@@ -1984,10 +1979,18 @@ const styles = StyleSheet.create({
   },
   blueVerifiedBadge: {
     backgroundColor: 'transparent',
+    color: '#1877F2',
+    fontSize: 16,
+    fontFamily: 'Inter_700Bold',
   },
-  // sectionSeparator: {
-  //   height: 16,
-  //   backgroundColor: 'transparent',
-  //   marginVertical: 10,
-  // },
+  verificationBadges: {
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+  nameBadgeContainer: {
+    backgroundColor: 'transparent',
+    padding: 2,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
 }); 

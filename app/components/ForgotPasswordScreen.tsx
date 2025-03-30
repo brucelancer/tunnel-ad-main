@@ -91,9 +91,19 @@ export default function ForgotPasswordScreen({ onBack }: ForgotPasswordScreenPro
       await forgotPassword(email);
       setIsEmailSent(true);
     } catch (err: any) {
-      // For security reasons, we don't want to reveal if an email exists or not
-      // So we show success message even if there's an error (but we log it)
       console.error('Error requesting password reset:', err);
+      
+      // For security reasons, still show success even on error to prevent email enumeration
+      // But set actual error for debugging purposes
+      if (err.message === 'User not found') {
+        console.log('User not found for password reset');
+      } else {
+        // For other errors, show the actual error
+        setError(err.message || 'An error occurred. Please try again.');
+        return;
+      }
+      
+      // Still show success screen to prevent email enumeration
       setIsEmailSent(true);
     }
   };

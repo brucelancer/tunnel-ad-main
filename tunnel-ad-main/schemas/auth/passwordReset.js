@@ -40,20 +40,22 @@ export default {
     },
     {
       name: 'user',
-      title: 'User Reference',
+      title: 'User',
       type: 'reference',
-      to: [{ type: 'user' }]
+      to: [{ type: 'user' }],
+      validation: Rule => Rule.required()
     }
   ],
   preview: {
     select: {
-      title: 'email',
-      subtitle: 'isUsed'
+      email: 'email',
+      created: 'createdAt',
+      used: 'isUsed'
     },
-    prepare({ title, subtitle }) {
+    prepare({ email, created, used }) {
       return {
-        title,
-        subtitle: subtitle ? 'Used' : 'Active'
+        title: email,
+        subtitle: `Created: ${new Date(created).toLocaleString()} | Used: ${used ? 'Yes' : 'No'}`,
       }
     }
   },

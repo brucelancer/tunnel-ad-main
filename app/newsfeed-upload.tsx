@@ -14,7 +14,8 @@ import {
   useWindowDimensions,
   ActivityIndicator,
   Alert,
-  BackHandler
+  BackHandler,
+  DeviceEventEmitter
 } from 'react-native';
 import { useRouter, useFocusEffect } from 'expo-router';
 import { usePreventRemove } from '@react-navigation/native';
@@ -271,15 +272,47 @@ export default function NewsfeedUpload() {
         // Create the post with location data and layout preference in metadata
         await createPost(enhancedContent, location, attachments);
         
+        // Clear form after successful upload immediately
+        setPostText('');
+        setAttachments([]);
+        setLocation('');
+        setLayoutMode('slide'); // Reset layout mode to default
+        
+        // Show success indicator and emit refresh event
+        DeviceEventEmitter.emit('REFRESH_FEED');
+        
+        // Show success message
         Alert.alert('Success', 'Your post has been shared!', [
-          { text: 'OK', onPress: () => router.back() }
+          { 
+            text: 'View Post', 
+            onPress: () => {
+              // Navigate to home tab - this should show the feed due to our event listener
+              router.replace("/(tabs)/" as any);
+            }
+          }
         ]);
       } else {
         // Fallback to mock upload for demo
         setTimeout(() => {
           setLoading(false);
+          
+          // Clear form after successful upload immediately
+          setPostText('');
+          setAttachments([]);
+          setLocation('');
+          setLayoutMode('slide'); // Reset layout mode to default
+          
+          // Emit event to refresh feed
+          DeviceEventEmitter.emit('REFRESH_FEED');
+          
           Alert.alert('Success', 'Your post has been shared (demo mode)!', [
-            { text: 'OK', onPress: () => router.back() }
+            { 
+              text: 'View Post', 
+              onPress: () => {
+                // Navigate to home tab
+                router.replace("/(tabs)/" as any);
+              }
+            }
           ]);
         }, 1500);
       }

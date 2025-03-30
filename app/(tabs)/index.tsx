@@ -8,7 +8,7 @@ import { useRouter } from 'expo-router';
 import ScreenContainer from '../components/ScreenContainer';
 
 export default function HomeScreen() {
-  const [activeTab, setActiveTab] = useState<'videos' | 'feed'>('videos');
+  const [activeTab, setActiveTab] = useState<'videos' | 'feed'>('feed');
   const { points } = usePoints();
   const pointsScale = useRef(new Animated.Value(1)).current;
   const [displayPoints, setDisplayPoints] = useState(points);
@@ -60,6 +60,19 @@ export default function HomeScreen() {
       subscription.remove();
     };
   }, [points]);
+
+  // Switch to feed tab when a post is created
+  useEffect(() => {
+    const subscription = DeviceEventEmitter.addListener('REFRESH_FEED', () => {
+      // Always switch to feed tab when a post is created
+      setActiveTab('feed');
+      console.log('Switched to feed tab after post creation');
+    });
+
+    return () => {
+      subscription.remove();
+    };
+  }, []); // Remove activeTab dependency to avoid conditional switching
 
   const handleSearchPress = () => {
     router.push('/search' as any);

@@ -19,6 +19,21 @@ import {
 import { LinearGradient } from 'expo-linear-gradient';
 import { Mail, Lock, Eye, EyeOff, User, ArrowRight } from 'lucide-react-native';
 import { useSanityAuth } from '../hooks/useSanityAuth';
+import * as sanityAuthService from '@/tunnel-ad-main/services/sanityAuthService';
+
+// Declare any global interfaces needed
+declare global {
+  interface Window {
+    sanityAuth?: {
+      signup?: (userData: any) => Promise<any>;
+      googleLogin?: (googleData: any) => Promise<any>;
+    };
+    sanityAuthService?: {
+      registerUser?: (userData: any) => Promise<any>;
+      googleAuth?: (googleData: any) => Promise<any>;
+    };
+  }
+}
 
 const { width: SCREEN_WIDTH, height: SCREEN_HEIGHT } = Dimensions.get('window');
 
@@ -37,8 +52,8 @@ export default function SignupScreen({ onAuthenticated, onSwitchToLogin }: Signu
   const [showConfirmPassword, setShowConfirmPassword] = useState(false);
   const [error, setError] = useState('');
   
-  // Get auth functions and settings from our Sanity hook
-  const { signup, googleLogin, loading, authSettings } = useSanityAuth();
+  // Get auth functions from our Sanity hook
+  const { user, loading, login } = useSanityAuth();
 
   // Animation values
   const fadeAnim = useRef(new Animated.Value(0)).current;
@@ -53,15 +68,16 @@ export default function SignupScreen({ onAuthenticated, onSwitchToLogin }: Signu
     }).start();
   }, []);
 
-  // Get Sanity settings for signup screen
-  const branding = authSettings?.branding || {
+  // Default branding settings
+  const branding = {
     appName: 'tunnel',
     tagline: 'Connect, Share, Earn',
     primaryColor: '#0070F3',
     secondaryColor: '#00DFD8',
   };
   
-  const signupScreenSettings = authSettings?.signupScreen || {
+  // Default signup screen settings
+  const signupScreenSettings = {
     headerTitle: 'tunnel',
     title: 'Create Account',
     subtitle: 'Sign up to start your journey',
@@ -69,7 +85,8 @@ export default function SignupScreen({ onAuthenticated, onSwitchToLogin }: Signu
     footerText: 'By continuing, you agree to our Terms of Service and Privacy Policy'
   };
 
-  const passwordRequirements = authSettings?.passwordRequirements || {
+  // Default password requirements
+  const passwordRequirements = {
     minLength: 8,
     requireSpecialChar: true,
     requireNumber: true,
@@ -119,44 +136,74 @@ export default function SignupScreen({ onAuthenticated, onSwitchToLogin }: Signu
     try {
       console.log('Submitting signup:', { email, username, password: '***' });
       
-      // Call Sanity signup function with complete user data
-      const user = await signup({
-        email,
-        username,
-        password
-      });
+      // Try to use the sanityAuthService directly
+      let newUser;
+      try {
+        // Try to use the registerUser function directly from the imported service
+        newUser = await sanityAuthService.registerUser({
+          email,
+          username,
+          password
+        });
+      } catch (err) {
+        console.error('Error using sanityAuthService.registerUser:', err);
+        setError('Unable to register user. Please try again later or contact support.');
+        return;
+      }
       
-      console.log('Signup successful, new user:', user?._id);
+      console.log('Signup successful, new user:', newUser?._id);
+      
+      if (!newUser) {
+        setError('Registration completed but user data was not returned. Please try logging in.');
+        return;
+      }
       
       // Emit auth state change event with user data
       DeviceEventEmitter.emit('AUTH_STATE_CHANGED', { 
         isAuthenticated: true,
-        userData: user
+        userData: newUser
       });
+      
+      // Try to log in with the newly created credentials
+      try {
+        await login(email, password);
+      } catch (loginErr) {
+        console.error('Auto-login after signup failed:', loginErr);
+        // Continue with authentication even if auto-login fails
+      }
       
       onAuthenticated();
     } catch (err: any) {
       console.error('Signup error:', err);
-      setError(err.message || 'Registration failed');
+      setError(err.message || 'Registration failed. Please check your information and try again.');
     }
   };
 
   const handleGoogleSignUp = async () => {
     try {
-      // Mock Google auth data - in a real app, this would come from Google Auth
-      const googleUserData = {
-        email: 'google.user@example.com',
-        displayName: 'Google User',
-        photoURL: null,
-        // Additional data that might help create a better user profile
-        firstName: 'Google',
-        lastName: 'User',
-        uid: 'google-mock-uid-123456',
-      };
-      
-      console.log('Attempting Google signup with data:', googleUserData);
-      
-      const user = await googleLogin(googleUserData);
+      // Try to use the sanityAuthService directly
+      let user;
+      try {
+        // Mock Google auth data - in a real app, this would come from Google Auth
+        const googleUserData = {
+          email: 'google.user@example.com',
+          displayName: 'Google User',
+          photoURL: null,
+          // Additional data that might help create a better user profile
+          firstName: 'Google',
+          lastName: 'User',
+          uid: 'google-mock-uid-123456',
+        };
+        
+        console.log('Attempting Google signup with data:', googleUserData);
+        
+        // Use the googleAuth function directly from the imported service
+        user = await sanityAuthService.googleAuth(googleUserData);
+      } catch (err) {
+        console.error('Error using sanityAuthService.googleAuth:', err);
+        setError('Google sign-in is not available at the moment. Please try another method or contact support.');
+        return;
+      }
       
       console.log('Google signup successful, user data:', user);
       

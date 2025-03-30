@@ -131,6 +131,13 @@ export default {
       type: 'boolean',
       description: 'Special blue verification badge for select users',
       initialValue: false,
+    },
+    {
+      name: 'isVerified',
+      title: 'Verified Account',
+      type: 'boolean',
+      description: 'Standard verification for user accounts',
+      initialValue: false,
     }
   ],
   preview: {

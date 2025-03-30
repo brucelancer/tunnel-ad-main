@@ -46,8 +46,10 @@ export const uploadImageToSanity = async (imageUri) => {
     console.log('Image uploaded successfully, asset ID:', asset._id);
     
     // Return the asset reference that Sanity expects
+    // Include a _key property to prevent "Missing keys" error in Sanity Studio
     return {
       _type: 'image',
+      _key: `image_${Date.now()}_${Math.floor(Math.random() * 1000)}`, // Add a unique key
       asset: {
         _type: 'reference',
         _ref: asset._id
@@ -123,6 +125,7 @@ export const createPost = async (postData, userId) => {
       for (let i = 0; i < images.length; i++) {
         console.log(`Uploading image ${i+1}/${images.length}...`)
         const imageAsset = await uploadImageToSanity(images[i])
+        // Ensure each image has a unique _key (added in uploadImageToSanity)
         imageAssets.push(imageAsset)
         console.log(`Image ${i+1} uploaded successfully`)
       }
@@ -139,7 +142,7 @@ export const createPost = async (postData, userId) => {
         _type: 'reference',
         _ref: userId
       },
-      images: imageAssets,
+      images: imageAssets, // These now have _key property
       createdAt: new Date().toISOString(),
       likesCount: 0,
       commentsCount: 0,

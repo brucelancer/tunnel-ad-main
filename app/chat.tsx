@@ -34,6 +34,7 @@ import {
 import { useSanityAuth } from './hooks/useSanityAuth';
 import { getSanityClient, urlFor } from '@/tunnel-ad-main/services/postService';
 import Svg, { Path } from 'react-native-svg';
+import { eventEmitter } from './utils/eventEmitter';
 
 // Tunnel verification mark component
 const TunnelVerifiedMark = ({ size = 10 }) => (
@@ -56,16 +57,18 @@ interface Message {
   _createdAt: string;
   text: string;
   sender: {
-    _ref: string;
+    _ref?: string;
     _id: string;
     username?: string;
     name?: string;
     avatar?: string;
     isVerified?: boolean;
+    firstName?: string;
+    lastName?: string;
   };
   recipient: {
     _ref: string;
-    _id: string;
+    _id?: string;
   };
   attachments?: Array<{
     _key: string;
@@ -73,6 +76,7 @@ interface Message {
     type: 'image' | 'video' | 'audio' | 'file';
   }>;
   seen: boolean;
+  isTemp?: boolean;
 }
 
 // User type
@@ -115,7 +119,7 @@ export default function ChatScreen() {
       const query = `*[_type == "message" && 
         ((sender._ref == $currentUserId && recipient._ref == $recipientId) || 
         (sender._ref == $recipientId && recipient._ref == $currentUserId))
-      ] | order(_createdAt desc)`;
+      ] | order(_createdAt desc)[0]`;
       
       const params = { 
         currentUserId: currentUser._id,
@@ -124,8 +128,73 @@ export default function ChatScreen() {
       
       const subscription = client.listen(query, params).subscribe(update => {
         if (update.type === 'mutation' && update.result) {
-          // Refresh messages
-          fetchMessages();
+          const newMessage = update.result;
+          
+          // Check if this is a new message (create mutation)
+          if (update.transition === 'appear') {
+            console.log('New message received in real-time');
+
+            // Fetch the full message details
+            client.fetch(`
+              *[_type == "message" && _id == $messageId][0] {
+                _id,
+                _createdAt,
+                text,
+                "sender": sender->{
+                  _id,
+                  username,
+                  firstName,
+                  lastName,
+                  "avatar": profile.avatar,
+                  "isVerified": username == "admin" || username == "moderator"
+                },
+                recipient,
+                attachments,
+                seen
+              }
+            `, { messageId: newMessage._id })
+              .then(fullMessage => {
+                if (fullMessage) {
+                  setMessages(prevMessages => {
+                    // Check if message already exists to avoid duplicates
+                    const exists = prevMessages.some(m => m._id === fullMessage._id);
+                    if (!exists) {
+                      // Add the new message and sort by creation date
+                      return [...prevMessages, fullMessage].sort((a, b) => 
+                        new Date(a._createdAt).getTime() - new Date(b._createdAt).getTime()
+                      );
+                    }
+                    return prevMessages;
+                  });
+                  
+                  // If the message is from the other user, mark it as seen
+                  if (fullMessage.sender._id === id) {
+                    markMessagesAsSeen();
+                  }
+                  
+                  // Scroll to bottom on new message
+                  setTimeout(() => {
+                    flatListRef.current?.scrollToEnd({ animated: true });
+                  }, 100);
+                }
+              })
+              .catch(error => {
+                console.error('Error fetching full message:', error);
+              });
+          } 
+          // If a message was updated (e.g. marked as seen)
+          else if (update.transition === 'update') {
+            console.log('Message updated in real-time');
+            
+            // Update the message in our state
+            setMessages(prevMessages => 
+              prevMessages.map(msg => 
+                msg._id === newMessage._id 
+                  ? { ...msg, seen: newMessage.seen } 
+                  : msg
+              )
+            );
+          }
         }
       });
       
@@ -251,6 +320,22 @@ export default function ChatScreen() {
         
         await transaction.commit();
         console.log(`Marked ${unseenMessages.length} messages as seen`);
+        
+        // Update local state to reflect seen status
+        setMessages(prevMessages => 
+          prevMessages.map(msg => 
+            unseenMessages.includes(msg._id) 
+              ? { ...msg, seen: true } 
+              : msg
+          )
+        );
+        
+        // Emit an event to notify other components that messages have been seen
+        eventEmitter.emit('messages-seen');
+      } else {
+        // Even if there are no unseen messages, still emit the event to ensure badges get updated
+        // This is crucial for synchronizing UI state between components
+        eventEmitter.emit('messages-seen');
       }
     } catch (error) {
       console.error('Error marking messages as seen:', error);
@@ -267,10 +352,21 @@ export default function ChatScreen() {
       const client = getSanityClient();
       if (!client) return;
       
+      // Get the current message text and clear the input immediately
+      const currentText = messageText.trim();
+      setMessageText('');
+      
+      // Create a truly unique ID for temp message using timestamp + random string
+      const tempId = `temp-${Date.now()}-${Math.random().toString(36).substring(2, 10)}`;
+      
+      // Get current timestamp for consistent usage
+      const now = new Date();
+      const timestamp = now.toISOString();
+      
       // Create the message document
       const newMessage = {
         _type: 'message',
-        text: messageText.trim(),
+        text: currentText,
         sender: {
           _type: 'reference',
           _ref: currentUser._id
@@ -280,23 +376,84 @@ export default function ChatScreen() {
           _ref: id
         },
         seen: false,
-        _createdAt: new Date().toISOString()
+        _createdAt: timestamp
       };
+      
+      // Create a temporary message for immediate display
+      const tempMessage = {
+        _id: tempId,
+        _createdAt: timestamp,
+        text: currentText,
+        sender: {
+          _id: currentUser._id,
+          username: currentUser.username,
+          firstName: currentUser.firstName,
+          lastName: currentUser.lastName,
+          avatar: currentUser.profile?.avatar
+        },
+        recipient: {
+          _ref: id
+        },
+        seen: false,
+        isTemp: true // Flag to identify temporary messages
+      };
+      
+      // Add temp message to state for immediate feedback
+      setMessages(prevMessages => [...prevMessages, tempMessage].sort((a, b) => 
+        new Date(a._createdAt).getTime() - new Date(b._createdAt).getTime()
+      ));
+      
+      // Scroll to bottom
+      setTimeout(() => {
+        flatListRef.current?.scrollToEnd({ animated: true });
+      }, 100);
       
       // Add to Sanity
       const result = await client.create(newMessage);
       
       if (result && result._id) {
         console.log('Message sent successfully:', result._id);
-        setMessageText('');
         
-        // Scroll to bottom
-        setTimeout(() => {
-          flatListRef.current?.scrollToEnd({ animated: true });
-        }, 100);
+        // Replace the temp message with the confirmed one
+        setMessages(prevMessages => 
+          prevMessages.map(msg => 
+            msg._id === tempId ? 
+            {
+              ...tempMessage,
+              _id: result._id,
+              isTemp: false
+            } : msg
+          )
+        );
+        
+        // Force a manual update to the conversation list by creating a synthetic
+        // conversation update that will trigger the correct conversation to appear at the top
+        // This helps with the immediate update of the conversation list
+        const conversationUpdate = {
+          type: 'mutation',
+          result: {
+            _id: result._id,
+            _type: 'message',
+            text: currentText,
+            sender: { _id: currentUser._id },
+            recipient: { _id: id },
+            _createdAt: timestamp,
+            seen: false
+          },
+          documentId: result._id
+        };
+        
+        // Use our custom eventEmitter instead of chatEventEmitter
+        eventEmitter.emit('message-sent', conversationUpdate);
       }
     } catch (error) {
       console.error('Error sending message:', error);
+      
+      // Remove temp message on error
+      setMessages(prevMessages => 
+        prevMessages.filter(msg => !msg.isTemp)
+      );
+      
       alert('Failed to send message. Please try again.');
     } finally {
       setSending(false);
@@ -373,6 +530,7 @@ export default function ChatScreen() {
   const renderMessage = ({ item: message }: { item: Message }) => {
     const isFromMe = message.sender._id === currentUser?._id;
     const showAvatar = !isFromMe;
+    const isTemp = message.isTemp === true;
     
     return (
       <View style={[
@@ -396,26 +554,37 @@ export default function ChatScreen() {
         
         <View style={[
           styles.messageBubble,
-          isFromMe ? styles.myMessageBubble : styles.theirMessageBubble
+          isFromMe ? styles.myMessageBubble : styles.theirMessageBubble,
+          isTemp && styles.tempMessageBubble
         ]}>
           <Text style={[
             styles.messageText,
-            isFromMe ? styles.myMessageText : styles.theirMessageText
+            isFromMe ? styles.myMessageText : styles.theirMessageText,
+            isTemp && styles.tempMessageText
           ]}>
             {message.text}
           </Text>
           
-          <Text style={[
-            styles.messageTime,
-            isFromMe ? styles.myMessageTime : styles.theirMessageTime
-          ]}>
-            {getFormattedTime(message._createdAt)}
+          <View style={styles.messageFooter}>
+            <Text style={[
+              styles.messageTime,
+              isFromMe ? styles.myMessageTime : styles.theirMessageTime
+            ]}>
+              {getFormattedTime(message._createdAt)}
+            </Text>
+            
             {isFromMe && (
-              <Text style={styles.messageSeenStatus}>
-                {' '}{message.seen ? '• Seen' : ''}
-              </Text>
+              <View style={styles.messageStatusContainer}>
+                {isTemp ? (
+                  <ActivityIndicator size={10} color="rgba(255,255,255,0.5)" />
+                ) : (
+                  <Text style={styles.messageSeenStatus}>
+                    {message.seen ? '• Seen' : '• Delivered'}
+                  </Text>
+                )}
+              </View>
             )}
-          </Text>
+          </View>
         </View>
       </View>
     );
@@ -442,15 +611,25 @@ export default function ChatScreen() {
       <FlatList
         ref={flatListRef}
         data={groups}
-        keyExtractor={(item) => item.date}
-        renderItem={({ item: group }) => (
-          <View>
+        keyExtractor={(item) => `date_group_${item.date}`}
+        renderItem={({ item: group, index: groupIndex }) => (
+          <View key={`group_${groupIndex}_${group.date}`}>
             {renderDateHeader(group.date)}
             <FlatList
               data={group.messages}
-              keyExtractor={(item) => item._id}
+              keyExtractor={(item, index) => {
+                // Ensure each message has a truly unique key
+                if (item.isTemp) {
+                  // For temporary messages, use the temporary ID which includes timestamp
+                  return `temp_${item._id}_${index}`;
+                }
+                // For real messages, combine ID with index and timestamp for guaranteed uniqueness
+                return `msg_${item._id}_${groupIndex}_${index}_${new Date(item._createdAt).getTime()}`;
+              }}
               renderItem={renderMessage}
               scrollEnabled={false}
+              extraData={currentUser?._id} // Re-render if current user changes
+              removeClippedSubviews={false}
             />
           </View>
         )}
@@ -863,5 +1042,22 @@ const styles = StyleSheet.create({
   },
   sendButtonDisabled: {
     backgroundColor: 'rgba(24,119,242,0.5)',
+  },
+  tempMessageBubble: {
+    backgroundColor: 'rgba(24,119,242,0.3)',
+  },
+  tempMessageText: {
+    color: 'rgba(255,255,255,0.7)',
+  },
+  messageFooter: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'flex-end',
+    marginTop: 2,
+  },
+  messageStatusContainer: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginLeft: 4,
   },
 }); 

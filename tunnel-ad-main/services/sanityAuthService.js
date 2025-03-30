@@ -129,6 +129,7 @@ export const registerUser = async (userData) => {
       phone: createdUser.phone,
       location: createdUser.location,
       points: createdUser.points,
+      isBlueVerified: createdUser.isBlueVerified || false,
       profile: createdUser.profile
     };
   } catch (error) {
@@ -143,7 +144,20 @@ export const loginUser = async (email, password) => {
     console.log('Attempting login with:', email);
     
     // Find user with matching email
-    const user = await client.fetch(`*[_type == "user" && email == $email][0]`, {
+    const user = await client.fetch(`*[_type == "user" && email == $email][0]{
+      _id,
+      email,
+      username,
+      firstName,
+      lastName,
+      phone,
+      location,
+      points,
+      isBlueVerified,
+      password,
+      profile,
+      createdAt
+    }`, {
       email
     });
 
@@ -169,7 +183,8 @@ export const loginUser = async (email, password) => {
     console.log('Login successful');
     
     // Successful login - return user data without sensitive info
-    return {
+    // Explicitly include isBlueVerified property with default false
+    const userData = {
       _id: user._id,
       email: user.email,
       username: user.username,
@@ -178,9 +193,14 @@ export const loginUser = async (email, password) => {
       phone: user.phone || '',
       location: user.location || '',
       points: user.points || 0,
+      isBlueVerified: user.isBlueVerified || false,
       profile: user.profile || {},
       createdAt: user.createdAt
     };
+    
+    console.log('User data with isBlueVerified:', userData.isBlueVerified);
+    
+    return userData;
   } catch (error) {
     console.error('Login error:', error);
     throw error;
@@ -277,6 +297,7 @@ export const googleAuth = async (googleUserData) => {
       phone,
       location,
       points,
+      isBlueVerified,
       profile,
       createdAt,
       updatedAt,
@@ -327,6 +348,7 @@ export const googleAuth = async (googleUserData) => {
         phone,
         location,
         points,
+        isBlueVerified,
         profile,
         createdAt,
         updatedAt,
@@ -374,6 +396,7 @@ export const googleAuth = async (googleUserData) => {
       phone: user.phone || '',
       location: user.location || '',
       points: user.points || 0,
+      isBlueVerified: user.isBlueVerified || false,
       profile: {
         bio: user.profile?.bio || '',
         interests: user.profile?.interests || [],
