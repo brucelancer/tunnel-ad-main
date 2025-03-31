@@ -17,10 +17,26 @@ import {
   ScrollView,
   ActivityIndicator,
   Platform,
+  StatusBar,
+  SafeAreaView,
 } from 'react-native';
 import { Video, ResizeMode, Audio } from 'expo-av';
 import { useRouter, useFocusEffect } from 'expo-router';
-import { Play, Share2, CheckCircle, ThumbsUp, ThumbsDown, Lock, PlayCircle, RefreshCw, Crown } from 'lucide-react-native';
+import { 
+  Play, 
+  Share2, 
+  CheckCircle, 
+  ThumbsUp, 
+  ThumbsDown, 
+  Lock, 
+  PlayCircle, 
+  RefreshCw, 
+  Crown, 
+  Maximize, 
+  Minimize,
+  Search,
+  Coins
+} from 'lucide-react-native';
 import { usePoints } from '../hooks/usePoints';
 import { useReactions } from '../hooks/useReactions';
 import AsyncStorage from '@react-native-async-storage/async-storage';
@@ -30,10 +46,15 @@ import { LinearGradient } from 'expo-linear-gradient';
 
 const { width: SCREEN_WIDTH, height: SCREEN_HEIGHT } = Dimensions.get('window');
 
-// Adjusted heights based on navigation structure
-const HEADER_HEIGHT = 140; // Combined header + tabs height
+// Use full screen height
+const HEADER_HEIGHT = (isFullScreen: boolean): number => isFullScreen ? 0 : 50;
 const BOTTOM_NAV_HEIGHT = 0;
-const AVAILABLE_HEIGHT = SCREEN_HEIGHT - HEADER_HEIGHT - BOTTOM_NAV_HEIGHT;
+const AVAILABLE_HEIGHT = SCREEN_HEIGHT;
+// Get status bar height for proper safe area handling
+const STATUS_BAR_HEIGHT = Platform.OS === 'ios' ? 44 : StatusBar.currentHeight || 0;
+
+// Header tab options
+const HEADER_TABS = ['Videos', 'Feed', 'Points', 'Search'];
 
 type VideoType = 'vertical' | 'horizontal';
 
@@ -63,6 +84,8 @@ interface VideoItemProps {
   autoScrollPulse: Animated.Value;
   showPremiumAd: boolean;
   isTabFocused: boolean;
+  isFullScreen?: boolean;
+  toggleFullScreen?: () => void;
 }
 
 interface VideoRefs {
@@ -87,7 +110,9 @@ const VideoItemComponent = React.memo(({
   toggleAutoScroll,
   autoScrollPulse,
   showPremiumAd,
-  isTabFocused
+  isTabFocused,
+  isFullScreen = false,
+  toggleFullScreen
 }: VideoItemProps): JSX.Element => {
   const router = useRouter();
   const { addPoints, hasWatchedVideo } = usePoints();
@@ -366,35 +391,20 @@ const VideoItemComponent = React.memo(({
     });
   };
 
-  // Increase the vertical offset for better screen space utilization
-  const verticalVideoOffset = -SCREEN_HEIGHT * 0.085;
-  
   // Modify the calculateVideoDimensions function to use this constant
   const calculateVideoDimensions = () => {
     const isVertical = item.type === 'vertical';
     const aspectRatio = item.aspectRatio || (isVertical ? 9/16 : 16/9);
     
     if (isVertical) {
-      const maxHeight = AVAILABLE_HEIGHT;
-      const maxWidth = SCREEN_WIDTH;
-      const heightBasedOnWidth = maxWidth / aspectRatio;
-      const widthBasedOnHeight = maxHeight * aspectRatio;
-      
-      if (heightBasedOnWidth <= maxHeight) {
-        return {
-          width: maxWidth,
-          height: heightBasedOnWidth,
-          resizeMode: ResizeMode.COVER,
-          marginTop: verticalVideoOffset
-        };
-      } else {
-        return {
-          width: widthBasedOnHeight,
-          height: maxHeight,
-          resizeMode: ResizeMode.COVER,
-          marginTop: verticalVideoOffset
-        };
-      }
+      // For vertical videos, use COVER to fill the entire screen
+      // This is how TikTok and YouTube Shorts display videos
+      return {
+        width: SCREEN_WIDTH,
+        height: SCREEN_HEIGHT,
+        resizeMode: ResizeMode.COVER,
+        marginTop: 0
+      };
     } else {
       // Horizontal video
       const maxWidth = SCREEN_WIDTH;
@@ -403,7 +413,7 @@ const VideoItemComponent = React.memo(({
         width: maxWidth,
         height: Math.min(height, AVAILABLE_HEIGHT),
         resizeMode: ResizeMode.CONTAIN,
-        marginTop: 0 // No need for marginTop as we use transform in the render method
+        marginTop: 0
       };
     }
   };
@@ -469,6 +479,31 @@ const VideoItemComponent = React.memo(({
 
   // Add special styles for horizontal video info content positioning
   const getContentPositionStyles = () => {
+    // Set different margin values based on fullscreen mode
+    const bottomMargin = isFullScreen ? SCREEN_HEIGHT * 0.04 : SCREEN_HEIGHT * 0.14;
+    
+    // Add extra style adjustments for fullscreen mode
+    const fullscreenAdjustments = isFullScreen ? {
+      // For author info, add better visibility and position
+      videoInfoStyle: {
+        bottom: Platform.OS === 'ios' ? 20 : 10,
+        marginBottom: bottomMargin,
+      },
+      // For action buttons, adjust positioning
+      actionButtonsStyle: {
+        bottom: Platform.OS === 'ios' ? 20 : 10,
+        marginBottom: bottomMargin,
+        gap: SCREEN_HEIGHT * 0.035
+      }
+    } : {
+      videoInfoStyle: {
+        marginBottom: bottomMargin,
+      },
+      actionButtonsStyle: {
+        marginBottom: bottomMargin
+      }
+    };
+    
     if (item.type === 'horizontal') {
       return {
         videoInfoStyle: {
@@ -476,33 +511,34 @@ const VideoItemComponent = React.memo(({
           bottom: 0,
           left: SCREEN_WIDTH * 0.05,
           width: SCREEN_WIDTH * 0.65,
-          marginBottom: SCREEN_HEIGHT * 0.14,
           zIndex: 10,
+          ...fullscreenAdjustments.videoInfoStyle,
         },
         actionButtonsStyle: {
           position: 'absolute' as const,
           bottom: 0,
           right: SCREEN_WIDTH * 0.05,
-          marginBottom: SCREEN_HEIGHT * 0.14,
           zIndex: 10,
+          ...fullscreenAdjustments.actionButtonsStyle,
         }
       };
     }
+    
     return {
       videoInfoStyle: {
         position: 'absolute' as const,
         bottom: 0,
         left: SCREEN_WIDTH * 0.05,
         width: SCREEN_WIDTH * 0.65,
-        marginBottom: SCREEN_HEIGHT * 0.14,
         zIndex: 10,
+        ...fullscreenAdjustments.videoInfoStyle,
       },
       actionButtonsStyle: {
         position: 'absolute' as const,
         bottom: 0,
         right: SCREEN_WIDTH * 0.05,
-        marginBottom: SCREEN_HEIGHT * 0.14,
         zIndex: 10,
+        ...fullscreenAdjustments.actionButtonsStyle,
       }
     };
   };
@@ -514,28 +550,12 @@ const VideoItemComponent = React.memo(({
       styles.videoContainer,
       item.type === 'vertical' ? styles.verticalContainer : styles.horizontalContainer
     ]}>
-      {item.type === 'horizontal' ? (
-        <View style={styles.horizontalVideoWrapper}>
-          <Video
-            ref={videoRef}
-            source={{ uri: item.url }}
-            style={[styles.video, { width, height }]}
-            resizeMode={resizeMode}
-            isLooping={true}
-            onPlaybackStatusUpdate={handlePlaybackStatusUpdate}
-            onLoad={onLoad}
-            useNativeControls={false}
-            shouldPlay={isCurrentVideo && isTabActive && !isLocked && !showPremiumAd && isTabFocused}
-            isMuted={!isCurrentVideo || !isTabActive || isLocked || !isTabFocused}
-            volume={1.0}
-            progressUpdateIntervalMillis={500}
-          />
-        </View>
-      ) : (
+      {/* Video component */}
+      <View style={item.type === 'vertical' ? styles.verticalVideoWrapper : styles.horizontalVideoWrapper}>
         <Video
           ref={videoRef}
           source={{ uri: item.url }}
-          style={[styles.video, { width, height, marginTop }]}
+          style={[styles.video, { width, height }]}
           resizeMode={resizeMode}
           isLooping={true}
           onPlaybackStatusUpdate={handlePlaybackStatusUpdate}
@@ -546,14 +566,29 @@ const VideoItemComponent = React.memo(({
           volume={1.0}
           progressUpdateIntervalMillis={500}
         />
-      )}
-      <View style={[
+      </View>
+      
+      {/* UI Overlay with SafeAreaView for better positioning */}
+      <SafeAreaView style={[
         styles.overlay,
-        item.type === 'vertical' ? [styles.verticalOverlay, { marginTop: verticalVideoOffset }] : styles.horizontalOverlay
+        item.type === 'vertical' ? styles.verticalOverlay : styles.horizontalOverlay
       ]}>
         <View style={[styles.videoInfo, videoInfoStyle]}>
+          {/* Author info */}
           <View style={styles.authorContainer}>
-            <Text style={styles.author} numberOfLines={1} ellipsizeMode="tail">
+            <Text 
+              style={[
+                styles.author,
+                // Enhance text visibility in fullscreen mode
+                isFullScreen && {
+                  fontSize: SCREEN_WIDTH * 0.05,
+                  textShadowColor: 'rgba(0,0,0,0.7)',
+                  textShadowRadius: 5
+                }
+              ]} 
+              numberOfLines={1} 
+              ellipsizeMode="tail"
+            >
               {item.author}
             </Text>
             {remainingTime && !hasEarnedPoints && (
@@ -566,14 +601,42 @@ const VideoItemComponent = React.memo(({
               </View>
             )}
           </View>
-          <Text style={styles.description} numberOfLines={2} ellipsizeMode="tail">
+          
+          {/* Video description with enhanced visibility in fullscreen */}
+          <Text 
+            style={[
+              styles.description,
+              isFullScreen && {
+                fontSize: SCREEN_WIDTH * 0.04,
+                textShadowColor: 'rgba(0,0,0,0.7)',
+                textShadowRadius: 5
+              }
+            ]}
+            numberOfLines={isFullScreen ? 3 : 2} 
+            ellipsizeMode="tail"
+          >
             {item.description}
           </Text>
-          <Pressable style={styles.watchFullButton} onPress={handleWatchFull}>
-            <Text style={styles.watchFullButtonText}>Watch Full</Text>
-          </Pressable>
+          <View style={styles.buttonRow}>
+            <Pressable style={styles.watchFullButton} onPress={handleWatchFull}>
+              <Text style={styles.watchFullButtonText}>Watch Full</Text>
+            </Pressable>
+            <Pressable style={styles.fullScreenButton} onPress={toggleFullScreen}>
+              {isFullScreen ? 
+                <Minimize color="white" size={SCREEN_WIDTH * 0.05} /> : 
+                <Maximize color="white" size={SCREEN_WIDTH * 0.05} />
+              }
+            </Pressable>
+          </View>
         </View>
-        <View style={[styles.actionButtons, actionButtonsStyle]}>
+        <View style={[
+          styles.actionButtons, 
+          actionButtonsStyle,
+          isFullScreen && {
+            bottom: Platform.OS === 'ios' ? 20 : 10,
+            gap: SCREEN_HEIGHT * 0.035
+          }
+        ]}>
           <View style={styles.likeContainer}>
             <Pressable onPress={handleLike} style={styles.actionButton}>
               <ThumbsUp 
@@ -597,25 +660,25 @@ const VideoItemComponent = React.memo(({
             </Pressable>
             
             {/* Auto-scroll button placed in the like container to be static */}
-              <Pressable 
-                style={[
+            <Pressable 
+              style={[
                 styles.autoScrollButton,
                 autoScroll && styles.autoScrollButtonActive
-                ]} 
-                onPress={toggleAutoScroll}
-              >
-                <PlayCircle 
+              ]} 
+              onPress={toggleAutoScroll}
+            >
+              <PlayCircle 
                 color={autoScroll ? '#1877F2' : 'white'} 
                 fill={autoScroll ? 'rgba(24, 119, 242, 0.3)' : 'transparent'}
                 size={SCREEN_WIDTH * 0.06} 
-                />
-                <Text style={[
+              />
+              <Text style={[
                 styles.actionCount, 
                 autoScroll ? styles.activeCount : null
-                ]}>
+              ]}>
                 Auto
-                </Text>
-              </Pressable>
+              </Text>
+            </Pressable>
           </View>
           
           <Pressable onPress={onShare} style={styles.shareButton}>
@@ -663,20 +726,51 @@ const VideoItemComponent = React.memo(({
             </Pressable>
           </View>
         )}
-      </View>
+      </SafeAreaView>
       
       {/* Lock overlay when premium alert is shown */}
       {isLocked && isCurrentVideo && (
-        <View style={[
-          styles.lockOverlay,
-          item.type === 'vertical' && { marginTop: verticalVideoOffset }
-        ]}>
+        <View style={styles.lockOverlay}>
           <Lock color="white" size={SCREEN_WIDTH * 0.1} />
         </View>
       )}
     </View>
   );
 });
+
+// Add interface for TopHeader props
+interface TopHeaderProps {
+  activeTab: number;
+  onTabPress: (tab: string, index: number) => void;
+  isFullScreen: boolean;
+}
+
+// Add a new TopHeader component for navigation
+const TopHeader: React.FC<TopHeaderProps> = ({ activeTab, onTabPress, isFullScreen }) => {
+  if (isFullScreen) return null;
+  
+  return (
+    <SafeAreaView style={styles.headerContainer}>
+      <View style={styles.headerContent}>
+        {HEADER_TABS.map((tab, index) => (
+          <Pressable
+            key={tab}
+            style={styles.headerTab}
+            onPress={() => onTabPress(tab, index)}
+          >
+            <Text style={[
+              styles.headerTabText,
+              activeTab === index && styles.headerTabTextActive
+            ]}>
+              {tab}
+            </Text>
+            {activeTab === index && <View style={styles.headerTabIndicator} />}
+          </Pressable>
+        ))}
+      </View>
+    </SafeAreaView>
+  );
+};
 
 export default function VideoFeed() {
   const [currentVideoIndex, setCurrentVideoIndex] = useState(0);
@@ -692,7 +786,10 @@ export default function VideoFeed() {
   const [showPremiumAd, setShowPremiumAd] = useState(false);
   const [watchedVideosCount, setWatchedVideosCount] = useState(0);
   const [isTabFocused, setIsTabFocused] = useState(true);
+  const [isFullScreen, setIsFullScreen] = useState(false);
+  const [activeHeaderTab, setActiveHeaderTab] = useState(0);
   const { user } = useSanityAuth();
+  const router = useRouter();
   
   // Animation values
   const premiumModalScale = useRef(new Animated.Value(0.3)).current;
@@ -715,6 +812,24 @@ export default function VideoFeed() {
   });
   const autoScrollPulse = useRef(new Animated.Value(1)).current;
   const autoScrollTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+  
+  // Set status bar configuration for immersive experience - moved outside of conditional renders
+  useEffect(() => {
+    // Make status bar transparent for immersive experience
+    StatusBar.setBarStyle('light-content');
+    if (Platform.OS === 'android') {
+      StatusBar.setTranslucent(true);
+      StatusBar.setBackgroundColor('transparent');
+    }
+    
+    return () => {
+      // Reset on unmount if needed
+      if (Platform.OS === 'android') {
+        StatusBar.setTranslucent(false);
+        StatusBar.setBackgroundColor('#000');
+      }
+    };
+  }, []);
   
   // Handle Video refs
   const handleVideoRef = (id: string, ref: any) => {
@@ -900,6 +1015,13 @@ export default function VideoFeed() {
       .catch(err => console.error('Error saving auto-scroll preference:', err));
   }, [isAutoScrollEnabled]);
   
+  // Toggle full screen mode
+  const toggleFullScreen = useCallback(() => {
+    setIsFullScreen(prev => !prev);
+    // Notify parent components about full screen mode change
+    DeviceEventEmitter.emit('TOGGLE_FULL_SCREEN', { isFullScreen: !isFullScreen });
+  }, [isFullScreen]);
+  
   // Load videos from Sanity
   const loadVideos = useCallback(async (refresh = false) => {
     try {
@@ -1039,6 +1161,29 @@ export default function VideoFeed() {
     }, [currentVideoIndex, videos])
   );
   
+  // Handle header tab navigation
+  const handleTabPress = (tab: string, index: number) => {
+    setActiveHeaderTab(index);
+    
+    // Navigate to the appropriate screen based on the tab
+    if (tab === 'Videos') {
+      // Already on videos screen
+      return;
+    }
+    
+    // Create pathname object for router navigation
+    const routeMap: Record<string, string> = {
+      'Feed': '/(tabs)/feed',  // Updated to use tab structure for Feed
+      'Points': '/(tabs)/points-about',
+      'Search': '/search'
+    };
+    
+    const path = routeMap[tab];
+    if (path) {
+      router.push(path as any);
+    }
+  };
+  
   // Render video item
   const renderVideo = ({ item, index }: { item: VideoItem; index: number }) => (
     <VideoItemComponent
@@ -1052,6 +1197,8 @@ export default function VideoFeed() {
       autoScrollPulse={autoScrollPulse}
       showPremiumAd={showPremiumAd}
       isTabFocused={isTabFocused}
+      isFullScreen={isFullScreen}
+      toggleFullScreen={toggleFullScreen}
     />
   );
   
@@ -1067,6 +1214,13 @@ export default function VideoFeed() {
   
   return (
     <View style={styles.container}>
+      {/* Header with navigation tabs */}
+      <TopHeader 
+        activeTab={activeHeaderTab} 
+        onTabPress={handleTabPress} 
+        isFullScreen={isFullScreen}
+      />
+      
       <FlatList
         ref={flatListRef}
         data={videos}
@@ -1257,54 +1411,91 @@ const styles = StyleSheet.create({
     flex: 1,
     backgroundColor: '#000',
   },
-  videoContainer: {
-    width: SCREEN_WIDTH,
-    height: AVAILABLE_HEIGHT,
-    backgroundColor: '#000',
-    justifyContent: 'center',
-    alignItems: 'center',
-    position: 'relative',
-  },
-  verticalContainer: {
-    height: AVAILABLE_HEIGHT,
-    width: SCREEN_WIDTH,
-    justifyContent: 'flex-start',
-    alignItems: 'center',
-    backgroundColor: '#000',
-    position: 'relative',
-    paddingTop: 0,
-  },
-  horizontalContainer: {
-    height: AVAILABLE_HEIGHT,
-    width: SCREEN_WIDTH,
-    justifyContent: 'center',
-    alignItems: 'center',
-    backgroundColor: '#000',
-    paddingVertical: 10,
-    position: 'relative',
-    overflow: 'hidden',
-  },
-  horizontalVideoWrapper: {
+  // Add header styles
+  headerContainer: {
+    backgroundColor: 'transparent',
     position: 'absolute',
-    top: 270,
+    top: 0,
     left: 0,
     right: 0,
-    alignItems: 'center',
+    zIndex: 100,
+    paddingTop: Platform.OS === 'ios' ? STATUS_BAR_HEIGHT : 0,
+  },
+  headerContent: {
+    flexDirection: 'row',
     justifyContent: 'center',
-    zIndex: 1,
+    alignItems: 'center',
+    paddingVertical: 10,
+  },
+  headerTab: {
+    paddingHorizontal: 15,
+    alignItems: 'center',
+    position: 'relative',
+  },
+  headerTabText: {
+    color: 'rgba(255, 255, 255, 0.6)',
+    fontSize: 16,
+    fontWeight: '500',
+  },
+  headerTabTextActive: {
+    color: '#fff',
+    fontWeight: '700',
+  },
+  headerTabIndicator: {
+    position: 'absolute',
+    bottom: -10,
+    width: 6,
+    height: 6,
+    borderRadius: 3,
+    backgroundColor: '#fff',
+  },
+  videoContainer: {
+    width: SCREEN_WIDTH,
+    height: SCREEN_HEIGHT,
+    backgroundColor: '#000',
+  },
+  verticalContainer: {
+    width: SCREEN_WIDTH,
+    height: SCREEN_HEIGHT,
+    backgroundColor: '#000',
+  },
+  horizontalContainer: {
+    width: SCREEN_WIDTH,
+    height: SCREEN_HEIGHT,
+    justifyContent: 'center',
+    backgroundColor: '#000',
   },
   video: {
-    position: 'absolute',
+    backgroundColor: '#000',
+  },
+  horizontalVideoWrapper: {
+    width: SCREEN_WIDTH,
+    height: SCREEN_HEIGHT,
+    justifyContent: 'center',
+    backgroundColor: '#000',
+  },
+  verticalVideoWrapper: {
+    width: SCREEN_WIDTH,
+    height: SCREEN_HEIGHT,
+    backgroundColor: '#000',
   },
   overlay: {
     ...StyleSheet.absoluteFillObject,
     justifyContent: 'flex-end',
-    paddingBottom: SCREEN_HEIGHT * 0.02,
-    zIndex: 5,
+    backgroundColor: 'transparent',
+  },
+  verticalOverlay: {
+    width: SCREEN_WIDTH,
+    height: SCREEN_HEIGHT,
+    paddingBottom: Platform.OS === 'ios' ? 34 : 20, // Safe area bottom padding
+  },
+  horizontalOverlay: {
+    width: SCREEN_WIDTH,
+    height: SCREEN_HEIGHT,
   },
   videoInfo: {
     position: 'absolute',
-    bottom: 0,
+    bottom: Platform.OS === 'ios' ? 80 : 60,
     left: SCREEN_WIDTH * 0.05,
     width: SCREEN_WIDTH * 0.65,
   },
@@ -1319,11 +1510,22 @@ const styles = StyleSheet.create({
     fontSize: SCREEN_WIDTH * 0.045,
     fontWeight: 'bold',
     marginBottom: 4,
+    textShadowColor: 'rgba(0,0,0,0.5)',
+    textShadowOffset: { width: 1, height: 1 },
+    textShadowRadius: 3,
   },
   description: {
     color: 'white',
     fontSize: SCREEN_WIDTH * 0.035,
     marginBottom: SCREEN_HEIGHT * 0.015,
+    textShadowColor: 'rgba(0,0,0,0.5)',
+    textShadowOffset: { width: 1, height: 1 },
+    textShadowRadius: 3,
+  },
+  buttonRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    width: '100%',
   },
   watchFullButton: {
     backgroundColor: 'white',
@@ -1331,7 +1533,17 @@ const styles = StyleSheet.create({
     paddingHorizontal: SCREEN_WIDTH * 0.05,
     borderRadius: SCREEN_WIDTH * 0.06,
     alignItems: 'center',
-    width: '100%',
+    flex: 1,
+    marginRight: 10,
+  },
+  fullScreenButton: {
+    backgroundColor: 'rgba(255, 255, 255, 0.2)',
+    padding: SCREEN_HEIGHT * 0.015,
+    borderRadius: SCREEN_WIDTH * 0.06,
+    alignItems: 'center',
+    justifyContent: 'center',
+    width: SCREEN_WIDTH * 0.12,
+    height: SCREEN_WIDTH * 0.12,
   },
   watchFullButtonText: {
     color: 'black',
@@ -1384,24 +1596,6 @@ const styles = StyleSheet.create({
     backgroundColor: 'rgba(0, 0, 0, 0.7)',
     justifyContent: 'center',
     alignItems: 'center',
-  },
-  verticalOverlay: {
-    justifyContent: 'flex-end',
-    paddingBottom: SCREEN_HEIGHT * 0.02,
-    position: 'absolute',
-    top: 0,
-    left: 0,
-    right: 0,
-    bottom: 0,
-  },
-  horizontalOverlay: {
-    justifyContent: 'space-between',
-    paddingVertical: SCREEN_HEIGHT * 0.02,
-    position: 'absolute',
-    top: 0, // Reset to original position
-    left: 0,
-    right: 0,
-    bottom: 0,
   },
   actionButtons: {
     position: 'absolute',
@@ -1517,9 +1711,10 @@ const styles = StyleSheet.create({
   },
   lockOverlay: {
     ...StyleSheet.absoluteFillObject,
-    backgroundColor: 'rgba(0, 0, 0, 0.7)',
     justifyContent: 'center',
     alignItems: 'center',
+    backgroundColor: 'rgba(0,0,0,0.7)',
+    zIndex: 2,
   },
   lockedOverlay: {
     ...StyleSheet.absoluteFillObject,
@@ -1727,5 +1922,44 @@ const styles = StyleSheet.create({
     color: 'rgba(255, 255, 255, 0.7)',
     fontSize: Math.min(SCREEN_WIDTH * 0.04, 18),
     fontWeight: '500',
+  },
+  fullscreenOverlay: {
+    paddingBottom: Platform.OS === 'ios' ? 34 : 20, // Safe area bottom padding
+  },
+  fullscreenVideoInfo: {
+    position: 'absolute',
+    bottom: Platform.OS === 'ios' ? 80 : 60,
+    left: SCREEN_WIDTH * 0.05,
+    width: SCREEN_WIDTH * 0.65,
+  },
+  fullscreenAuthorContainer: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+    marginBottom: SCREEN_HEIGHT * 0.01,
+  },
+  fullscreenAuthorText: {
+    color: 'white',
+    fontSize: SCREEN_WIDTH * 0.045,
+    fontWeight: 'bold',
+    marginBottom: 4,
+    textShadowColor: 'rgba(0,0,0,0.5)',
+    textShadowOffset: { width: 1, height: 1 },
+    textShadowRadius: 3,
+  },
+  fullscreenDescription: {
+    color: 'white',
+    fontSize: SCREEN_WIDTH * 0.035,
+    marginBottom: SCREEN_HEIGHT * 0.015,
+    textShadowColor: 'rgba(0,0,0,0.5)',
+    textShadowOffset: { width: 1, height: 1 },
+    textShadowRadius: 3,
+  },
+  fullscreenActionButtons: {
+    position: 'absolute',
+    right: SCREEN_WIDTH * 0.05,
+    bottom: 0,
+    alignItems: 'center',
+    gap: SCREEN_HEIGHT * 0.025,
   },
 });

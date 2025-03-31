@@ -1,12 +1,28 @@
-import React from 'react';
-import { View, StyleSheet, TouchableOpacity, Dimensions } from 'react-native';
+import React, { useState, useEffect } from 'react';
+import { View, StyleSheet, TouchableOpacity, Dimensions, DeviceEventEmitter } from 'react-native';
 import { Tabs } from 'expo-router';
-import { Home, Gift, User, Coins, Plus } from 'lucide-react-native';
+import { Home, Gift, User, Coins, Plus, FileText } from 'lucide-react-native';
 import { LinearGradient } from 'expo-linear-gradient';
 
 const { width, height } = Dimensions.get('window');
 
 export default function TabLayout() {
+  const [isFullScreen, setIsFullScreen] = useState(false);
+  
+  // Listen for full screen toggle events from VideoFeed
+  useEffect(() => {
+    const fullScreenListener = DeviceEventEmitter.addListener(
+      'TOGGLE_FULL_SCREEN',
+      (event) => {
+        setIsFullScreen(event.isFullScreen);
+      }
+    );
+    
+    return () => {
+      fullScreenListener.remove();
+    };
+  }, []);
+
   return (
     <Tabs
       screenOptions={({ route }) => ({
@@ -27,6 +43,7 @@ export default function TabLayout() {
           shadowOffset: { width: 0, height: -2 },
           shadowOpacity: 0.3,
           shadowRadius: 5,
+          display: isFullScreen ? 'none' : 'flex', // Hide tab bar in full screen mode
         },
         tabBarActiveTintColor: '#1877F2',
         tabBarInactiveTintColor: '#888',
@@ -41,6 +58,13 @@ export default function TabLayout() {
         options={{
           title: 'Home',
           tabBarIcon: ({ color }) => <Home color={color} size={24} />,
+        }}
+      />
+      <Tabs.Screen
+        name="feed"
+        options={{
+          title: 'Feed',
+          tabBarIcon: ({ color }) => <FileText color={color} size={24} />,
         }}
       />
       <Tabs.Screen

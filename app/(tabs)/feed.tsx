@@ -1,11 +1,11 @@
 import React from 'react';
 import { View, StyleSheet } from 'react-native';
-import VideoFeed from '@/components/VideoFeed';
+import Feed from '@/components/Feed';
 
-export default function HomeScreen() {
+export default function FeedTabScreen() {
   return (
     <View style={styles.container}>
-      <VideoFeed />
+      <Feed />
     </View>
   );
 }
@@ -13,6 +13,6 @@ export default function HomeScreen() {
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: 'black',
+    backgroundColor: '#000',
   },
-});
+}); 
