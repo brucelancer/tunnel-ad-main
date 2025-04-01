@@ -1,6 +1,6 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { View, StyleSheet, TouchableOpacity, Dimensions, DeviceEventEmitter } from 'react-native';
-import { Tabs } from 'expo-router';
+import { Tabs, useRouter, usePathname } from 'expo-router';
 import { Home, Gift, User, Coins, Plus, FileText } from 'lucide-react-native';
 import { LinearGradient } from 'expo-linear-gradient';
 
@@ -8,6 +8,15 @@ const { width, height } = Dimensions.get('window');
 
 export default function TabLayout() {
   const [isFullScreen, setIsFullScreen] = useState(false);
+  const router = useRouter();
+  const pathname = usePathname();
+  const [activeTab, setActiveTab] = useState('index');
+  
+  // Update active tab when pathname changes
+  useEffect(() => {
+    const tabName = pathname.split('/').pop() || 'index';
+    setActiveTab(tabName);
+  }, [pathname]);
   
   // Listen for full screen toggle events from VideoFeed
   useEffect(() => {
@@ -22,6 +31,17 @@ export default function TabLayout() {
       fullScreenListener.remove();
     };
   }, []);
+
+  // Handler for tab press to emit events
+  const handleTabPress = useCallback((tabName: string) => {
+    // Emit event for double-tap detection
+    DeviceEventEmitter.emit('TAB_PRESS', { tabName });
+    
+    // Only emit HOME_TAB_PRESSED if we're already on the home tab
+    if (tabName === 'index' && activeTab === 'index') {
+      DeviceEventEmitter.emit('HOME_TAB_PRESSED');
+    }
+  }, [activeTab]);
 
   return (
     <Tabs
@@ -51,6 +71,15 @@ export default function TabLayout() {
         tabBarItemStyle: {
           height: 60,
         },
+        tabBarButton: (props) => (
+          <TouchableOpacity
+            {...props}
+            onPress={(e) => {
+              handleTabPress(route.name);
+              props.onPress?.(e);
+            }}
+          />
+        ),
       })}
     >
       <Tabs.Screen

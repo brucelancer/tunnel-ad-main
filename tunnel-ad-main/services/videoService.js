@@ -168,22 +168,24 @@ export const fetchVideos = async (limit = 20, lastId = null, contentType = null)
       dislikes,
       "author": author->username,
       "authorId": author->_id,
+      "authorAvatar": author->profile.avatar,
       "thumbnail": thumbnail.asset->url,
       createdAt
     }`;
     
     console.log('Fetching videos with query:', query);
-    const videos = await client.fetch(query, params);
+    const videos = await client.fetch(query, params) || [];
     
-    // Process videos to ensure we have a URL field
+    // Process videos to ensure we have a URL field and convert Sanity image to URL
     return videos.map(video => ({
       ...video,
       id: video._id, // Add id field to match existing interface
-      url: video.videoUrl || video.url // Use file URL if available, otherwise use provided URL
+      url: video.videoUrl || video.url, // Use file URL if available, otherwise use provided URL
+      authorAvatar: video.authorAvatar ? urlFor(video.authorAvatar).url() : null // Convert Sanity image to URL
     }));
   } catch (error) {
     console.error('Error fetching videos:', error);
-    throw error;
+    return []; // Return empty array on error instead of throwing
   }
 };
 
