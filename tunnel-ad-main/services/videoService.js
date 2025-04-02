@@ -169,6 +169,8 @@ export const fetchVideos = async (limit = 20, lastId = null, contentType = null)
       "author": author->username,
       "authorId": author->_id,
       "authorAvatar": author->profile.avatar,
+      "isVerified": author->username == "admin" || author->username == "moderator",
+      "isBlueVerified": author->isBlueVerified,
       "thumbnail": thumbnail.asset->url,
       createdAt
     }`;

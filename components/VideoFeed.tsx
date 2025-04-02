@@ -24,6 +24,10 @@ import {
   TextInput,
   PanResponder,
   KeyboardAvoidingView,
+  Keyboard,
+  NativeSyntheticEvent,
+  NativeScrollEvent,
+  Easing,
 } from 'react-native';
 import * as Haptics from 'expo-haptics';
 import { Video, ResizeMode, Audio } from 'expo-av';
@@ -77,6 +81,31 @@ const TunnelVerifiedMark = ({ size = 10 }) => (
   </Svg>
 );
 
+// Add a blue verified mark variant
+const TunnelBlueVerifiedMark = ({ size = 10 }) => {
+  // Calculate a responsive size based on screen width
+  const responsiveSize = SCREEN_WIDTH * 0.03 > 12 ? SCREEN_WIDTH * 0.03 : 12;
+  
+  return (
+    <Svg 
+      width={responsiveSize * 1.8} 
+      height={responsiveSize * 1.8} 
+      viewBox="0 0 24 24" 
+      fill="none"
+    >
+      <Path 
+        d="M12 2L14 5.1L17.5 3.5L17 7.3L21 8L18.9 11L21 14L17 14.7L17.5 18.5L14 16.9L12 20L10 16.9L6.5 18.5L7 14.7L3 14L5.1 11L3 8L7 7.3L6.5 3.5L10 5.1L12 2Z" 
+        fill="#1877F2" 
+      />
+      <Path 
+        d="M10 13.17l-2.59-2.58L6 12l4 4 8-8-1.41-1.42L10 13.17z" 
+        fill="#FFFFFF" 
+        strokeWidth="0"
+      />
+    </Svg>
+  );
+};
+
 // Use full screen height
 const HEADER_HEIGHT = (isFullScreen: boolean): number => isFullScreen ? 0 : 50;
 const BOTTOM_NAV_HEIGHT = 0;
@@ -105,6 +134,8 @@ interface VideoItem {
   comments?: number;
   authorId?: string;
   authorAvatar?: string;
+  isVerified?: boolean;
+  isBlueVerified?: boolean;
 }
 
 interface VideoItemProps {
@@ -320,7 +351,7 @@ const CommentItem = ({ comment, onLike }: { comment: Comment, onLike: (id: strin
           >
             <Heart 
               size={20} 
-              color={comment.hasLiked ? '#FF4D67' : '#888'} 
+              color={comment.hasLiked ? '#FF4D67' : 'rgba(255, 255, 255, 0.6)'} 
               fill={comment.hasLiked ? '#FF4D67' : 'transparent'} 
             />
           </Pressable>
@@ -343,6 +374,7 @@ interface CommentsSectionProps {
   onClose: () => void;
   commentCount: number;
   router: any;
+  isFullScreen?: boolean; // Make it optional with ?
 }
 
 const CommentsSection: React.FC<CommentsSectionProps> = ({ 
@@ -350,23 +382,188 @@ const CommentsSection: React.FC<CommentsSectionProps> = ({
   visible, 
   onClose,
   commentCount,
-  router
+  router,
+  isFullScreen = false // Set default value to false
 }) => {
   const [comments, setComments] = useState<Comment[]>(MOCK_COMMENTS);
   const [newComment, setNewComment] = useState('');
-  const [isLoading, setIsLoading] = useState(false);
+  const [keyboardHeight, setKeyboardHeight] = useState(0);
+  const [isKeyboardVisible, setIsKeyboardVisible] = useState(false);
+  const [isInputFocused, setIsInputFocused] = useState(false);
+  const [isClosing, setIsClosing] = useState(false); // Track panel closing state
   
   const panelAnimation = useRef(new Animated.Value(visible ? 0 : SCREEN_HEIGHT)).current;
+  const backdropAnimation = useRef(new Animated.Value(visible ? 1 : 0)).current; // For backdrop opacity
+  const scrollViewRef = useRef<ScrollView>(null);
+  const scrollPositionRef = useRef(0);
+  const hasUserScrolled = useRef(false);
+  const inputRef = useRef<TextInput>(null);
   
+  // Track completion to prevent reopening
+  const isFirstRender = useRef(true);
+  const isAnimatingRef = useRef(false);
+  
+  // Add keyboard event listeners with improved scroll behavior
   useEffect(() => {
-    Animated.spring(panelAnimation, {
-      toValue: visible ? 0 : SCREEN_HEIGHT,
-      useNativeDriver: true,
-      friction: 19,
-      tension: 75,
-      velocity: 10
-    }).start();
-  }, [visible, panelAnimation]);
+    const keyboardWillShowListener = Keyboard.addListener(
+      Platform.OS === 'ios' ? 'keyboardWillShow' : 'keyboardDidShow',
+      (e) => {
+        setIsKeyboardVisible(true);
+        setKeyboardHeight(e.endCoordinates.height);
+        
+        // Don't scroll to bottom if user has manually scrolled up
+        if (isInputFocused && !hasUserScrolled.current) {
+          // Delay slightly to ensure layout is complete
+          setTimeout(() => {
+            if (scrollViewRef.current) {
+              // Scroll to last comment only if not scrolled up
+              scrollViewRef.current.scrollToEnd({ animated: true });
+            }
+          }, 100);
+        }
+      }
+    );
+    
+    const keyboardWillHideListener = Keyboard.addListener(
+      Platform.OS === 'ios' ? 'keyboardWillHide' : 'keyboardDidHide',
+      () => {
+        setIsKeyboardVisible(false);
+        setKeyboardHeight(0);
+        
+        // When keyboard closes, restore previous scroll position if available
+        if (scrollViewRef.current && scrollPositionRef.current > 0 && hasUserScrolled.current) {
+          setTimeout(() => {
+            scrollViewRef.current?.scrollTo({ 
+              y: scrollPositionRef.current, 
+              animated: false 
+            });
+          }, 50);
+        }
+      }
+    );
+    
+    return () => {
+      keyboardWillShowListener.remove();
+      keyboardWillHideListener.remove();
+    };
+  }, [isInputFocused, hasUserScrolled.current]);
+  
+  // Save current scroll position when user scrolls with proper type
+  const handleScroll = (event: NativeSyntheticEvent<NativeScrollEvent>) => {
+    const currentScrollPosition = event.nativeEvent.contentOffset.y;
+    scrollPositionRef.current = currentScrollPosition;
+    
+    // Check if user has scrolled up from bottom
+    const layoutHeight = event.nativeEvent.layoutMeasurement.height;
+    const contentHeight = event.nativeEvent.contentSize.height;
+    const isScrolledToBottom = contentHeight - currentScrollPosition - layoutHeight < 20;
+    
+    hasUserScrolled.current = !isScrolledToBottom;
+  };
+  
+  // Handle input focus/blur
+  const handleInputFocus = () => {
+    setIsInputFocused(true);
+    
+    // Never auto-scroll when focusing input if the user has scrolled up
+    // The keyboard event will take care of scrolling if needed
+  };
+  
+  const handleInputBlur = () => {
+    setIsInputFocused(false);
+  };
+  
+  // Reset closing state when visibility changes
+  useEffect(() => {
+    if (visible) {
+      setIsClosing(false); // Reset closing state when panel becomes visible
+    }
+  }, [visible]);
+  
+  // Separate animation configuration for opening and closing
+  const openConfig = {
+    friction: 22,     // Less friction for smoother opening
+    tension: 70,      // Higher tension for more springiness
+    velocity: 8       // Initial velocity
+  };
+
+  const closeConfig = {
+    friction: 25,     // More friction for less bouncing when closing
+    tension: 90,      // Higher tension for faster initial movement
+    velocity: 10      // Higher initial velocity for quicker response
+  };
+  
+  // Update animation with different parameters for open/close, including backdrop
+  useEffect(() => {
+    // Skip on first render to avoid unwanted animations
+    if (isFirstRender.current) {
+      isFirstRender.current = false;
+      return;
+    }
+    
+    // Prevent multiple animations from running simultaneously
+    if (isAnimatingRef.current) return;
+    
+    if (visible && !isClosing) {
+      isAnimatingRef.current = true;
+      // Opening animation - smoother with slight bounce
+      Animated.parallel([
+        Animated.spring(panelAnimation, {
+          toValue: 0,
+          useNativeDriver: true,
+          ...openConfig
+        }),
+        Animated.timing(backdropAnimation, {
+          toValue: 1,
+          duration: 200,
+          useNativeDriver: true
+        })
+      ]).start(() => {
+        isAnimatingRef.current = false;
+      });
+    }
+  }, [visible, isClosing, panelAnimation, backdropAnimation]);
+
+  // Replace the onClose function with a faster version
+  const handleClose = () => {
+    // If already closing or animating, don't trigger another close
+    if (isClosing || isAnimatingRef.current || !visible) return;
+    
+    // Set closing state first
+    setIsClosing(true);
+    isAnimatingRef.current = true;
+    
+    // Dismiss keyboard first for smoother animation
+    Keyboard.dismiss();
+    
+    // Use a faster animation for closing - run backdrop and panel animations in parallel
+    Animated.parallel([
+      Animated.timing(panelAnimation, {
+        toValue: SCREEN_HEIGHT,
+        duration: 200, // Even faster for better sync
+        easing: Easing.out(Easing.cubic),
+        useNativeDriver: true,
+      }),
+      Animated.timing(backdropAnimation, {
+        toValue: 0,
+        duration: 200, // Match duration with panel
+        easing: Easing.out(Easing.cubic),
+        useNativeDriver: true,
+      })
+    ]).start(() => {
+      // Call the original onClose after animation completes
+      onClose();
+      setIsClosing(false);
+      isAnimatingRef.current = false;
+    });
+  };
+  
+  // Handle visibility changes to trigger closing animation
+  useEffect(() => {
+    if (!visible && !isClosing && !isFirstRender.current) {
+      handleClose();
+    }
+  }, [visible]);
   
   const handleLikeComment = (commentId: string) => {
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
@@ -404,111 +601,286 @@ const CommentsSection: React.FC<CommentsSectionProps> = ({
     
     setComments([newCommentObj, ...comments]);
     setNewComment('');
+    
+    // Scroll to the top since newest comments appear at the top
+    setTimeout(() => {
+      if (scrollViewRef.current) {
+        scrollViewRef.current.scrollTo({ y: 0, animated: true });
+      }
+      
+      // Dismiss keyboard after sending comment (optional - TikTok keeps it open)
+      // Keyboard.dismiss();
+    }, 100);
+  };
+  
+  const focusInput = () => {
+    if (inputRef.current) {
+      inputRef.current.focus();
+    }
   };
   
   return (
-    <Animated.View 
-      style={[
-        commentStyles.container,
-        { transform: [{ translateY: panelAnimation }] }
-      ]}
-    >
-      <KeyboardAvoidingView 
-        behavior={Platform.OS === 'ios' ? 'padding' : undefined}
-        style={commentStyles.keyboardAvoidingView}
-      >
-        <View style={commentStyles.header}>
-          <Text style={commentStyles.headerTitle}>
-            {commentCount} comments
-          </Text>
-          <Pressable onPress={onClose} style={commentStyles.backButton}>
-            <X color="white" size={22} />
-          </Pressable>
-        </View>
-        
-        <FlatList
-          data={comments}
-          renderItem={({ item }) => <CommentItem comment={item} onLike={handleLikeComment} />}
-          keyExtractor={item => item.id}
-          contentContainerStyle={commentStyles.commentsList}
-          showsVerticalScrollIndicator={false}
-          initialNumToRender={5}
-          maxToRenderPerBatch={3}
-          windowSize={7}
-          ListEmptyComponent={
-            <View style={commentStyles.emptyCommentsContainer}>
-              <MessageCircle color="#888" size={40} />
-              <Text style={commentStyles.emptyCommentsText}>No comments yet</Text>
-              <Text style={commentStyles.emptyCommentsSubtext}>Be the first to comment</Text>
-            </View>
-          }
-        />
-        
-        <View style={commentStyles.inputContainer}>
-          <Pressable style={commentStyles.emojiButton}>
-            <Smile color="#888" size={24} />
-          </Pressable>
-          <TextInput
-            style={commentStyles.input}
-            placeholder="Add a comment..."
-            placeholderTextColor="#777"
-            value={newComment}
-            onChangeText={setNewComment}
-            multiline
-            maxLength={500}
-            returnKeyType="default"
-          />
+    <>
+      {/* Always render backdrop when visible or closing, with animated opacity */}
+      {(visible || isClosing) && (
+        <Animated.View 
+          style={{
+            position: 'absolute',
+            top: 0,
+            left: 0,
+            right: 0,
+            bottom: 0,
+            backgroundColor: 'rgba(0, 0, 0, 0.5)',
+            zIndex: 999,
+            opacity: backdropAnimation, // Use animated value for smooth fade
+          }}
+        >
           <Pressable 
-            style={[
-              commentStyles.sendButton,
-              !newComment.trim() && commentStyles.sendButtonDisabled
-            ]}
-            onPress={handleSubmitComment}
-            disabled={!newComment.trim()}
-          >
-            <Send 
-              color={newComment.trim() ? '#FFFFFF' : '#666'} 
-              size={20} 
-              style={{ transform: [{ rotate: '45deg' }] }}
+            style={{ width: '100%', height: '100%' }}
+            onPress={handleClose}
+          />
+        </Animated.View>
+      )}
+      <Animated.View 
+        style={{
+          position: 'absolute',
+          bottom: 0,
+          left: 0,
+          right: 0,
+          height: SCREEN_HEIGHT * 0.7,
+          backgroundColor: '#121212',
+          zIndex: 1050,
+          borderTopLeftRadius: 20,
+          borderTopRightRadius: 20,
+          elevation: 25,
+          shadowColor: '#000',
+          shadowOffset: { width: 0, height: -3 },
+          shadowOpacity: 0.3,
+          shadowRadius: 10,
+          transform: [{ translateY: panelAnimation }]
+        }}
+      >
+        <View style={{ flex: 1 }}>
+          {/* Header */}
+          <View style={{
+            alignItems: 'center',
+            paddingTop: 12,
+            paddingBottom: 16,
+            borderBottomWidth: 1,
+            borderBottomColor: 'rgba(255, 255, 255, 0.08)',
+            position: 'relative',
+          }}>
+            <View style={{
+              width: 36,
+              height: 5,
+              backgroundColor: 'rgba(255, 255, 255, 0.3)',
+              borderRadius: 3,
+              marginBottom: 10,
+              alignSelf: 'center',
+            }} />
+            <Text style={{
+              fontSize: 16,
+              fontWeight: 'bold',
+              color: 'white',
+              textAlign: 'center',
+            }}>
+              {commentCount} comments
+            </Text>
+            <Pressable onPress={handleClose} style={{
+              padding: 8,
+              position: 'absolute',
+              right: 8,
+              zIndex: 1,
+            }}>
+              <X color="white" size={22} />
+            </Pressable>
+          </View>
+          
+          {/* Comments list - adjusts size based on keyboard visibility */}
+          <View style={{ 
+            flex: 1, 
+            marginBottom: isKeyboardVisible ? keyboardHeight - (Platform.OS === 'ios' ? 30 : 60) : 0 
+          }}>
+            <ScrollView
+              ref={scrollViewRef}
+              showsVerticalScrollIndicator={true}
+              bounces={true}
+              contentContainerStyle={{
+                padding: 16,
+                paddingBottom: 150,
+                flexGrow: 1,
+              }}
+              persistentScrollbar={true}
+              keyboardShouldPersistTaps="handled"
+              onScroll={handleScroll}
+              scrollEventThrottle={16}
+            >
+              {comments.length > 0 ? (
+                comments.map(comment => (
+                  <CommentItem 
+                    key={comment.id} 
+                    comment={comment} 
+                    onLike={handleLikeComment} 
+                  />
+                ))
+              ) : (
+                <View style={{
+                  flex: 1,
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  paddingTop: 60,
+                }}>
+                  <MessageCircle color="#888" size={40} />
+                  <Text style={{
+                    fontSize: 16,
+                    fontWeight: 'bold',
+                    color: '#888',
+                    marginTop: 16,
+                  }}>No comments yet</Text>
+                  <Text style={{
+                    fontSize: 14,
+                    color: '#666',
+                    marginTop: 8,
+                  }}>Be the first to comment</Text>
+                </View>
+              )}
+            </ScrollView>
+          </View>
+          
+          {/* Input bar - TikTok style keyboard tracking */}
+          <View style={{
+            position: 'absolute',
+            bottom: isKeyboardVisible ? keyboardHeight : (isFullScreen ? 0 : 80),
+            left: 0,
+            right: 0,
+            backgroundColor: '#1A1A1A',
+            borderTopWidth: 1,
+            borderTopColor: 'rgba(255, 255, 255, 0.08)',
+            paddingVertical: 12,
+            paddingHorizontal: 12,
+            shadowColor: '#000',
+            shadowOffset: { width: 0, height: -2 },
+            shadowOpacity: 0.2,
+            shadowRadius: 3,
+            elevation: 10,
+            flexDirection: 'row',
+            alignItems: 'center',
+          }}>
+            <Pressable style={{ padding: 8 }} onPress={focusInput}>
+              <Smile color="#888" size={24} />
+            </Pressable>
+            <TextInput
+              ref={inputRef}
+              style={{
+                flex: 1,
+                backgroundColor: '#2A2A2A',
+                borderRadius: 24,
+                paddingHorizontal: 16,
+                paddingVertical: 10,
+                color: 'white',
+                fontSize: 14,
+                maxHeight: 100,
+                marginHorizontal: 8,
+              }}
+              placeholder="Add a comment..."
+              placeholderTextColor="#777"
+              value={newComment}
+              onChangeText={setNewComment}
+              onFocus={handleInputFocus}
+              onBlur={handleInputBlur}
+              multiline
+              maxLength={500}
+              returnKeyType="default"
             />
-          </Pressable>
+            <Pressable 
+              style={[
+                {
+                  width: 38,
+                  height: 38,
+                  borderRadius: 19,
+                  backgroundColor: '#1877F2',
+                  justifyContent: 'center',
+                  alignItems: 'center',
+                },
+                !newComment.trim() && {
+                  backgroundColor: '#2a2a2a',
+                }
+              ]}
+              onPress={handleSubmitComment}
+              disabled={!newComment.trim()}
+            >
+              <Send 
+                color={newComment.trim() ? '#FFFFFF' : '#666'} 
+                size={20} 
+                style={{ transform: [{ rotate: '45deg' }] }}
+              />
+            </Pressable>
+          </View>
         </View>
-      </KeyboardAvoidingView>
-    </Animated.View>
+      </Animated.View>
+    </>
   );
 };
 
-// Add comments styling
+// Define a complete commentStyles object with all necessary styles
 const commentStyles = StyleSheet.create({
   container: {
+    position: 'absolute',
+    bottom: 0,
+    left: 0,
+    right: 0,
+    height: SCREEN_HEIGHT * 0.55,
+    backgroundColor: '#121212',
+    zIndex: 1000,
+    borderTopLeftRadius: 20,
+    borderTopRightRadius: 20,
+    elevation: 10,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: -3 },
+    shadowOpacity: 0.3,
+    shadowRadius: 10,
+  },
+  backdrop: {
     position: 'absolute',
     top: 0,
     left: 0,
     right: 0,
     bottom: 0,
-    backgroundColor: '#121212',
-    zIndex: 1000,
-    borderTopLeftRadius: Platform.OS === 'ios' ? 20 : 0, 
-    borderTopRightRadius: Platform.OS === 'ios' ? 20 : 0,
+    backgroundColor: 'rgba(0, 0, 0, 0.5)',
+    zIndex: 999,
   },
   keyboardAvoidingView: {
     flex: 1,
+    display: 'flex',
+    flexDirection: 'column',
+  },
+  commentsContainer: {
+    flex: 1,
+    marginBottom: 2,
+    // Add a subtle bottom border to better separate from input area
+    borderBottomWidth: 0.5,
+    borderBottomColor: 'rgba(255, 255, 255, 0.08)',
   },
   header: {
-    flexDirection: 'row',
     alignItems: 'center',
-    justifyContent: 'center',
-    paddingHorizontal: 16,
-    paddingTop: Platform.OS === 'ios' ? 16 : 16,
+    paddingTop: 12,
     paddingBottom: 16,
     borderBottomWidth: 1,
-    borderBottomColor: 'rgba(255, 255, 255, 0.1)',
+    borderBottomColor: 'rgba(255, 255, 255, 0.08)',
     position: 'relative',
+  },
+  dragHandle: {
+    width: 36,
+    height: 5,
+    backgroundColor: 'rgba(255, 255, 255, 0.3)',
+    borderRadius: 3,
+    marginBottom: 10,
+    alignSelf: 'center',
   },
   backButton: {
     padding: 8,
     position: 'absolute',
-    left: 8,
+    right: 8,
     zIndex: 1,
   },
   headerTitle: {
@@ -517,20 +889,11 @@ const commentStyles = StyleSheet.create({
     color: 'white',
     textAlign: 'center',
   },
-  viewAllButton: {
-    position: 'absolute',
-    right: 16,
-    paddingHorizontal: 10,
-    paddingVertical: 6,
-  },
-  viewAllText: {
-    color: '#1877F2',
-    fontSize: 14,
-    fontWeight: 'bold',
-  },
   commentsList: {
     padding: 16,
-    paddingBottom: 100,
+    paddingBottom: 120, // Increased padding to ensure enough space when keyboard appears
+    minHeight: SCREEN_HEIGHT * 0.35, // Minimum height to make scrolling obvious
+    flexGrow: 1, // Added to ensure the ScrollView can grow and be scrollable
   },
   commentItem: {
     flexDirection: 'row',
@@ -608,9 +971,9 @@ const commentStyles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     padding: 12,
-    backgroundColor: '#121212',
+    backgroundColor: '#1A1A1A',
     borderTopWidth: 1,
-    borderTopColor: 'rgba(255, 255, 255, 0.1)',
+    borderTopColor: 'rgba(255, 255, 255, 0.08)',
     paddingBottom: Platform.OS === 'ios' ? 30 : 12,
   },
   emojiButton: {
@@ -618,19 +981,19 @@ const commentStyles = StyleSheet.create({
   },
   input: {
     flex: 1,
-    backgroundColor: '#2a2a2a',
-    borderRadius: 20,
+    backgroundColor: '#2A2A2A',
+    borderRadius: 24,
     paddingHorizontal: 16,
-    paddingVertical: 8,
+    paddingVertical: 10,
     color: 'white',
     fontSize: 14,
     maxHeight: 100,
     marginHorizontal: 8,
   },
   sendButton: {
-    width: 36,
-    height: 36,
-    borderRadius: 18,
+    width: 38,
+    height: 38,
+    borderRadius: 19,
     backgroundColor: '#1877F2',
     justifyContent: 'center',
     alignItems: 'center',
@@ -657,6 +1020,14 @@ const commentStyles = StyleSheet.create({
   },
   headerRight: {
     width: 40,
+  },
+  scrollIndicator: {
+    position: 'absolute',
+    right: 4,
+    width: 4,
+    height: 30,
+    backgroundColor: 'rgba(255, 255, 255, 0.2)',
+    borderRadius: 2,
   },
 });
 
@@ -701,33 +1072,31 @@ const VideoItemComponent = memo(({
   // Create pan responder for horizontal swiping
   const panResponder = useRef(
     PanResponder.create({
-      onStartShouldSetPanResponder: () => true,
-      onPanResponderMove: (evt, gestureState) => {
-        // If swiping down while comments are open, allow closing
-        if (showComments && gestureState.dy > 0) {
-          slideAnim.setValue(gestureState.dy);
+      onStartShouldSetPanResponder: (evt, gestureState) => {
+        // Only handle pan gestures when comments are not open
+        return !showComments;
+      },
+      onMoveShouldSetPanResponder: (evt, gestureState) => {
+        // Only respond to vertical gestures
+        const isVerticalSwipe = Math.abs(gestureState.dy) > Math.abs(gestureState.dx * 2);
+        
+        // When comments are open, only handle swipes from the top area or header
+        if (showComments) {
+          // Let the nested PanResponder in CommentsSection handle this
+          return false;
         }
         
+        // When comments are closed, respond to upward swipes
+        return isVerticalSwipe && !showComments && gestureState.dy < 0;
+      },
+      onPanResponderMove: (evt, gestureState) => {
         // If swiping up while comments are closed, allow opening
         if (!showComments && gestureState.dy < 0) {
           slideAnim.setValue(SCREEN_HEIGHT + gestureState.dy);
         }
       },
       onPanResponderRelease: (evt, gestureState) => {
-        if (showComments) {
-          // If swiped down far enough, close comments
-          if (gestureState.dy > SCREEN_HEIGHT / 6) {
-            closeComments();
-          } else {
-            // Otherwise snap back to open state
-            Animated.spring(slideAnim, {
-              toValue: 0,
-              useNativeDriver: true,
-              friction: 19,
-              tension: 75
-            }).start();
-          }
-        } else {
+        if (!showComments) {
           // If swiped up far enough, open comments
           if (gestureState.dy < -SCREEN_HEIGHT / 6) {
             openComments();
@@ -762,15 +1131,11 @@ const VideoItemComponent = memo(({
   // Update closeComments for bottom slide-down animation
   const closeComments = () => {
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-    Animated.spring(slideAnim, {
-      toValue: SCREEN_HEIGHT,
-      useNativeDriver: true,
-      friction: 19,
-      tension: 75,
-      velocity: 10
-    }).start(() => {
-      setShowComments(false);
-    });
+    // Set showComments to false immediately to prevent reopening
+    setShowComments(false);
+    
+    // No need to trigger animation here as the CommentsSection will handle it internally
+    // The animation will be triggered by the visibility prop change
   };
 
   // Listen for tab state changes
@@ -1276,21 +1641,33 @@ const VideoItemComponent = memo(({
               ) : (
                 <View style={styles.authorAvatarPlaceholder} />
               )}
-              <Text 
-                style={[
-                  styles.author,
-                  // Enhance text visibility in fullscreen mode
-                  isFullScreen && {
-                    fontSize: SCREEN_WIDTH * 0.05,
-                    textShadowColor: 'rgba(0,0,0,0.7)',
-                    textShadowRadius: 5
-                  }
-                ]} 
-                numberOfLines={1} 
-                ellipsizeMode="tail"
-              >
+              <View style={styles.authorNameContainer}>
+                <Text 
+                  style={[
+                    styles.author,
+                    // Enhance text visibility in fullscreen mode
+                    isFullScreen && {
+                      fontSize: SCREEN_WIDTH * 0.05,
+                      textShadowColor: 'rgba(0,0,0,0.7)',
+                      textShadowRadius: 5
+                    }
+                  ]} 
+                  numberOfLines={1} 
+                  ellipsizeMode="tail"
+                >
               {item.author}
             </Text>
+                {/* Show verification badge if applicable */}
+                {(item.isVerified || item.isBlueVerified) && (
+                  <View style={styles.authorVerifiedBadge}>
+                    {item.isBlueVerified ? (
+                      <TunnelBlueVerifiedMark size={Math.max(15, SCREEN_WIDTH * 0.04)} />
+                    ) : (
+                      <TunnelVerifiedMark size={Math.max(12, SCREEN_WIDTH * 0.03)} />
+                    )}
+                  </View>
+                )}
+              </View>
             {remainingTime && !hasEarnedPoints && (
               <View style={styles.countdownWrapper}>
                 <View style={styles.countdownDot} />
@@ -1391,11 +1768,13 @@ const VideoItemComponent = memo(({
                 onPress={() => {
                   setHasDiscoveredComments(true);
                   Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
-                  openComments(); // Open comments directly in the current view
+                  openComments();
                 }}
                 style={styles.commentButton}
               >
-                <MessageCircle color="white" size={SCREEN_WIDTH * 0.06} />
+                <View style={styles.commentIconContainer}>
+                  <MessageCircle color="white" size={SCREEN_WIDTH * 0.055} />
+                </View>
                 <Text style={styles.actionCount}>{item.comments || 0}</Text>
               </Pressable>
               {!hasDiscoveredComments && (
@@ -1446,11 +1825,6 @@ const VideoItemComponent = memo(({
           </View>
         )}
         </SafeAreaView>
-        
-        {/* Swipe indicator */}
-        {isCurrentVideo && !showComments && (
-          <CommentsIndicator />
-        )}
       </Animated.View>
       
       {/* Comments section */}
@@ -1460,6 +1834,7 @@ const VideoItemComponent = memo(({
         onClose={closeComments}
         commentCount={item.comments || 0}
         router={router}
+        isFullScreen={isFullScreen}
       />
       
       {/* Lock overlay when premium alert is shown */}
@@ -1507,36 +1882,7 @@ const TopHeader: React.FC<TopHeaderProps> = ({ activeTab, onTabPress, isFullScre
 };
 
 // Rename SwipeIndicator to CommentsIndicator and update to show swipe-up gesture
-const CommentsIndicator = () => {
-  const fadeAnim = useRef(new Animated.Value(0)).current;
-
-  useEffect(() => {
-    Animated.loop(
-      Animated.sequence([
-        Animated.timing(fadeAnim, {
-          toValue: 1,
-          duration: 1000,
-          useNativeDriver: true,
-        }),
-        Animated.timing(fadeAnim, {
-          toValue: 0,
-          duration: 1000,
-          useNativeDriver: true,
-        }),
-      ])
-    ).start();
-  }, []);
-
-  return (
-    <Animated.View style={[styles.commentsIndicator, { opacity: fadeAnim }]}>
-      <View style={styles.indicatorIconContainer}>
-        <MessageCircle size={20} color="#fff" />
-      </View>
-      <Text style={styles.indicatorText}>Comments</Text>
-      <ChevronUp size={16} color="#fff" style={styles.indicatorArrow} />
-    </Animated.View>
-  );
-};
+const CommentsIndicator = () => null;
 
 export default function VideoFeed() {
   const [currentVideoIndex, setCurrentVideoIndex] = useState(0);
@@ -2626,6 +2972,15 @@ const styles = StyleSheet.create({
     backgroundColor: 'rgba(255, 255, 255, 0.2)',
     marginRight: SCREEN_WIDTH * 0.02,
   },
+  authorNameContainer: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    flex: 1,
+  },
+  authorVerifiedBadge: {
+    marginLeft: 4,
+    marginBottom: Platform.OS === 'ios' ? 2 : 0,
+  },
   author: {
     color: 'white',
     fontWeight: 'bold',
@@ -3121,19 +3476,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     marginBottom: 16,
   },
-  
-  commentsIndicator: {
-    position: 'absolute',
-    bottom: 120,
-    alignSelf: 'center',
-    backgroundColor: 'rgba(0, 0, 0, 0.6)',
-    borderRadius: 20,
-    paddingHorizontal: 16,
-    paddingVertical: 8,
-    flexDirection: 'row',
-    alignItems: 'center',
-    zIndex: 100,
-  },
+
   
   indicatorIconContainer: {
     width: 24,
@@ -3166,5 +3509,34 @@ const styles = StyleSheet.create({
   },
   indicatorArrow: {
     marginTop: 2,
+  },
+  commentIconContainer: {
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+    backgroundColor: 'rgba(255, 255, 255, 0.1)',
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginBottom: 4,
+  },
+  swipeUpIndicatorContainer: {
+    position: 'absolute',
+    bottom: 110,
+    alignSelf: 'center',
+    zIndex: 50,
+  },
+  swipeUpIndicator: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: 'rgba(0, 0, 0, 0.7)',
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    borderRadius: 20,
+  },
+  swipeUpText: {
+    color: 'white',
+    marginLeft: 6,
+    fontSize: 12,
+    fontWeight: '500',
   },
 });
