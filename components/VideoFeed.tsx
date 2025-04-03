@@ -1,4 +1,4 @@
-import React, { useState, useRef, useEffect, useCallback, useContext, MutableRefObject, memo } from 'react';
+import React, { useState, useRef, useEffect, useCallback, useContext, MutableRefObject, memo, useMemo } from 'react';
 import {
   View,
   Text,
@@ -28,6 +28,7 @@ import {
   NativeSyntheticEvent,
   NativeScrollEvent,
   Easing,
+  Alert,
 } from 'react-native';
 import * as Haptics from 'expo-haptics';
 import { Video, ResizeMode, Audio } from 'expo-av';
@@ -55,6 +56,7 @@ import {
   Trash,
   X,
   ChevronUp,
+  Trash2,
 } from 'lucide-react-native';
 import { usePoints } from '../hooks/usePoints';
 import { useReactions } from '../hooks/useReactions';
@@ -63,6 +65,8 @@ import * as videoService from '../tunnel-ad-main/services/videoService';
 import { useSanityAuth } from '../app/hooks/useSanityAuth';
 import { LinearGradient } from 'expo-linear-gradient';
 import Svg, { Path } from 'react-native-svg';
+import { getSanityClient, urlFor } from '@/tunnel-ad-main/services/postService';
+import { fetchComments, addComment, toggleLikeComment, getCommentCount, deleteComment } from '@/tunnel-ad-main/services/commentService';
 
 const { width: SCREEN_WIDTH, height: SCREEN_HEIGHT } = Dimensions.get('window');
 
@@ -151,6 +155,9 @@ interface VideoItemProps {
   isFullScreen?: boolean;
   toggleFullScreen?: () => void;
   router: any;
+  forceCloseComments?: boolean;
+  onCommentsOpened?: () => void;
+  onCommentsClosed?: () => void;
 }
 
 interface VideoRefs {
@@ -173,7 +180,7 @@ interface Comment {
   user: {
     id: string;
     username: string;
-    avatar?: string;
+    avatar?: string | null;
     isVerified?: boolean;
   };
   createdAt: string;
@@ -183,112 +190,112 @@ interface Comment {
 }
 
 // Mock data for comments - in a real app this would come from an API
-const MOCK_COMMENTS: Comment[] = [
-  {
-    id: '1',
-    text: 'This video is amazing! The choreography is incredible 🔥',
-    user: {
-      id: 'user1',
-      username: 'dancefan2023',
-      avatar: 'https://randomuser.me/api/portraits/women/1.jpg',
-      isVerified: false,
-    },
-    createdAt: new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString(), // 1 day ago
-    likes: 24,
-    hasLiked: false,
-  },
-  {
-    id: '2',
-    text: 'Love the music choice for this routine! Anyone know the song name?',
-    user: {
-      id: 'user2',
-      username: 'musiclover',
-      avatar: 'https://randomuser.me/api/portraits/men/2.jpg',
-      isVerified: true,
-    },
-    createdAt: new Date(Date.now() - 3 * 60 * 60 * 1000).toISOString(), // 3 hours ago
-    likes: 56,
-    hasLiked: true,
-  },
-  {
-    id: '3',
-    text: 'I tried to learn this dance but it\'s so hard! Any tips?',
-    user: {
-      id: 'user3',
-      username: 'beginner_dancer',
-      avatar: 'https://randomuser.me/api/portraits/women/3.jpg',
-      isVerified: false,
-    },
-    createdAt: new Date(Date.now() - 15 * 60 * 1000).toISOString(), // 15 minutes ago
-    likes: 8,
-    hasLiked: false,
-  },
-  {
-    id: '4',
-    text: 'Just shared this with my dance group, we\'re definitely going to try this!',
-    user: {
-      id: 'user4',
-      username: 'dance_instructor',
-      avatar: 'https://randomuser.me/api/portraits/men/4.jpg',
-      isVerified: true,
-    },
-    createdAt: new Date(Date.now() - 45 * 60 * 1000).toISOString(), // 45 minutes ago
-    likes: 32,
-    hasLiked: false,
-  },
-  {
-    id: '5',
-    text: 'Your dance style is so unique, I can always recognize your videos! Keep it up 👏',
-    user: {
-      id: 'user5',
-      username: 'dance_critic',
-      avatar: 'https://randomuser.me/api/portraits/women/5.jpg',
-      isVerified: false,
-    },
-    createdAt: new Date(Date.now() - 2 * 24 * 60 * 60 * 1000).toISOString(), // 2 days ago
-    likes: 41,
-    hasLiked: false,
-  },
-  {
-    id: '6',
-    text: 'The lighting in this video is perfect, what setup are you using?',
-    user: {
-      id: 'user6',
-      username: 'filmmaker',
-      avatar: 'https://randomuser.me/api/portraits/men/6.jpg',
-      isVerified: false,
-    },
-    createdAt: new Date(Date.now() - 5 * 60 * 60 * 1000).toISOString(), // 5 hours ago
-    likes: 17,
-    hasLiked: true,
-  },
-  {
-    id: '7',
-    text: 'This just popped up in my feed and now I can\'t stop watching it on repeat!',
-    user: {
-      id: 'user7',
-      username: 'new_follower',
-      avatar: 'https://randomuser.me/api/portraits/women/7.jpg',
-      isVerified: false,
-    },
-    createdAt: new Date(Date.now() - 30 * 60 * 1000).toISOString(), // 30 minutes ago
-    likes: 9,
-    hasLiked: false,
-  },
-  {
-    id: '8',
-    text: 'Does anyone know where I can find more tutorials like this?',
-    user: {
-      id: 'user8',
-      username: 'learning_to_dance',
-      avatar: 'https://randomuser.me/api/portraits/men/8.jpg',
-      isVerified: false,
-    },
-    createdAt: new Date(Date.now() - 8 * 60 * 60 * 1000).toISOString(), // 8 hours ago
-    likes: 5,
-    hasLiked: false,
-  }
-];
+// const MOCK_COMMENTS: Comment[] = [
+//   {
+//     id: '1',
+//     text: 'This video is amazing! The choreography is incredible 🔥',
+//     user: {
+//       id: 'user1',
+//       username: 'dancefan2023',
+//       avatar: 'https://randomuser.me/api/portraits/women/1.jpg',
+//       isVerified: false,
+//     },
+//     createdAt: new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString(), // 1 day ago
+//     likes: 24,
+//     hasLiked: false,
+//   },
+//   {
+//     id: '2',
+//     text: 'Love the music choice for this routine! Anyone know the song name?',
+//     user: {
+//       id: 'user2',
+//       username: 'musiclover',
+//       avatar: 'https://randomuser.me/api/portraits/men/2.jpg',
+//       isVerified: true,
+//     },
+//     createdAt: new Date(Date.now() - 3 * 60 * 60 * 1000).toISOString(), // 3 hours ago
+//     likes: 56,
+//     hasLiked: true,
+//   },
+//   {
+//     id: '3',
+//     text: 'I tried to learn this dance but it\'s so hard! Any tips?',
+//     user: {
+//       id: 'user3',
+//       username: 'beginner_dancer',
+//       avatar: 'https://randomuser.me/api/portraits/women/3.jpg',
+//       isVerified: false,
+//     },
+//     createdAt: new Date(Date.now() - 15 * 60 * 1000).toISOString(), // 15 minutes ago
+//     likes: 8,
+//     hasLiked: false,
+//   },
+//   {
+//     id: '4',
+//     text: 'Just shared this with my dance group, we\'re definitely going to try this!',
+//     user: {
+//       id: 'user4',
+//       username: 'dance_instructor',
+//       avatar: 'https://randomuser.me/api/portraits/men/4.jpg',
+//       isVerified: true,
+//     },
+//     createdAt: new Date(Date.now() - 45 * 60 * 1000).toISOString(), // 45 minutes ago
+//     likes: 32,
+//     hasLiked: false,
+//   },
+//   {
+//     id: '5',
+//     text: 'Your dance style is so unique, I can always recognize your videos! Keep it up 👏',
+//     user: {
+//       id: 'user5',
+//       username: 'dance_critic',
+//       avatar: 'https://randomuser.me/api/portraits/women/5.jpg',
+//       isVerified: false,
+//     },
+//     createdAt: new Date(Date.now() - 2 * 24 * 60 * 60 * 1000).toISOString(), // 2 days ago
+//     likes: 41,
+//     hasLiked: false,
+//   },
+//   {
+//     id: '6',
+//     text: 'The lighting in this video is perfect, what setup are you using?',
+//     user: {
+//       id: 'user6',
+//       username: 'filmmaker',
+//       avatar: 'https://randomuser.me/api/portraits/men/6.jpg',
+//       isVerified: false,
+//     },
+//     createdAt: new Date(Date.now() - 5 * 60 * 60 * 1000).toISOString(), // 5 hours ago
+//     likes: 17,
+//     hasLiked: true,
+//   },
+//   {
+//     id: '7',
+//     text: 'This just popped up in my feed and now I can\'t stop watching it on repeat!',
+//     user: {
+//       id: 'user7',
+//       username: 'new_follower',
+//       avatar: 'https://randomuser.me/api/portraits/women/7.jpg',
+//       isVerified: false,
+//     },
+//     createdAt: new Date(Date.now() - 30 * 60 * 1000).toISOString(), // 30 minutes ago
+//     likes: 9,
+//     hasLiked: false,
+//   },
+//   {
+//     id: '8',
+//     text: 'Does anyone know where I can find more tutorials like this?',
+//     user: {
+//       id: 'user8',
+//       username: 'learning_to_dance',
+//       avatar: 'https://randomuser.me/api/portraits/men/8.jpg',
+//       isVerified: false,
+//     },
+//     createdAt: new Date(Date.now() - 8 * 60 * 60 * 1000).toISOString(), // 8 hours ago
+//     likes: 5,
+//     hasLiked: false,
+//   }
+// ];
 
 // Helper function to calculate time ago for comments
 const formatTimeAgo = (dateString: string): string => {
@@ -318,49 +325,116 @@ const formatTimeAgo = (dateString: string): string => {
 };
 
 // Component for rendering a single comment
-const CommentItem = ({ comment, onLike }: { comment: Comment, onLike: (id: string) => void }) => {
+const CommentItem = ({ 
+  comment, 
+  onLike, 
+  onDelete, 
+  canDelete
+}: { 
+  comment: Comment, 
+  onLike: (id: string) => void, 
+  onDelete: (id: string) => void,
+  canDelete: boolean
+}) => {
   const [showReplies, setShowReplies] = useState(false);
+  const [showOptions, setShowOptions] = useState(false);
   
   return (
-    <View style={commentStyles.commentItem}>
+    <View style={{
+      flexDirection: 'row',
+      marginBottom: 20,
+      paddingBottom: 10,
+      borderBottomWidth: 1,
+      borderBottomColor: 'rgba(255, 255, 255, 0.05)',
+    }}>
       <Image 
         source={{ uri: comment.user.avatar || 'https://via.placeholder.com/40' }} 
-        style={commentStyles.avatar} 
+        style={{
+          width: 40,
+          height: 40,
+          borderRadius: 20,
+          marginRight: 12,
+        }} 
       />
-      <View style={commentStyles.commentContent}>
-        <View style={commentStyles.commentHeader}>
-          <Text style={commentStyles.username}>{comment.user.username}</Text>
+      <View style={{
+        flex: 1,
+      }}>
+        <View style={{
+          flexDirection: 'row',
+          alignItems: 'center',
+          marginBottom: 4,
+        }}>
+          <Text style={{
+            fontSize: 14,
+            fontWeight: 'bold',
+            color: 'white',
+          }}>{comment.user.username}</Text>
           {comment.user.isVerified && (
-            <View style={commentStyles.verifiedBadge}>
+            <View style={{
+              marginLeft: 4,
+            }}>
               <TunnelVerifiedMark size={12} />
             </View>
           )}
+          
+          {canDelete && (
+            <Pressable 
+              onPress={() => onDelete(comment.id)} 
+              style={styles.deleteButton}
+              hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+            >
+              <Trash2 size={16} color="#FF4D67" />
+            </Pressable>
+          )}
         </View>
-        <Text style={commentStyles.commentText}>{comment.text}</Text>
-        <View style={commentStyles.commentActions}>
-          <Text style={commentStyles.timeAgo}>{formatTimeAgo(comment.createdAt)}</Text>
-          <Pressable style={commentStyles.replyButton}>
-            <Text style={commentStyles.replyText}>Reply</Text>
+        <Text style={{
+          fontSize: 14,
+          color: 'white',
+          lineHeight: 20,
+          marginBottom: 6,
+        }}>{comment.text}</Text>
+        <View style={{
+          flexDirection: 'row',
+          alignItems: 'center',
+        }}>
+          <Text style={{
+            fontSize: 12,
+            color: '#888',
+            marginRight: 16,
+          }}>{formatTimeAgo(comment.createdAt)}</Text>
+          
+          <Pressable style={{
+            padding: 4,
+            marginRight: 16,
+          }}>
+            <Text style={{
+              fontSize: 12,
+              color: '#888',
+            }}>Reply</Text>
           </Pressable>
-        </View>
-        
-        <View style={commentStyles.likesContainer}>
+          
           <Pressable 
-            style={commentStyles.likeButton} 
+            style={{
+              padding: 4,
+              flexDirection: 'row',
+              alignItems: 'center',
+            }} 
             onPress={() => onLike(comment.id)}
+            hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
           >
             <Heart 
-              size={20} 
+              size={16} 
               color={comment.hasLiked ? '#FF4D67' : 'rgba(255, 255, 255, 0.6)'} 
               fill={comment.hasLiked ? '#FF4D67' : 'transparent'} 
             />
+            <Text style={{
+              fontSize: 12,
+              color: comment.hasLiked ? '#FF4D67' : 'rgba(255, 255, 255, 0.6)',
+              marginLeft: 4,
+            }}>
+              {comment.likes}
+            </Text>
           </Pressable>
-          <Text style={[
-            commentStyles.likeCount,
-            comment.hasLiked && commentStyles.likedCount
-          ]}>
-            {comment.likes}
-          </Text>
         </View>
       </View>
     </View>
@@ -374,26 +448,103 @@ interface CommentsSectionProps {
   onClose: () => void;
   commentCount: number;
   router: any;
-  isFullScreen?: boolean; // Make it optional with ?
+  isFullScreen?: boolean;
+  videoAuthorId?: string;
+  onCommentCountChange?: (count: number) => void;
 }
 
 const CommentsSection: React.FC<CommentsSectionProps> = ({ 
   videoId, 
   visible, 
   onClose,
-  commentCount,
+  commentCount: initialCommentCount,
   router,
-  isFullScreen = false // Set default value to false
+  isFullScreen = false,
+  videoAuthorId,
+  onCommentCountChange
 }) => {
-  const [comments, setComments] = useState<Comment[]>(MOCK_COMMENTS);
+  const [comments, setComments] = useState<Comment[]>([]);
+  const [localCommentCount, setLocalCommentCount] = useState(initialCommentCount);
   const [newComment, setNewComment] = useState('');
   const [keyboardHeight, setKeyboardHeight] = useState(0);
   const [isKeyboardVisible, setIsKeyboardVisible] = useState(false);
   const [isInputFocused, setIsInputFocused] = useState(false);
-  const [isClosing, setIsClosing] = useState(false); // Track panel closing state
+  const [isClosing, setIsClosing] = useState(false);
+  const [isLoading, setIsLoading] = useState(false);
+  const [isDeleting, setIsDeleting] = useState(false);
+  
+  const { user } = useSanityAuth();
+  
+  // Update local count when prop changes
+  useEffect(() => {
+    setLocalCommentCount(initialCommentCount);
+  }, [initialCommentCount]);
+  
+  // Add the deleteComment function
+  const handleDeleteComment = async (commentId: string) => {
+    if (!user || !user._id || !videoId) {
+      console.warn('User not authenticated or video ID missing');
+      return;
+    }
+    
+    // Confirm deletion
+    Alert.alert(
+      "Delete Comment", 
+      "Are you sure you want to delete this comment?", 
+      [
+        {
+          text: "Cancel",
+          style: "cancel"
+        },
+        {
+          text: "Delete",
+          style: "destructive",
+          onPress: async () => {
+            setIsDeleting(true);
+            try {
+              // Optimistically update the UI
+              setComments(prevComments => 
+                prevComments.filter(comment => comment.id !== commentId)
+              );
+              
+              // Update comment count immediately
+              const newCount = Math.max(0, localCommentCount - 1);
+              setLocalCommentCount(newCount);
+              
+              // Notify parent component of the updated count
+              onCommentCountChange?.(newCount);
+              
+              // Call API to delete the comment
+              await deleteComment(commentId, user._id, videoId);
+              
+              // Haptic feedback for successful deletion
+              Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+            } catch (error) {
+              console.error('Error deleting comment:', error);
+              // If there was an error, reload all comments
+              loadComments();
+              // Haptic feedback for error
+              Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
+              Alert.alert('Error', 'Failed to delete the comment. Please try again.');
+            } finally {
+              setIsDeleting(false);
+            }
+          }
+        }
+      ]
+    );
+  };
+  
+  // Check if the current user can delete a specific comment
+  const canDeleteComment = (commentAuthorId: string): boolean => {
+    if (!user || !user._id) return false;
+    
+    // User can delete their own comments or comments on their videos
+    return user._id === commentAuthorId || user._id === videoAuthorId;
+  };
   
   const panelAnimation = useRef(new Animated.Value(visible ? 0 : SCREEN_HEIGHT)).current;
-  const backdropAnimation = useRef(new Animated.Value(visible ? 1 : 0)).current; // For backdrop opacity
+  const backdropAnimation = useRef(new Animated.Value(visible ? 1 : 0)).current;
   const scrollViewRef = useRef<ScrollView>(null);
   const scrollPositionRef = useRef(0);
   const hasUserScrolled = useRef(false);
@@ -402,6 +553,49 @@ const CommentsSection: React.FC<CommentsSectionProps> = ({
   // Track completion to prevent reopening
   const isFirstRender = useRef(true);
   const isAnimatingRef = useRef(false);
+  
+  // Load comments when the panel becomes visible
+  useEffect(() => {
+    if (visible && videoId) {
+      loadComments();
+    }
+  }, [visible, videoId]);
+  
+  // Load comments from Sanity
+  const loadComments = async () => {
+    if (!videoId) return;
+    
+    setIsLoading(true);
+    try {
+      const fetchedComments = await fetchComments(videoId);
+      setComments(fetchedComments);
+      
+      // Update the local comment count based on the number of fetched comments
+      const newCount = fetchedComments.length;
+      setLocalCommentCount(newCount);
+      
+      // Notify parent component of the updated count
+      onCommentCountChange?.(newCount);
+    } catch (error) {
+      console.error('Error loading comments:', error);
+    } finally {
+      setIsLoading(false);
+    }
+  };
+  
+  // Update commentCount when comments change
+  useEffect(() => {
+    const updateCommentCount = async () => {
+      if (videoId) {
+        const count = await getCommentCount(videoId);
+        // This would typically update the parent component, but for now
+        // we'll just log it as we're using props for commentCount
+        console.log('Updated comment count:', count);
+      }
+    };
+    
+    updateCommentCount();
+  }, [comments.length, videoId]);
   
   // Add keyboard event listeners with improved scroll behavior
   useEffect(() => {
@@ -437,7 +631,7 @@ const CommentsSection: React.FC<CommentsSectionProps> = ({
               y: scrollPositionRef.current, 
               animated: false 
             });
-          }, 50);
+          }, 500);
         }
       }
     );
@@ -565,52 +759,71 @@ const CommentsSection: React.FC<CommentsSectionProps> = ({
     }
   }, [visible]);
   
-  const handleLikeComment = (commentId: string) => {
+  const handleLikeComment = async (commentId: string) => {
+    if (!user || !user._id) {
+      console.warn('User not authenticated');
+      return;
+    }
+    
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-    setComments(prevComments => 
-      prevComments.map(comment => 
-        comment.id === commentId 
-          ? { 
-              ...comment, 
-              hasLiked: !comment.hasLiked,
-              likes: comment.hasLiked ? comment.likes - 1 : comment.likes + 1 
-            } 
-          : comment
-      )
-    );
+    
+    try {
+      // First update UI optimistically
+      setComments(prevComments => 
+        prevComments.map(comment => 
+          comment.id === commentId 
+            ? { 
+                ...comment, 
+                hasLiked: !comment.hasLiked,
+                likes: comment.hasLiked ? comment.likes - 1 : comment.likes + 1 
+              } 
+            : comment
+        )
+      );
+      
+      // Then persist the change to Sanity - make sure videoId is passed
+      const result = await toggleLikeComment(commentId, user._id, videoId);
+      
+      // If something went wrong, revert to the actual state from the server
+      if (!result) {
+        loadComments(); // Reload comments to get the correct state
+      }
+    } catch (error) {
+      console.error('Error liking comment:', error);
+      loadComments(); // Reload on error to ensure UI is consistent
+    }
   };
   
-  const handleSubmitComment = () => {
-    if (!newComment.trim()) return;
+  const handleSubmitComment = async () => {
+    if (!newComment.trim() || !user || !user._id) return;
     
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
     
-    const newCommentObj: Comment = {
-      id: `new-${Date.now()}`,
-      text: newComment,
-      user: {
-        id: 'current-user',
-        username: 'me',
-        avatar: 'https://randomuser.me/api/portraits/men/20.jpg',
-        isVerified: false,
-      },
-      createdAt: new Date().toISOString(),
-      likes: 0,
-      hasLiked: false,
-    };
-    
-    setComments([newCommentObj, ...comments]);
-    setNewComment('');
-    
-    // Scroll to the top since newest comments appear at the top
-    setTimeout(() => {
-      if (scrollViewRef.current) {
-        scrollViewRef.current.scrollTo({ y: 0, animated: true });
-      }
+    try {
+      // Add the comment to Sanity
+      const newCommentObj = await addComment(videoId, user._id, newComment);
       
-      // Dismiss keyboard after sending comment (optional - TikTok keeps it open)
-      // Keyboard.dismiss();
-    }, 100);
+      // Update local state with the new comment
+      setComments(prevComments => [newCommentObj, ...prevComments]);
+      setNewComment('');
+      
+      // Update comment count immediately
+      const newCount = localCommentCount + 1;
+      setLocalCommentCount(newCount);
+      
+      // Notify parent component of the updated count
+      onCommentCountChange?.(newCount);
+      
+      // Scroll to the top since newest comments appear at the top
+      setTimeout(() => {
+        if (scrollViewRef.current) {
+          scrollViewRef.current.scrollTo({ y: 0, animated: true });
+        }
+      }, 100);
+    } catch (error) {
+      console.error('Error submitting comment:', error);
+      Alert.alert('Error', 'Failed to post your comment. Please try again.');
+    }
   };
   
   const focusInput = () => {
@@ -632,7 +845,7 @@ const CommentsSection: React.FC<CommentsSectionProps> = ({
             bottom: 0,
             backgroundColor: 'rgba(0, 0, 0, 0.5)',
             zIndex: 999,
-            opacity: backdropAnimation, // Use animated value for smooth fade
+            opacity: backdropAnimation,
           }}
         >
           <Pressable 
@@ -684,7 +897,7 @@ const CommentsSection: React.FC<CommentsSectionProps> = ({
               color: 'white',
               textAlign: 'center',
             }}>
-              {commentCount} comments
+              {localCommentCount} comments
             </Text>
             <Pressable onPress={handleClose} style={{
               padding: 8,
@@ -701,56 +914,65 @@ const CommentsSection: React.FC<CommentsSectionProps> = ({
             flex: 1, 
             marginBottom: isKeyboardVisible ? keyboardHeight - (Platform.OS === 'ios' ? 30 : 60) : 0 
           }}>
-            <ScrollView
-              ref={scrollViewRef}
-              showsVerticalScrollIndicator={true}
-              bounces={true}
-              contentContainerStyle={{
-                padding: 16,
-                paddingBottom: 150,
-                flexGrow: 1,
-              }}
-              persistentScrollbar={true}
-              keyboardShouldPersistTaps="handled"
-              onScroll={handleScroll}
-              scrollEventThrottle={16}
-            >
-              {comments.length > 0 ? (
-                comments.map(comment => (
-                  <CommentItem 
-                    key={comment.id} 
-                    comment={comment} 
-                    onLike={handleLikeComment} 
-                  />
-                ))
-              ) : (
-                <View style={{
-                  flex: 1,
-                  alignItems: 'center',
-                  justifyContent: 'center',
-                  paddingTop: 60,
-                }}>
-                  <MessageCircle color="#888" size={40} />
-                  <Text style={{
-                    fontSize: 16,
-                    fontWeight: 'bold',
-                    color: '#888',
-                    marginTop: 16,
-                  }}>No comments yet</Text>
-                  <Text style={{
-                    fontSize: 14,
-                    color: '#666',
-                    marginTop: 8,
-                  }}>Be the first to comment</Text>
-                </View>
-              )}
-            </ScrollView>
+            {isLoading ? (
+              <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center' }}>
+                <ActivityIndicator size="large" color="#1877F2" />
+                <Text style={{ color: '#888', marginTop: 16 }}>Loading comments...</Text>
+              </View>
+            ) : (
+              <ScrollView
+                ref={scrollViewRef}
+                showsVerticalScrollIndicator={true}
+                bounces={true}
+                contentContainerStyle={{
+                  padding: 16,
+                  paddingBottom: 150,
+                  flexGrow: 1,
+                }}
+                persistentScrollbar={true}
+                keyboardShouldPersistTaps="handled"
+                onScroll={handleScroll}
+                scrollEventThrottle={16}
+              >
+                {comments.length > 0 ? (
+                  comments.map(comment => (
+                    <CommentItem 
+                      key={comment.id} 
+                      comment={comment} 
+                      onLike={handleLikeComment} 
+                      onDelete={handleDeleteComment}
+                      canDelete={canDeleteComment(comment.user.id)}
+                    />
+                  ))
+                ) : (
+                  <View style={{
+                    flex: 1,
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    paddingTop: 60,
+                  }}>
+                    <MessageCircle color="#888" size={40} />
+                    <Text style={{
+                      fontSize: 16,
+                      fontWeight: 'bold',
+                      color: '#888',
+                      marginTop: 16,
+                    }}>No comments yet</Text>
+                    <Text style={{
+                      fontSize: 14,
+                      color: '#666',
+                      marginTop: 8,
+                    }}>Be the first to comment</Text>
+                  </View>
+                )}
+              </ScrollView>
+            )}
           </View>
           
           {/* Input bar - TikTok style keyboard tracking */}
           <View style={{
             position: 'absolute',
-            bottom: isKeyboardVisible ? keyboardHeight : (isFullScreen ? 0 : 80),
+            bottom: isKeyboardVisible ? keyboardHeight : (isFullScreen ? 10 : 90),
             left: 0,
             right: 0,
             backgroundColor: '#1A1A1A',
@@ -793,27 +1015,14 @@ const CommentsSection: React.FC<CommentsSectionProps> = ({
               returnKeyType="default"
             />
             <Pressable 
-              style={[
-                {
-                  width: 38,
-                  height: 38,
-                  borderRadius: 19,
-                  backgroundColor: '#1877F2',
-                  justifyContent: 'center',
-                  alignItems: 'center',
-                },
-                !newComment.trim() && {
-                  backgroundColor: '#2a2a2a',
-                }
-              ]}
               onPress={handleSubmitComment}
-              disabled={!newComment.trim()}
+              disabled={!newComment.trim()} 
+              style={{ 
+                padding: 8,
+                opacity: newComment.trim() ? 1 : 0.5
+              }}
             >
-              <Send 
-                color={newComment.trim() ? '#FFFFFF' : '#666'} 
-                size={20} 
-                style={{ transform: [{ rotate: '45deg' }] }}
-              />
+              <Send color={newComment.trim() ? "#1877F2" : "#555"} size={24} />
             </Pressable>
           </View>
         </View>
@@ -1029,6 +1238,10 @@ const commentStyles = StyleSheet.create({
     backgroundColor: 'rgba(255, 255, 255, 0.2)',
     borderRadius: 2,
   },
+  deleteButton: {
+    padding: 4,
+    marginLeft: 8,
+  },
 });
 
 const VideoItemComponent = memo(({
@@ -1043,7 +1256,10 @@ const VideoItemComponent = memo(({
   isTabFocused,
   isFullScreen = false,
   toggleFullScreen,
-  router
+  router,
+  forceCloseComments = false,
+  onCommentsOpened,
+  onCommentsClosed
 }: VideoItemProps): JSX.Element => {
   const { addPoints, hasWatchedVideo } = usePoints();
   const { getVideoReactions, updateReaction, loadReactions } = useReactions();
@@ -1061,6 +1277,7 @@ const VideoItemComponent = memo(({
   const [hasDiscoveredComments, setHasDiscoveredComments] = useState(false);
   // Add status state variable
   const [status, setStatus] = useState<any>(null);
+  const [commentCount, setCommentCount] = useState(0);
   
   const videoRef = useRef<any>(null);
   const pointsAnimation = useRef(new Animated.Value(0)).current;
@@ -1119,6 +1336,8 @@ const VideoItemComponent = memo(({
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
     setHasDiscoveredComments(true);
     setShowComments(true);
+    // Notify parent that comments are open
+    onCommentsOpened?.();
     Animated.spring(slideAnim, {
       toValue: 0,
       useNativeDriver: true,
@@ -1133,9 +1352,8 @@ const VideoItemComponent = memo(({
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
     // Set showComments to false immediately to prevent reopening
     setShowComments(false);
-    
-    // No need to trigger animation here as the CommentsSection will handle it internally
-    // The animation will be triggered by the visibility prop change
+    // Notify parent that comments are closed
+    onCommentsClosed?.();
   };
 
   // Listen for tab state changes
@@ -1593,6 +1811,38 @@ const VideoItemComponent = memo(({
 
   const { videoInfoStyle, actionButtonsStyle } = getContentPositionStyles();
 
+  // Add effect to respond to the forceCloseComments prop
+  useEffect(() => {
+    if (forceCloseComments && showComments) {
+      console.log('Force closing comments for video:', item.id);
+      closeComments();
+    }
+  }, [forceCloseComments, item.id, showComments]);
+
+  // Load comment count when component mounts or becomes current
+  useEffect(() => {
+    if (isCurrentVideo) {
+      loadCommentCount();
+    }
+  }, [isCurrentVideo, item.id]);
+
+  // Function to fetch comment count from Sanity
+  const loadCommentCount = async (directCount?: number) => {
+    try {
+      if (directCount !== undefined) {
+        // If a direct count is provided (from CommentsSection), use it directly
+        setCommentCount(directCount);
+        return;
+      }
+      
+      if (!item || !item.id) return;
+      const count = await getCommentCount(item.id);
+      setCommentCount(count);
+    } catch (error) {
+      console.error('Error loading comment count:', error);
+    }
+  };
+
   return (
     <View style={[
       styles.videoContainer,
@@ -1775,7 +2025,7 @@ const VideoItemComponent = memo(({
                 <View style={styles.commentIconContainer}>
                   <MessageCircle color="white" size={SCREEN_WIDTH * 0.055} />
                 </View>
-                <Text style={styles.actionCount}>{item.comments || 0}</Text>
+                <Text style={styles.actionCount}>{commentCount}</Text>
               </Pressable>
               {!hasDiscoveredComments && (
                 <View style={styles.discoveryDot} />
@@ -1832,9 +2082,11 @@ const VideoItemComponent = memo(({
         videoId={item.id}
         visible={showComments}
         onClose={closeComments}
-        commentCount={item.comments || 0}
+        commentCount={commentCount}
         router={router}
         isFullScreen={isFullScreen}
+        videoAuthorId={item.authorId}
+        onCommentCountChange={loadCommentCount}
       />
       
       {/* Lock overlay when premium alert is shown */}
@@ -1900,6 +2152,10 @@ export default function VideoFeed() {
   const [isTabFocused, setIsTabFocused] = useState(true);
   const [isFullScreen, setIsFullScreen] = useState(false);
   const [activeHeaderTab, setActiveHeaderTab] = useState(0);
+  const [forceCloseCommentsFlags, setForceCloseCommentsFlags] = useState<Record<string, boolean>>({});
+  // Add state for tracking if any comments section is open
+  const [isCommentsOpen, setIsCommentsOpen] = useState(false);
+
   const { user } = useSanityAuth();
   const router = useRouter();
   
@@ -2370,9 +2626,26 @@ export default function VideoFeed() {
       const index = info.viewableItems[0].index ?? 0;
       console.log('Changed to video index:', index);
       
-      // Immediately stop previous video with audio fade
-      if (index !== currentVideoIndex) {
+      // If changing to a different video, force close comments on previous video
+      if (index !== currentVideoIndex && videos.length > 0) {
         const prevVideo = videos[currentVideoIndex];
+        if (prevVideo) {
+          // Set flag to force close comments for the video we're leaving
+          setForceCloseCommentsFlags(prev => ({
+            ...prev,
+            [prevVideo.id]: true
+          }));
+          
+          // Reset the flag after a short delay
+          setTimeout(() => {
+            setForceCloseCommentsFlags(prev => ({
+              ...prev,
+              [prevVideo.id]: false
+            }));
+          }, 500);
+        }
+        
+        // Immediately stop previous video with audio fade
         if (prevVideo && videoRefs.current[prevVideo.id] && videoRefs.current[prevVideo.id].current) {
           // Use our audio fade function instead of direct stopAsync
           stopVideoWithAudioFade(prevVideo.id);
@@ -2541,10 +2814,10 @@ export default function VideoFeed() {
     handleClosePremiumAd(false);
   };
 
-  // Continue watching should advance to next video
+  // Continue watching should NOT advance to next video
   const handleContinueWatchingPress = () => {
-    // First close the premium ad
-    handleClosePremiumAd(true);
+    // Close the premium ad without advancing to next video
+    handleClosePremiumAd(false);
   };
   
   // Track the last time home tab was tapped for double-tap detection
@@ -2600,6 +2873,15 @@ export default function VideoFeed() {
     };
   }, [loadVideos, activeHeaderTab, isTabFocused, isFullScreen]);
   
+  // Add handlers to update comments open/closed state
+  const handleCommentsOpened = useCallback(() => {
+    setIsCommentsOpen(true);
+  }, []);
+
+  const handleCommentsClosed = useCallback(() => {
+    setIsCommentsOpen(false);
+  }, []);
+  
   // Render video item
   const renderVideo = ({ item, index }: { item: VideoItem; index: number }) => (
     <VideoItemComponent
@@ -2616,6 +2898,9 @@ export default function VideoFeed() {
       isFullScreen={isFullScreen}
       toggleFullScreen={toggleFullScreen}
       router={router}
+      forceCloseComments={forceCloseCommentsFlags[item.id] || false}
+      onCommentsOpened={handleCommentsOpened}
+      onCommentsClosed={handleCommentsClosed}
     />
   );
   
@@ -2695,6 +2980,7 @@ export default function VideoFeed() {
             </Pressable>
           </View>
         }
+        scrollEnabled={!isCommentsOpen}  // Add this line
       />
       
       {/* Show spinner when loading more videos */}
@@ -3539,4 +3825,12 @@ const styles = StyleSheet.create({
     fontSize: 12,
     fontWeight: '500',
   },
+  deleteButton: {
+    marginLeft: 'auto',
+    padding: 6,
+    backgroundColor: 'rgba(255, 77, 103, 0.1)',
+    borderRadius: 16,
+    alignItems: 'center',
+    justifyContent: 'center',
+  }
 });

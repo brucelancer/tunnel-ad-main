@@ -97,6 +97,82 @@ export default {
       initialValue: 0
     },
     {
+      name: 'comments',
+      title: 'Comments',
+      type: 'array',
+      of: [
+        {
+          type: 'object',
+          name: 'comment',
+          fields: [
+            {
+              name: 'text',
+              type: 'text',
+              title: 'Comment Text',
+              validation: Rule => Rule.required()
+            },
+            {
+              name: 'author',
+              type: 'reference',
+              to: [{ type: 'user' }],
+              title: 'Comment Author',
+              validation: Rule => Rule.required()
+            },
+            {
+              name: 'createdAt',
+              type: 'datetime',
+              title: 'Created At',
+              initialValue: () => new Date().toISOString()
+            },
+            {
+              name: 'likes',
+              type: 'number',
+              title: 'Comment Likes',
+              initialValue: 0
+            },
+            {
+              name: 'likedBy',
+              title: 'Liked By',
+              type: 'array',
+              of: [{ type: 'reference', to: [{ type: 'user' }] }],
+              initialValue: []
+            },
+            {
+              name: 'parent',
+              title: 'Parent Comment ID',
+              type: 'string',
+              description: 'ID of parent comment if this is a reply'
+            }
+          ],
+          preview: {
+            select: {
+              title: 'text',
+              username: 'author.username',
+              authorName: 'author.firstName',
+              likes: 'likes'
+            },
+            prepare(selection) {
+              const {title, username, authorName, likes} = selection;
+              const truncatedText = title ? (title.length > 50 ? title.substring(0, 50) + '...' : title) : 'No text';
+              const author = username || authorName || 'Unknown user';
+              
+              return {
+                title: truncatedText,
+                subtitle: `By: ${author} • ${likes || 0} likes`
+              };
+            }
+          }
+        }
+      ],
+      initialValue: []
+    },
+    {
+      name: 'commentsCount',
+      title: 'Comments Count',
+      type: 'number',
+      initialValue: 0
+    },
+    {
       name: 'tags',
       title: 'Tags',
       type: 'array',
