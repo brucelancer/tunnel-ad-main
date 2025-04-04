@@ -32,7 +32,7 @@ import {
 } from 'react-native';
 import * as Haptics from 'expo-haptics';
 import { Video, ResizeMode, Audio } from 'expo-av';
-import { useRouter, useFocusEffect } from 'expo-router';
+import { useRouter, useFocusEffect, useLocalSearchParams } from 'expo-router';
 import { 
   Play, 
   Share2, 
@@ -1969,50 +1969,14 @@ const VideoItemComponent = memo(({
               <ThumbsUp 
                 color={reactions.userAction === 'like' ? '#1877F2' : 'white'} 
                 fill={reactions.userAction === 'like' ? '#1877F2' : 'transparent'}
-                size={SCREEN_WIDTH * 0.06} 
+                size={Math.max(Math.min(videoSize.height * 0.06, SCREEN_WIDTH * 0.08), 24)} 
               />
               <Text style={[styles.actionCount, reactions.userAction === 'like' && styles.activeCount]}>
                 {reactions.likes}
               </Text>
             </Pressable>
-            <Pressable onPress={handleDislike} style={styles.actionButton}>
-              <ThumbsDown 
-                color={reactions.userAction === 'dislike' ? '#1877F2' : 'white'} 
-                fill={reactions.userAction === 'dislike' ? '#1877F2' : 'transparent'}
-                size={SCREEN_WIDTH * 0.06} 
-              />
-              <Text style={[styles.actionCount, reactions.userAction === 'dislike' && styles.activeCount]}>
-                {reactions.dislikes}
-              </Text>
-            </Pressable>
-            
-            {/* Auto-scroll button placed in the like container to be static */}
-              <Pressable 
-                style={[
-                styles.autoScrollButton,
-                autoScroll && styles.autoScrollButtonActive
-                ]} 
-                onPress={toggleAutoScroll}
-              >
-                <PlayCircle 
-                color={autoScroll ? '#1877F2' : 'white'} 
-                fill={autoScroll ? 'rgba(24, 119, 242, 0.3)' : 'transparent'}
-                size={SCREEN_WIDTH * 0.06} 
-                />
-                <Text style={[
-                styles.actionCount, 
-                autoScroll ? styles.activeCount : null
-                ]}>
-                Auto
-                </Text>
-              </Pressable>
-          </View>
-          
-          <Pressable onPress={onShare} style={styles.shareButton}>
-            <Share2 color="white" size={SCREEN_WIDTH * 0.06} />
-          </Pressable>
-            
-            {/* Add comment button */}
+
+            {/* Comment button */}
             <View style={styles.commentButtonContainer}>
               <Pressable 
                 onPress={() => {
@@ -2023,15 +1987,48 @@ const VideoItemComponent = memo(({
                 style={styles.commentButton}
               >
                 <View style={styles.commentIconContainer}>
-                  <MessageCircle color="white" size={SCREEN_WIDTH * 0.055} />
+                  <MessageCircle 
+                    color="white" 
+                    size={Math.max(Math.min(videoSize.height * 0.055, SCREEN_WIDTH * 0.08), 24)} 
+                  />
                 </View>
                 <Text style={styles.actionCount}>{commentCount}</Text>
-              </Pressable>
+            </Pressable>
               {!hasDiscoveredComments && (
                 <View style={styles.discoveryDot} />
               )}
             </View>
+
+            {/* Share button */}
+            <Pressable onPress={onShare} style={styles.shareButton}>
+              <Share2 
+                color="white" 
+                size={Math.max(Math.min(videoSize.height * 0.06, SCREEN_WIDTH * 0.08), 24)} 
+              />
+            </Pressable>
             
+            {/* Auto-scroll button */}
+              <Pressable 
+                style={[
+                styles.autoScrollButton,
+                autoScroll && styles.autoScrollButtonActive
+                ]} 
+                onPress={toggleAutoScroll}
+              >
+                <PlayCircle 
+                color={autoScroll ? '#1877F2' : 'white'} 
+                fill={autoScroll ? 'rgba(24, 119, 242, 0.3)' : 'transparent'}
+                size={Math.max(Math.min(videoSize.height * 0.06, SCREEN_WIDTH * 0.08), 24)} 
+                />
+                <Text style={[
+                styles.actionCount, 
+                autoScroll ? styles.activeCount : null
+                ]}>
+                Auto
+                </Text>
+              </Pressable>
+          </View>
+          
           <View style={styles.watchedContainer}>
             {hasEarnedPoints && <CheckCircle color="#00ff00" size={SCREEN_WIDTH * 0.06} />}
             {showStaticPoints && !showPointsAnimation && (
@@ -2155,6 +2152,9 @@ export default function VideoFeed() {
   const [forceCloseCommentsFlags, setForceCloseCommentsFlags] = useState<Record<string, boolean>>({});
   // Add state for tracking if any comments section is open
   const [isCommentsOpen, setIsCommentsOpen] = useState(false);
+  
+  // Get route params if any - for playing a specific video from Feed
+  const { initialVideoId, autoPlay } = useLocalSearchParams<{ initialVideoId?: string; autoPlay?: string }>();
 
   const { user } = useSanityAuth();
   const router = useRouter();
@@ -2247,6 +2247,71 @@ export default function VideoFeed() {
       setShowRefreshIndicator(false);
     });
   }, [refreshIndicatorOpacity]);
+  
+  // Add function to find index of a video by ID
+  const findVideoIndexById = useCallback((videoId: string | undefined) => {
+    if (!videoId) return -1;
+    return videos.findIndex(video => video.id === videoId);
+  }, [videos]);
+  
+  // Add useEffect to handle initialVideoId from params
+  useEffect(() => {
+    if (initialVideoId && videos.length > 0) {
+      const index = findVideoIndexById(initialVideoId);
+      if (index !== -1) {
+        console.log(`Scrolling to video with ID: ${initialVideoId} at index: ${index}`);
+      setCurrentVideoIndex(index);
+        
+        // Scroll to the specified video
+        if (flatListRef.current) {
+          setTimeout(() => {
+            flatListRef.current?.scrollToIndex({
+              index: index,
+              animated: true,
+              viewPosition: 0.5
+            });
+          }, 300);
+        }
+      } else {
+        console.log(`Video with ID: ${initialVideoId} not found in loaded videos`);
+        // If the video isn't in the current list, try to load it specifically
+        loadSpecificVideo(initialVideoId);
+      }
+    }
+  }, [initialVideoId, videos, findVideoIndexById]);
+  
+  // Add a function to load a specific video by ID
+  const loadSpecificVideo = useCallback(async (videoId: string) => {
+    try {
+      setIsLoading(true);
+      console.log(`Loading specific video with ID: ${videoId}`);
+      
+      // Query for videos and then filter client-side for the specific video
+      const allVideos = await videoService.fetchVideos(20, null);
+      
+      // Find the specific video with our ID
+      const specificVideo = allVideos.find((video: VideoItem) => video.id === videoId);
+      
+      if (specificVideo) {
+        // Add this video at the beginning of the list if not already present
+        setVideos(prev => {
+          // Check if video already exists to avoid duplicates
+          const exists = prev.some(v => v.id === specificVideo.id);
+          if (exists) return prev;
+          return [specificVideo, ...prev];
+        });
+        
+        // Set this as the current video
+        setCurrentVideoIndex(0);
+      } else {
+        console.error(`Video with ID: ${videoId} not found`);
+      }
+    } catch (error) {
+      console.error(`Error loading specific video: ${error}`);
+    } finally {
+      setIsLoading(false);
+    }
+  }, []);
   
   // Enhanced loadVideos function with visual feedback
   const loadVideos = useCallback(async (refresh = false) => {

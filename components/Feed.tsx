@@ -1,4 +1,4 @@
-import React, { useState, useRef, useEffect, useCallback } from 'react';
+import React, { useState, useRef, useEffect, useCallback, useMemo } from 'react';
 import { 
   View, 
   Text, 
@@ -45,7 +45,8 @@ import {
   BadgeCheck,
   X,
   Clock,
-  AlertTriangle
+  AlertTriangle,
+  Play // Add Play icon for videos
 } from 'lucide-react-native';
 import { usePostFeed } from '@/app/hooks/usePostFeed';
 import { PinchGestureHandler, State, GestureHandlerRootView } from 'react-native-gesture-handler';
@@ -54,8 +55,31 @@ import Svg, { Path } from 'react-native-svg';
 import * as sanityAuthService from '@/tunnel-ad-main/services/sanityAuthService';
 import FloatingChatButton from './FloatingChatButton';
 import { eventEmitter } from '../app/utils/eventEmitter';
+// Import videoService to fetch videos
+import videoService from '@/tunnel-ad-main/services/videoService.js';
 
 const { width: SCREEN_WIDTH } = Dimensions.get('window');
+
+// Add VideoItem interface to match VideoFeed component
+interface VideoItem {
+  id: string;
+  url: string;
+  title: string;
+  author: string;
+  description: string;
+  points: number;
+  type: 'vertical' | 'horizontal';
+  aspectRatio?: number;
+  thumbnail?: string;
+  views?: number;
+  likes?: number;
+  dislikes?: number;
+  comments?: number;
+  authorId?: string;
+  authorAvatar?: string;
+  isVerified?: boolean;
+  isBlueVerified?: boolean;
+}
 
 // Extend the user type to include isBlueVerified
 interface UserData {
@@ -735,6 +759,12 @@ interface ReportDocument {
   };
 }
 
+// After the UserData interface, add a combined FeedItem type definition
+interface FeedItem extends PostData {
+  type?: 'post' | 'video';
+  videoData?: VideoItem;
+}
+
 export default function Feed() {
   const [posts, setPosts] = useState<typeof FEED_POSTS>([]);
   const [refreshing, setRefreshing] = useState(false);
@@ -751,6 +781,10 @@ export default function Feed() {
   const [postImages, setPostImages] = useState<string[]>([]);
   const [postLocation, setPostLocation] = useState('');
   const [createPostVisible, setCreatePostVisible] = useState(false);
+  
+  // Add state for videos
+  const [videos, setVideos] = useState<VideoItem[]>([]);
+  const [loadingVideos, setLoadingVideos] = useState(false);
   
   // State for menu actions
   const [menuVisible, setMenuVisible] = useState(false);
@@ -901,12 +935,28 @@ export default function Feed() {
     }
   };
 
-  // Update local posts state when Sanity posts change
+  // Fetch videos from Sanity
+  const fetchVideos = useCallback(async () => {
+    try {
+      setLoadingVideos(true);
+      const fetchedVideos = await videoService.fetchVideos(5); // Fetch just 5 videos for feed
+      setVideos(fetchedVideos);
+    } catch (error) {
+      console.error('Error fetching videos:', error);
+    } finally {
+      setLoadingVideos(false);
+    }
+  }, []);
+
+  // Initial load of posts and videos
   useEffect(() => {
     if (sanityPosts && sanityPosts.length > 0) {
       setPosts(sanityPosts);
     }
-  }, [sanityPosts]);
+    
+    // Fetch videos when component mounts
+    fetchVideos();
+  }, [sanityPosts, fetchVideos]);
 
   // Calculate responsive dimensions
   const isTablet = windowWidth > 768;
@@ -926,6 +976,57 @@ export default function Feed() {
     // Default ratio
     return width * 0.55;
   }
+
+  // Handle refresh - also refresh videos
+  const handleRefresh = () => {
+    if (user) {
+      // Use Sanity refresh if user is authenticated
+      handleSanityRefresh();
+    } else {
+      // Use local refresh for demo
+      setRefreshing(true);
+      setTimeout(() => {
+        // Simulate fetching new content
+        const newPost = {
+          id: `refresh-${Date.now()}`,
+          user: {
+            id: 'user5',
+            name: 'Taylor Swift',
+            username: '@taylorswift',
+            avatar: 'https://randomuser.me/api/portraits/women/90.jpg',
+            isVerified: true
+          },
+          content: "Just dropped a new song! Check it out on my profile. #NewMusic #SwiftiesForever",
+          images: ['https://images.unsplash.com/photo-1514320291840-2e0a9bf2a9ae'],
+          location: 'Recording Studio',
+          timeAgo: 'Just now',
+          likes: 0,
+          comments: 0,
+          points: 0,
+          hasLiked: false,
+          hasSaved: false
+        };
+        
+        setPosts([newPost, ...posts]);
+        setRefreshing(false);
+      }, 1500);
+    }
+    
+    // Also refresh videos
+    fetchVideos();
+  };
+
+  // Navigate to video feed with the selected video
+  const navigateToVideoFeed = (video: VideoItem) => {
+    // Navigate to the correct video screen path based on the app structure
+    router.push({
+      pathname: "/video-detail" as any,
+      params: { 
+        id: video.id,
+        autoPlay: 'true'
+      }
+    });
+  };
 
   // Handle post interactions using Sanity (if user is authenticated) or local state
   const handlePostPress = (post: any) => {
@@ -1022,42 +1123,6 @@ export default function Feed() {
       
       // Subtract points from user
       addPoints(-points);
-    }
-  };
-
-  // Handle refresh - use Sanity refresh if available
-  const handleRefresh = () => {
-    if (user) {
-      // Use Sanity refresh if user is authenticated
-      handleSanityRefresh();
-    } else {
-      // Use local refresh for demo
-      setRefreshing(true);
-      setTimeout(() => {
-        // Simulate fetching new content
-        const newPost = {
-          id: `refresh-${Date.now()}`,
-          user: {
-            id: 'user5',
-            name: 'Taylor Swift',
-            username: '@taylorswift',
-            avatar: 'https://randomuser.me/api/portraits/women/90.jpg',
-            isVerified: true
-          },
-          content: "Just dropped a new song! Check it out on my profile. #NewMusic #SwiftiesForever",
-          images: ['https://images.unsplash.com/photo-1514320291840-2e0a9bf2a9ae'],
-          location: 'Recording Studio',
-          timeAgo: 'Just now',
-          likes: 0,
-          comments: 0,
-          points: 0,
-          hasLiked: false,
-          hasSaved: false
-        };
-        
-        setPosts([newPost, ...posts]);
-        setRefreshing(false);
-      }, 1500);
     }
   };
 
@@ -1612,6 +1677,119 @@ export default function Feed() {
   // Determine number of columns based on screen size
   const numColumns = isTablet ? 2 : 1;
 
+  // Render video card component
+  const renderVideoCard = ({ item }: { item: VideoItem }) => {
+    // Get thumbnail URL prioritizing the thumbnail from Sanity, or use a fallback
+    const thumbnailUrl = item.thumbnail || 
+                         `https://i.imgur.com/${item.type === 'horizontal' ? '8LWOKjz' : '6kYnVGf'}.png`;
+    
+    return (
+      <View style={[styles.postContainer, { width: cardWidth }]}>
+        {/* Video author info */}
+        <View style={styles.userContainer}>
+          <Image 
+            source={{ uri: item.authorAvatar || 'https://randomuser.me/api/portraits/lego/1.jpg' }} 
+            style={styles.userAvatar} 
+          />
+          <View style={styles.userInfo}>
+            <View style={styles.nameContainer}>
+              <Text style={styles.userName}>{item.author || 'Unknown Author'}</Text>
+              {(item.isVerified || item.isBlueVerified) && (
+                <View style={[styles.verifiedBadge, item.isBlueVerified && styles.blueVerifiedBadge]}>
+                  <TunnelVerifiedMark size={14} />
+                </View>
+              )}
+            </View>
+            <Text style={styles.userHandle}>Posted a video</Text>
+          </View>
+        </View>
+        
+        {/* Video preview */}
+        <Pressable onPress={() => navigateToVideoFeed(item)}>
+          <View style={styles.videoPreviewContainer}>
+            <Image 
+              source={{ uri: thumbnailUrl }} 
+              style={styles.videoThumbnail} 
+            />
+            <View style={styles.videoPlayButton}>
+              <Play color="white" size={40} fill="white" />
+            </View>
+            <View style={styles.videoDurationBadge}>
+              <Text style={styles.videoDurationText}>Video</Text>
+            </View>
+          </View>
+          
+          <Text style={styles.videoTitle}>{item.title || 'Untitled Video'}</Text>
+          <Text style={styles.videoDescription} numberOfLines={2}>{item.description || 'No description'}</Text>
+        </Pressable>
+        
+        {/* Video stats */}
+        <View style={styles.actionsContainer}>
+          <View style={styles.actionGroup}>
+            <View style={styles.actionButton}>
+              <ThumbsUp size={20} color="#888" />
+              <Text style={styles.actionText}>{item.likes || 0}</Text>
+            </View>
+            <View style={styles.actionButton}>
+              <MessageCircle size={20} color="#888" />
+              <Text style={styles.actionText}>{item.comments || 0}</Text>
+            </View>
+            <Pressable 
+              style={styles.actionButton}
+              onPress={() => navigateToVideoFeed(item)}
+            >
+              <Play size={20} color="#1877F2" fill="#1877F2" />
+              <Text style={[styles.actionText, { color: '#1877F2' }]}>Watch</Text>
+            </Pressable>
+          </View>
+        </View>
+      </View>
+    );
+  };
+
+  // Create a combined feed of posts and videos
+  const combinedFeed = useMemo(() => {
+    let combined: FeedItem[] = [...posts];
+    
+    // Insert videos at regular intervals
+    videos.forEach((video, index) => {
+      const position = Math.min((index + 1) * 2, combined.length);
+      combined.splice(position, 0, { 
+        id: `video-${video.id}`, 
+        type: 'video',
+        videoData: video,
+        // Add required PostData properties with defaults
+        user: {
+          id: video.authorId || 'unknown',
+          name: video.author || 'Unknown Author',
+          username: '@' + (video.author || 'unknown').toLowerCase().replace(/\s+/g, ''),
+          avatar: video.authorAvatar || 'https://randomuser.me/api/portraits/lego/1.jpg',
+          isVerified: video.isVerified || false,
+          isBlueVerified: video.isBlueVerified || false
+        },
+        content: video.description || '',
+        images: [video.thumbnail || ''],
+        timeAgo: 'Recently',
+        likes: video.likes || 0,
+        comments: video.comments || 0,
+        points: video.points || 0,
+        hasLiked: false,
+        hasSaved: false
+      });
+    });
+    
+    return combined;
+  }, [posts, videos]);
+
+  // Render item for FlatList
+  const renderFeedItem = ({ item }: { item: any }) => {
+    if (item.type === 'video') {
+      return renderVideoCard({ item: item.videoData });
+    } else {
+      return renderPostCard({ item });
+    }
+  };
+
   return (
     <KeyboardAvoidingView 
       style={styles.container} 
@@ -1619,8 +1797,8 @@ export default function Feed() {
       keyboardVerticalOffset={Platform.OS === 'ios' ? 90 : 0}
     >
       <Animated.FlatList
-        data={posts}
-        renderItem={renderPostCard}
+        data={combinedFeed}
+        renderItem={renderFeedItem}
         keyExtractor={(item) => item.id}
         contentContainerStyle={[
           styles.listContent,
@@ -1637,7 +1815,7 @@ export default function Feed() {
         ListEmptyComponent={
           <View style={styles.emptyContainer}>
             <ActivityIndicator size="large" color="#0070F3" />
-            <Text style={styles.emptyText}>Loading posts...</Text>
+            <Text style={styles.emptyText}>Loading content...</Text>
           </View>
         }
         key={isTablet ? 'grid' : 'list'}
@@ -2489,5 +2667,60 @@ const styles = StyleSheet.create({
   },
   cancelMenuItem: {
     borderBottomWidth: 0,
+  },
+  // Add video related styles
+  videoPreviewContainer: {
+    width: '100%',
+    height: 200,
+    borderRadius: 12,
+    marginBottom: 12,
+    position: 'relative',
+    overflow: 'hidden',
+  },
+  videoThumbnail: {
+    width: '100%',
+    height: '100%',
+    resizeMode: 'cover',
+  },
+  videoPlayButton: {
+    position: 'absolute',
+    top: '50%',
+    left: '50%',
+    transform: [{ translateX: -20 }, { translateY: -20 }],
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    backgroundColor: 'rgba(0,0,0,0.5)',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  videoDurationBadge: {
+    position: 'absolute',
+    bottom: 10,
+    right: 10,
+    backgroundColor: 'rgba(0,0,0,0.7)',
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    borderRadius: 4,
+  },
+  videoDurationText: {
+    color: 'white',
+    fontSize: 12,
+    fontFamily: 'Inter_500Medium',
+  },
+  videoTitle: {
+    color: 'white',
+    fontSize: 16,
+    fontFamily: 'Inter_600SemiBold',
+    marginBottom: 6,
+    paddingHorizontal: 16,
+  },
+  videoDescription: {
+    color: '#BBB',
+    fontSize: 14,
+    fontFamily: 'Inter_400Regular',
+    lineHeight: 20,
+    paddingHorizontal: 16,
+    marginBottom: 12,
   },
 }); 

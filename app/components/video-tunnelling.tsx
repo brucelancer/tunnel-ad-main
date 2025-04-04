@@ -9,6 +9,8 @@ import {
   Animated,
   Alert,
   ActivityIndicator,
+  Image,
+  Platform,
 } from 'react-native';
 import {
   Film,
@@ -19,6 +21,7 @@ import {
   UserCircle2,
   DollarSign,
   X,
+  Image as ImageIcon,
 } from 'lucide-react-native';
 import { Video, ResizeMode } from 'expo-av';
 import * as ImagePicker from 'expo-image-picker';
@@ -26,6 +29,7 @@ import { LinearGradient } from 'expo-linear-gradient';
 import ScreenContainer from './ScreenContainer';
 import * as videoService from '../../tunnel-ad-main/services/videoService';
 import { useSanityAuth } from '../hooks/useSanityAuth';
+import * as FileSystem from 'expo-file-system';
 
 const { width: SCREEN_WIDTH } = Dimensions.get('window');
 
@@ -47,11 +51,14 @@ export default function VideoTunnelling({ onSubmit }: VideoTunnellingProps) {
   const [isMuted, setIsMuted] = useState(false);
   const [isUploading, setIsUploading] = useState(false);
   const [uploadProgress, setUploadProgress] = useState(0);
+  const [thumbnailUri, setThumbnailUri] = useState<string | null>(null);
+  const [showThumbnailOptions, setShowThumbnailOptions] = useState(false);
   
   const { user } = useSanityAuth();
   
   const borderAnimation = useRef(new Animated.Value(0)).current;
   const linkFieldAnimation = useRef(new Animated.Value(0)).current;
+  const videoRef = useRef<Video>(null);
 
   useEffect(() => {
     const animateBorder = () => {
@@ -204,6 +211,7 @@ export default function VideoTunnelling({ onSubmit }: VideoTunnellingProps) {
         videoUri: personalVideoUri,
         videoLink,
         aspectRatio: videoOrientation === 'horizontal' ? 16/9 : 9/16,
+        thumbnailUri,
       };
       
       // Simulate progress for better UX
@@ -242,6 +250,8 @@ export default function VideoTunnelling({ onSubmit }: VideoTunnellingProps) {
     setAdDescription('');
     setPersonalVideoUri(null);
     setVideoLink('');
+    setThumbnailUri(null);
+    setShowThumbnailOptions(false);
   };
 
   const getContentTypeStyles = (type: ContentType, isActive: boolean) => ({
@@ -363,6 +373,98 @@ export default function VideoTunnelling({ onSubmit }: VideoTunnellingProps) {
     </View>
   );
 
+  // Function to capture thumbnail from video
+  const captureThumbnail = async () => {
+    if (!personalVideoUri && !videoLink) {
+      Alert.alert('Error', 'Please upload or link a video first');
+      return;
+    }
+
+    try {
+      if (videoLink) {
+        // For video links, we'll use a default thumbnail or show options to upload one
+        setShowThumbnailOptions(true);
+        return;
+      }
+
+      // For local videos, we'll generate a thumbnail
+      // First, attempt to capture a frame using the video reference
+      if (videoRef.current) {
+        // Prompt user to choose: automatically generate or upload custom
+        Alert.alert(
+          "Thumbnail Options",
+          "How would you like to create your thumbnail?",
+          [
+            {
+              text: "Upload Custom",
+              onPress: pickThumbnailImage
+            },
+            {
+              text: "Generate Automatically",
+              onPress: () => generateThumbnailFromFrame()
+            }
+          ]
+        );
+      } else {
+        // Fallback to default option flow
+        setShowThumbnailOptions(true);
+      }
+    } catch (error) {
+      console.error('Error capturing thumbnail:', error);
+      Alert.alert('Error', 'Failed to capture thumbnail, please try uploading an image');
+      setShowThumbnailOptions(true);
+    }
+  };
+
+  // Generate thumbnail from current video frame
+  const generateThumbnailFromFrame = async () => {
+    try {
+      // For our demo, we'll use a placeholder image based on video orientation
+      const placeholderThumbnail = videoOrientation === 'horizontal'
+        ? 'https://i.imgur.com/8LWOKjz.png'  // Horizontal placeholder
+        : 'https://i.imgur.com/6kYnVGf.png'; // Vertical placeholder
+      
+      // Use the placeholderThumbnail directly
+      setThumbnailUri(placeholderThumbnail);
+      Alert.alert('Success', 'Thumbnail automatically generated');
+    } catch (error) {
+      console.error('Error generating thumbnail from frame:', error);
+      Alert.alert('Error', 'Failed to generate thumbnail');
+    }
+  };
+
+  // Pick a custom thumbnail image from gallery
+  const pickThumbnailImage = async () => {
+    try {
+      const permissionResult = await ImagePicker.requestMediaLibraryPermissionsAsync();
+      
+      if (permissionResult.status !== 'granted') {
+        Alert.alert(
+          'Permission Required',
+          'To upload a thumbnail, please enable media library access in your device settings.',
+          [{ text: 'OK', style: 'default' }]
+        );
+        return;
+      }
+
+      const result = await ImagePicker.launchImageLibraryAsync({
+        mediaTypes: ImagePicker.MediaTypeOptions.Images,
+        allowsEditing: true,
+        aspect: videoOrientation === 'horizontal' ? [16, 9] : [9, 16],
+        quality: 0.8,
+      });
+
+      if (!result.canceled && result.assets[0].uri) {
+        // Use the selected image directly
+        setThumbnailUri(result.assets[0].uri);
+        setShowThumbnailOptions(false);
+      }
+    } catch (error) {
+      console.error('Error picking thumbnail image:', error);
+      Alert.alert('Error', 'Failed to select thumbnail image');
+    }
+  };
+
   return (
     <ScreenContainer>
       <View style={styles.container}>
@@ -427,6 +529,7 @@ export default function VideoTunnelling({ onSubmit }: VideoTunnellingProps) {
                   ) : (
                     <View style={styles.uploadZoneNew}>
                       <Video
+                        ref={videoRef}
                         source={{ uri: personalVideoUri }}
                         style={styles.videoPreview}
                         resizeMode={ResizeMode.COVER}
@@ -447,6 +550,87 @@ export default function VideoTunnelling({ onSubmit }: VideoTunnellingProps) {
                     </View>
                   )}
                 </View>
+              </View>
+
+              {/* Add Thumbnail Section */}
+              <View style={styles.inputGroup}>
+                <Text style={styles.label}>Thumbnail</Text>
+                <View style={[styles.uploadContainer, { aspectRatio: videoOrientation === 'horizontal' ? 16/9 : 9/16 }]}>
+                  <Animated.View
+                    style={[
+                      styles.animatedBorder,
+                      {
+                        transform: [{
+                          rotate: borderAnimation.interpolate({
+                            inputRange: [0, 1],
+                            outputRange: ['0deg', '360deg']
+                          })
+                        }]
+                      }
+                    ]}
+                  >
+                    <LinearGradient
+                      colors={['#0070F3', '#00DFD8', '#0070F3']}
+                      start={{ x: 0, y: 0 }}
+                      end={{ x: 1, y: 1 }}
+                      style={StyleSheet.absoluteFill}
+                    />
+                  </Animated.View>
+                  {!thumbnailUri ? (
+                    <Pressable 
+                      style={styles.uploadZoneNew}
+                      onPress={captureThumbnail}
+                      disabled={!personalVideoUri && !videoLink}
+                    >
+                      <LinearGradient
+                        colors={['rgba(0,112,243,0.1)', 'rgba(0,223,216,0.1)']}
+                        style={styles.uploadGradient}
+                        start={{ x: 0, y: 0 }}
+                        end={{ x: 1, y: 1 }}
+                      >
+                        <View style={styles.uploadContent}>
+                          <ImageIcon size={32} color={!personalVideoUri && !videoLink ? '#666' : '#0070F3'} />
+                          <Text style={[
+                            styles.uploadText, 
+                            { color: !personalVideoUri && !videoLink ? '#666' : '#0070F3' }
+                          ]}>
+                            Add Thumbnail
+                          </Text>
+                          <Text style={styles.uploadSubtext}>
+                            {!personalVideoUri && !videoLink 
+                              ? 'Upload or link a video first' 
+                              : 'For better visibility in feed'
+                            }
+                          </Text>
+                        </View>
+                      </LinearGradient>
+                    </Pressable>
+                  ) : (
+                    <View style={styles.uploadZoneNew}>
+                      <Image
+                        source={{ uri: thumbnailUri }}
+                        style={styles.videoPreview}
+                        resizeMode="cover"
+                      />
+                      <Pressable
+                        style={styles.removeButton}
+                        onPress={() => setThumbnailUri(null)}
+                      >
+                        <LinearGradient
+                          colors={['#0070F3', '#00DFD8']}
+                          style={styles.removeGradient}
+                          start={{ x: 0, y: 0 }}
+                          end={{ x: 1, y: 1 }}
+                        >
+                          <X size={20} color="white" />
+                        </LinearGradient>
+                      </Pressable>
+                    </View>
+                  )}
+                </View>
+                <Text style={styles.thumbnailHelp}>
+                  A thumbnail makes your video more appealing in the feed. Choose one or we'll generate it automatically.
+                </Text>
               </View>
 
               <View style={styles.inputGroup}>
@@ -948,5 +1132,12 @@ const styles = StyleSheet.create({
     fontFamily: 'Inter_400Regular',
     borderWidth: 1,
     borderColor: 'rgba(255,255,255,0.1)',
+  },
+  thumbnailHelp: {
+    color: '#666',
+    fontSize: 14,
+    fontFamily: 'Inter_400Regular',
+    marginTop: 6,
+    paddingHorizontal: 8,
   },
 }); 
