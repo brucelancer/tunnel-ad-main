@@ -1,5 +1,5 @@
-import React, { useState, useEffect, useCallback } from 'react';
-import { View, StyleSheet, TouchableOpacity, Dimensions, DeviceEventEmitter } from 'react-native';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
+import { View, StyleSheet, TouchableOpacity, Dimensions, DeviceEventEmitter, Animated } from 'react-native';
 import { Tabs, useRouter, usePathname } from 'expo-router';
 import { Home, Gift, User, Coins, Plus, FileText } from 'lucide-react-native';
 import { LinearGradient } from 'expo-linear-gradient';
@@ -8,9 +8,13 @@ const { width, height } = Dimensions.get('window');
 
 export default function TabLayout() {
   const [isFullScreen, setIsFullScreen] = useState(false);
+  const [tabBarVisible, setTabBarVisible] = useState(true);
   const router = useRouter();
   const pathname = usePathname();
   const [activeTab, setActiveTab] = useState('index');
+  
+  // Add animated value for tab bar
+  const tabBarTranslateY = useRef(new Animated.Value(0)).current;
   
   // Update active tab when pathname changes
   useEffect(() => {
@@ -32,6 +36,31 @@ export default function TabLayout() {
     };
   }, []);
 
+  // Listen for tab bar visibility toggle events from Feed
+  useEffect(() => {
+    const tabBarVisibilityListener = DeviceEventEmitter.addListener(
+      'TOGGLE_TAB_BAR',
+      (event) => {
+        // Check if visibility state should change
+        if (event.visible !== tabBarVisible) {
+          setTabBarVisible(event.visible);
+          
+          // Animate the tab bar in/out
+          Animated.spring(tabBarTranslateY, {
+            toValue: event.visible ? 0 : 150, // Increased value to ensure complete disappearance
+            friction: 8,
+            tension: 60,
+            useNativeDriver: true,
+          }).start();
+        }
+      }
+    );
+    
+    return () => {
+      tabBarVisibilityListener.remove();
+    };
+  }, [tabBarVisible]);
+
   // Handler for tab press to emit events
   const handleTabPress = useCallback((tabName: string) => {
     // Emit event for double-tap detection
@@ -41,7 +70,18 @@ export default function TabLayout() {
     if (tabName === 'index' && activeTab === 'index') {
       DeviceEventEmitter.emit('HOME_TAB_PRESSED');
     }
-  }, [activeTab]);
+    
+    // Show tab bar when any tab is pressed
+    if (!tabBarVisible) {
+      setTabBarVisible(true);
+      Animated.spring(tabBarTranslateY, {
+        toValue: 0,
+        friction: 8,
+        tension: 60,
+        useNativeDriver: true,
+      }).start();
+    }
+  }, [activeTab, tabBarVisible]);
 
   return (
     <Tabs
@@ -64,22 +104,32 @@ export default function TabLayout() {
           shadowOpacity: 0.3,
           shadowRadius: 5,
           display: isFullScreen ? 'none' : 'flex', // Hide tab bar in full screen mode
-        },
+          transform: [{ translateY: tabBarTranslateY }], // Add animation transform
+        } as any, // Cast to any to avoid TypeScript errors with animated values
         tabBarActiveTintColor: '#1877F2',
         tabBarInactiveTintColor: '#888',
         tabBarShowLabel: route.name !== 'tunnelling',
         tabBarItemStyle: {
           height: 60,
         },
-        tabBarButton: (props) => (
-          <TouchableOpacity
-            {...props}
-            onPress={(e) => {
-              handleTabPress(route.name);
-              props.onPress?.(e);
-            }}
-          />
-        ),
+        tabBarButton: (props) => {
+          // Define a wrapper component with proper typing
+          return (
+            <TouchableOpacity
+              accessibilityRole={props.accessibilityRole}
+              accessibilityState={props.accessibilityState}
+              accessibilityLabel={props.accessibilityLabel}
+              testID={props.testID}
+              style={props.style}
+              onPress={(e) => {
+                handleTabPress(route.name);
+                props.onPress && props.onPress(e);
+              }}
+            >
+              {props.children}
+            </TouchableOpacity>
+          );
+        },
       })}
     >
       <Tabs.Screen

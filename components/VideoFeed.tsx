@@ -57,6 +57,8 @@ import {
   X,
   ChevronUp,
   Trash2,
+  Eye,
+  ExternalLink,
 } from 'lucide-react-native';
 import { usePoints } from '../hooks/usePoints';
 import { useReactions } from '../hooks/useReactions';
@@ -1250,7 +1252,7 @@ const VideoItemComponent = memo(({
   onVideoRef, 
   isLocked = false, 
   autoScroll, 
-  toggleAutoScroll,
+  toggleAutoScroll, 
   autoScrollPulse,
   showPremiumAd,
   isTabFocused,
@@ -1270,11 +1272,12 @@ const VideoItemComponent = memo(({
   const [showButtons, setShowButtons] = useState(false);
   const [showStaticPoints, setShowStaticPoints] = useState(true);
   const [videoSize, setVideoSize] = useState({ width: 0, height: 0 });
-  const [remainingTime, setRemainingTime] = useState('');
+  const [remainingTime, setRemainingTime] = useState<string | null>('');
   const [showComments, setShowComments] = useState(false);
   const [isTabActive, setIsTabActive] = useState(true);
   const [reactions, setReactions] = useState({ likes: 0, dislikes: 0, userAction: null as null | 'like' | 'dislike' });
   const [hasDiscoveredComments, setHasDiscoveredComments] = useState(false);
+  const [viewCounted, setViewCounted] = useState(false); // Track if this view has been counted
   // Add status state variable
   const [status, setStatus] = useState<any>(null);
   const [commentCount, setCommentCount] = useState(0);
@@ -1577,8 +1580,35 @@ const VideoItemComponent = memo(({
     }
   }, [isCurrentVideo, isTabActive, isTabFocused, item.url]);
 
+  // Update the handlePlaybackStatusUpdate function to track view count at halfway point
   const handlePlaybackStatusUpdate = async (status: any) => {
     setStatus(status);
+    
+    // Track view count when user watches at least halfway through the video
+    if (status.isLoaded && 
+        status.positionMillis && 
+        status.durationMillis && 
+        isCurrentVideo && 
+        !viewCounted) {
+      
+      // Check if user has watched at least 50% of the video
+      if (status.positionMillis >= status.durationMillis * 0.5) {
+        // Mark this view as counted to prevent duplicate counts
+        setViewCounted(true);
+        
+        try {
+          // Update view count in Sanity
+          await videoService.updateVideoStats(item.id, { views: 1 });
+          
+          // Update local count for immediate UI feedback
+          item.views = (item.views || 0) + 1;
+          
+          console.log('View count updated for video:', item.id);
+        } catch (error) {
+          console.error('Failed to update view count:', error);
+        }
+      }
+    }
     
     // Detect video completion - enable auto-scroll while still looping
     if (status.didJustFinish) {
@@ -1597,40 +1627,65 @@ const VideoItemComponent = memo(({
           }
         }, 100);
       }
-    }
-    
-    // If premium ad is showing, ensure video stays paused
-    if (showPremiumAd && status.isPlaying) {
-      videoRef.current?.pauseAsync().catch(() => {});
-      return;
-    }
-    
-    // Store the current position for potential resuming
-    if (status.isLoaded && status.positionMillis) {
-      lastPositionRef.current = status.positionMillis;
-    }
-    
-    // Calculate and display remaining time until halfway point
-    if (status.positionMillis && status.durationMillis) {
-      const halfwayPoint = status.durationMillis / 2;
-      const remainingMillis = halfwayPoint - status.positionMillis;
       
-      if (remainingMillis > 0 && !hasEarnedPoints) {
-        const seconds = Math.ceil(remainingMillis / 1000);
-        setRemainingTime(`${seconds}s`);
-      } else {
-        setRemainingTime('');
-      }
-
-      if (status.positionMillis >= halfwayPoint && !hasEarnedPoints) {
-        const pointsAdded = await addPoints(10, item.id);
-        if (pointsAdded) {
-          setHasEarnedPoints(true);
-          setShowStaticPoints(false);
-          setShowPointsAnimation(true);
-          animatePoints();
+      // When video ends completely, we'll reset the viewCounted state
+      // This allows the view to be counted again if they replay the video
+      setViewCounted(false);
+    }
+    
+    // Update points earning logic
+    const requiredWatchTime = Math.min(status?.durationMillis || 0, 30000); // Cap at 30 seconds
+    lastPositionRef.current = status?.positionMillis || 0;
+    
+    if (status?.isPlaying && 
+        isCurrentVideo && 
+        !hasEarnedPoints && 
+        status?.positionMillis >= requiredWatchTime && 
+        !hasShownAnimationRef.current) {
+      
+      hasShownAnimationRef.current = true;
+      
+      // Vibrate to provide feedback
+      if (Platform.OS === 'ios' || Platform.OS === 'android') {
+        try {
+          Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+        } catch (e) {
+          console.log('Haptics not supported');
         }
       }
+      
+      // Show points animation
+      animatePoints();
+      
+      // Mark video as watched
+      await addPoints(item.points, item.id);
+      
+      // Update points balance
+      DeviceEventEmitter.emit('POINTS_EARNED', { 
+        amount: item.points, 
+        source: 'video', 
+        videoId: item.id 
+      });
+      
+      // Hide the static countdown after points earned
+      setShowStaticPoints(false);
+    }
+    
+    // Check for showing playback controls
+    if (status?.isPlaying === false && lastPositionRef.current > 0) {
+      // Show buttons when video is paused by user (not on initial load)
+      setShowButtons(true);
+    } else {
+      setShowButtons(false);
+    }
+    
+    // Update countdown timer
+    if (!hasEarnedPoints && status?.isPlaying && requiredWatchTime > 0) {
+      const remaining = Math.max(0, requiredWatchTime - (status?.positionMillis || 0));
+      const seconds = Math.ceil(remaining / 1000);
+      setRemainingTime(`${seconds}s`);
+    } else if (hasEarnedPoints || !status?.isPlaying) {
+      setRemainingTime(null);
     }
   };
 
@@ -1715,10 +1770,29 @@ const VideoItemComponent = memo(({
     }
   };
 
+  // Add function to format view count with K, M abbreviations
+  const formatCount = (count: number): string => {
+    if (!count) return '0';
+    if (count >= 1000000) {
+      return (count / 1000000).toFixed(1) + 'M';
+    } else if (count >= 1000) {
+      return (count / 1000).toFixed(1) + 'K';
+    }
+    return count.toString();
+  };
+
   const handleWatchFull = async () => {
     if (videoRef.current) {
       await videoRef.current.stopAsync();
     }
+    
+    // Increment view count
+    try {
+      await videoService.updateVideoStats(item.id, { views: 1 });
+    } catch (error) {
+      console.error('Error incrementing view count:', error);
+    }
+    
     router.push({
       pathname: '/video-detail' as any,
       params: { id: item.id }
@@ -1945,16 +2019,26 @@ const VideoItemComponent = memo(({
             {item.description}
           </Text>
             <View style={styles.buttonRow}>
-          <Pressable style={styles.watchFullButton} onPress={handleWatchFull}>
-            <Text style={styles.watchFullButtonText}>Watch Full</Text>
-          </Pressable>
+              <View style={styles.statsContainer}>
+                <Eye 
+                  color="white" 
+                  size={SCREEN_WIDTH * 0.04} 
+                  opacity={0.9}
+                />
+                <Text style={styles.viewCountText}>
+                  {formatCount(item.views || 0)}
+                </Text>
+              </View>
+              <Pressable style={styles.watchFullIconButton} onPress={handleWatchFull}>
+                <ExternalLink color="white" size={SCREEN_WIDTH * 0.05} opacity={0.9} />
+              </Pressable>
               <Pressable style={styles.fullScreenButton} onPress={toggleFullScreen}>
                 {isFullScreen ? 
                   <Minimize color="white" size={SCREEN_WIDTH * 0.05} /> : 
                   <Maximize color="white" size={SCREEN_WIDTH * 0.05} />
                 }
-          </Pressable>
-        </View>
+              </Pressable>
+            </View>
           </View>
           <View style={[
             styles.actionButtons, 
@@ -3353,28 +3437,34 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     width: '100%',
   },
-  watchFullButton: {
-    backgroundColor: 'white',
-    paddingVertical: SCREEN_HEIGHT * 0.015,
-    paddingHorizontal: SCREEN_WIDTH * 0.05,
-    borderRadius: SCREEN_WIDTH * 0.06,
+  statsContainer: {
+    flexDirection: 'row',
     alignItems: 'center',
-    flex: 1,
-    marginRight: 10,
+    backgroundColor: 'rgba(0, 0, 0, 0.4)',
+    borderRadius: 16,
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    marginRight: 8,
   },
-  fullScreenButton: {
-    backgroundColor: 'rgba(255, 255, 255, 0.2)',
-    padding: SCREEN_HEIGHT * 0.015,
-    borderRadius: SCREEN_WIDTH * 0.06,
+  viewCountText: {
+    color: 'white',
+    fontSize: 13,
+    marginLeft: 4,
+    fontFamily: 'Inter_400Regular',
+  },
+  watchFullIconButton: {
+    backgroundColor: 'rgba(0, 0, 0, 0.4)',
+    borderRadius: 16,
+    padding: 8,
+    marginRight: 8,
     alignItems: 'center',
     justifyContent: 'center',
-    width: SCREEN_WIDTH * 0.12,
-    height: SCREEN_WIDTH * 0.12,
+  },
+  watchFullButton: {
+    display: 'none', // Hide the old button
   },
   watchFullButtonText: {
-    color: 'black',
-    fontSize: SCREEN_WIDTH * 0.035,
-    fontWeight: '600',
+    display: 'none', // Hide the old button text
   },
   loadingContainer: {
     justifyContent: 'center',
@@ -3897,5 +3987,12 @@ const styles = StyleSheet.create({
     borderRadius: 16,
     alignItems: 'center',
     justifyContent: 'center',
-  }
+  },
+  fullScreenButton: {
+    backgroundColor: 'rgba(0, 0, 0, 0.4)',
+    padding: 8,
+    borderRadius: 16,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
 });

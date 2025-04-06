@@ -1,5 +1,5 @@
 import React, { useEffect, useState, useRef } from 'react';
-import { View, Text, StyleSheet, Pressable, Dimensions, ActivityIndicator, ScrollView, Image, FlatList, TextInput, KeyboardAvoidingView, Platform, TouchableOpacity, Alert } from 'react-native';
+import { View, Text, StyleSheet, Pressable, Dimensions, ActivityIndicator, ScrollView, Image, FlatList, TextInput, KeyboardAvoidingView, Platform, TouchableOpacity, Alert, Animated } from 'react-native';
 import { Video, ResizeMode, AVPlaybackStatus } from 'expo-av';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { usePointsStore } from '@/store/usePointsStore';
@@ -235,6 +235,37 @@ export default function VideoDetailScreen() {
   const scrollViewRef = useRef<ScrollView>(null);
   const { user: currentUser } = useSanityAuth();
   const commentInputRef = useRef<TextInput>(null);
+  
+  // Add state to track showing user info
+  const [showUserInfo, setShowUserInfo] = useState(false);
+  // Track scroll position with animated value
+  const scrollY = useRef(new Animated.Value(0)).current;
+  
+  // Handle scroll events
+  const handleScroll = (event: any) => {
+    const scrollPosition = event.nativeEvent.contentOffset.y;
+    const videoHeight = getVideoHeight().height;
+    // Show user info when scrolled 80% through the video
+    setShowUserInfo(scrollPosition > videoHeight * 0.5);
+  };
+  
+  // Get animation values based on video height
+  const getAnimationValues = () => {
+    const videoHeight = getVideoHeight().height;
+    return {
+      startHide: videoHeight * 0.5,
+      endHide: videoHeight * 0.7,
+      startShow: videoHeight * 0.6,
+      endShow: videoHeight * 0.8,
+      offset: Math.min(videoHeight * 0.2, 100) // Smaller offset for smoother animations
+    };
+  };
+
+  // Configure animated scroll event
+  const animatedScrollEvent = Animated.event(
+    [{ nativeEvent: { contentOffset: { y: scrollY } } }],
+    { useNativeDriver: false }
+  );
 
   // Fetch video data based on the ID parameter
   useEffect(() => {
@@ -485,15 +516,28 @@ export default function VideoDetailScreen() {
 
   // Calculate video height based on orientation and screen size
   const getVideoHeight = () => {
-    if (!videoData) return { height: height * 0.4 };
+    if (!videoData) return { height: height * 0.7 };
+    
+    // Get device dimensions and account for status bar and header
+    const headerHeight = 100; // Approximate header height
+    const availableHeight = height - headerHeight;
     
     if (videoData.type === 'horizontal') {
-      // For horizontal videos, use 16:9 aspect ratio 
-      return { height: width * (9/16) };
+      // For horizontal videos, ensure they take more space
+      return { height: Math.max(width * (9/16), availableHeight * 0.75) };
     } else {
-      // For vertical videos, use more height
-      return { height: Math.min(height * 0.6, width * 1.5) };
+      // For vertical videos, use full available height
+      return { height: availableHeight * 0.9 };
     }
+  };
+
+  // Check if video is playing
+  const isVideoPlaying = () => {
+    if (status && status.isLoaded) {
+      // In Expo AV, there is no direct isPlaying flag, so we use didJustFinish and check if position is advancing
+      return !status.didJustFinish && !isVideoEnded;
+    }
+    return false;
   };
 
   // Handle restarting the video
@@ -571,6 +615,13 @@ export default function VideoDetailScreen() {
         ref={scrollViewRef}
         style={styles.scrollContainer}
         showsVerticalScrollIndicator={false}
+        onScroll={(event) => {
+          // Use both handlers
+          animatedScrollEvent(event);
+          handleScroll(event);
+        }}
+        scrollEventThrottle={16}
+        contentContainerStyle={{ flexGrow: 1 }}
       >
         <View style={[styles.videoContainer, getVideoHeight()]}>
           <Video
@@ -585,13 +636,31 @@ export default function VideoDetailScreen() {
             shouldPlay
           />
 
-          <View style={styles.controls}>
-            <Pressable onPress={toggleMute} style={styles.muteButton}>
-              {isMuted ? <VolumeX color="white" size={24} /> : <Volume2 color="white" size={24} />}
-            </Pressable>
+          {/* Enhanced video controls with better positioning */}
+          <View style={styles.videoOverlay}>
+            {/* Bottom controls - keeping only mute button */}
+            <View style={styles.bottomControls}>
+              <Pressable onPress={toggleMute} style={styles.muteButton}>
+                {isMuted ? <VolumeX color="white" size={22} /> : <Volume2 color="white" size={22} />}
+              </Pressable>
+            </View>
           </View>
 
-          {/* Restart button that appears when video ends */}
+          {/* Video progress bar - moved to top edge */}
+          {status?.isLoaded && (
+            <View style={styles.progressBarContainer}>
+              <View 
+                style={[
+                  styles.progressBar, 
+                  { 
+                    width: `${status.positionMillis / (status.durationMillis || 1) * 100}%` 
+                  }
+                ]} 
+              />
+            </View>
+          )}
+
+          {/* Restart overlay when video ends */}
           {isVideoEnded && (
             <View style={styles.restartOverlay}>
               <Pressable 
@@ -605,7 +674,25 @@ export default function VideoDetailScreen() {
           )}
         </View>
 
-        <View style={styles.info}>
+        <Animated.View style={[
+          styles.info,
+          {
+            transform: [{ 
+              translateY: scrollY.interpolate({
+                inputRange: [0, getAnimationValues().startHide, getAnimationValues().endHide],
+                outputRange: [getAnimationValues().offset, 0, 0],
+                extrapolate: 'clamp'
+              })
+            }],
+            opacity: scrollY.interpolate({
+              inputRange: [0, getAnimationValues().startShow, getAnimationValues().endShow],
+              outputRange: [0, 0.7, 1],
+              extrapolate: 'clamp'
+            }),
+            position: 'relative',
+            zIndex: 100
+          }
+        ]}>
           {/* Author info with avatar and verification */}
           <View style={styles.authorContainer}>
             <Image 
@@ -614,9 +701,9 @@ export default function VideoDetailScreen() {
             />
             <View style={styles.authorInfo}>
               <View style={styles.authorNameRow}>
-                <Text style={styles.author} numberOfLines={1} ellipsizeMode="tail">
-                  {videoData.author}
-                </Text>
+        <Text style={styles.author} numberOfLines={1} ellipsizeMode="tail">
+          {videoData.author}
+        </Text>
                 {(videoData.isVerified || videoData.isBlueVerified) && (
                   <TunnelVerifiedMark size={14} />
                 )}
@@ -629,20 +716,36 @@ export default function VideoDetailScreen() {
             </View>
           </View>
           
-          {hasEarnedPoints && (
-            <Text style={styles.earnedPoints} numberOfLines={1} ellipsizeMode="tail">
-              +{videoData.points} points earned! Total: {displayPoints}
-            </Text>
-          )}
-          {!hasEarnedPoints && status?.isLoaded && (
-            <Text style={styles.watchPrompt} numberOfLines={2} ellipsizeMode="tail">
+        {hasEarnedPoints && (
+          <Text style={styles.earnedPoints} numberOfLines={1} ellipsizeMode="tail">
+            +{videoData.points} points earned! Total: {displayPoints}
+          </Text>
+        )}
+        {!hasEarnedPoints && status?.isLoaded && (
+          <Text style={styles.watchPrompt} numberOfLines={2} ellipsizeMode="tail">
               Watch the full video to earn {videoData.points || 10} points!
-            </Text>
-          )}
-        </View>
+          </Text>
+        )}
+        </Animated.View>
 
         {/* Video stats section */}
-        <View style={styles.statsContainer}>
+        <Animated.View style={[
+          styles.statsContainer,
+          {
+            transform: [{ 
+              translateY: scrollY.interpolate({
+                inputRange: [0, getAnimationValues().startHide, getAnimationValues().endHide],
+                outputRange: [getAnimationValues().offset, 0, 0],
+                extrapolate: 'clamp'
+              })
+            }],
+            opacity: scrollY.interpolate({
+              inputRange: [0, getAnimationValues().startShow, getAnimationValues().endShow],
+              outputRange: [0, 0.7, 1],
+              extrapolate: 'clamp'
+            })
+          }
+        ]}>
           <View style={styles.statItem}>
             <Text style={styles.statValue}>{formatViewCount(videoData.views || 0)}</Text>
             <Text style={styles.statLabel}>Views</Text>
@@ -655,10 +758,26 @@ export default function VideoDetailScreen() {
             <Text style={styles.statValue}>{formatViewCount(videoData.comments || 0)}</Text>
             <Text style={styles.statLabel}>Comments</Text>
           </View>
-        </View>
+        </Animated.View>
 
         {/* Comments section */}
-        <View style={styles.commentsSection}>
+        <Animated.View style={[
+          styles.commentsSection,
+          {
+            transform: [{ 
+              translateY: scrollY.interpolate({
+                inputRange: [0, getAnimationValues().startHide, getAnimationValues().endHide],
+                outputRange: [getAnimationValues().offset, 0, 0],
+                extrapolate: 'clamp'
+              })
+            }],
+            opacity: scrollY.interpolate({
+              inputRange: [0, getAnimationValues().startShow, getAnimationValues().endShow],
+              outputRange: [0, 0.7, 1],
+              extrapolate: 'clamp'
+            })
+          }
+        ]}>
           <View style={styles.commentsHeader}>
             <View style={styles.commentsTitleContainer}>
               <MessageCircle size={18} color="#1877F2" />
@@ -678,20 +797,28 @@ export default function VideoDetailScreen() {
           ) : comments.length === 0 ? (
             <View style={styles.emptyComments}>
               <Text style={styles.emptyCommentsText}>No comments yet</Text>
-              <Text style={styles.emptyCommentsSubtext}>Be the first to comment</Text>
+              <Text style={styles.emptyCommentsText}>Be the first to comment!</Text>
             </View>
           ) : (
-            <View style={styles.commentsList}>
-              {comments.map(comment => (
+            <FlatList
+              data={comments}
+              renderItem={({ item }) => (
                 <CommentItem 
-                  key={comment.id}
-                  comment={comment}
+                  comment={item}
                   onLike={handleLikeComment}
                   onDelete={handleDeleteComment}
-                  canDelete={canDeleteComment(comment.user.id)}
+                  canDelete={canDeleteComment(item.user.id)}
                 />
-              ))}
-            </View>
+              )}
+              keyExtractor={(item) => item.id}
+              contentContainerStyle={styles.commentsList}
+              scrollEnabled={false} // Disable scrolling within this list since we're in a ScrollView
+              ListFooterComponent={comments.length > 0 ? (
+                <Text style={styles.commentsLoadingText}>
+                  <ChevronRight size={14} color="#999" /> Scroll to see all {comments.length} comments
+                </Text>
+              ) : null}
+            />
           )}
           
           {/* Add comment input */}
@@ -723,47 +850,63 @@ export default function VideoDetailScreen() {
               </TouchableOpacity>
             </View>
           </View>
-        </View>
+        </Animated.View>
 
         {/* Recommendations section - always visible, 2 videos per row */}
-        {recommendedVideos.length > 0 && (
-          <View style={styles.recommendationsSection}>
-            <View style={styles.recommendationsHeader}>
-              <Text style={styles.recommendationsTitle}>Recommended Videos</Text>
-              <Pressable 
-                onPress={() => {
-                  // Stop current video before navigating
-                  if (video.current) {
-                    video.current.pauseAsync()
-                      .then(() => {
-                        video.current?.unloadAsync()
-                          .catch(err => console.log('Error unloading video:', err));
-                        router.push("/" as any);
-                      })
-                      .catch(err => {
-                        console.log('Error pausing video:', err);
-                        router.push("/" as any);
-                      });
-                  } else {
-                    router.push("/" as any);
-                  }
-                }}
-              >
-                <Text style={styles.seeAllText}>See All <ChevronRight size={14} color="#1877F2" /></Text>
-              </Pressable>
-            </View>
-            
-            <View style={styles.recommendationsGrid}>
-              {recommendedVideos.map((item) => (
-                <RecommendationItem 
-                  key={item.id} 
-                  item={item} 
-                  onPress={() => handleRecommendationPress(item.id)} 
-                />
-              ))}
-            </View>
+        <Animated.View 
+          style={[
+            styles.recommendationsSection,
+            {
+              transform: [{ 
+                translateY: scrollY.interpolate({
+                  inputRange: [0, getAnimationValues().startHide, getAnimationValues().endHide],
+                  outputRange: [getAnimationValues().offset, 0, 0],
+                  extrapolate: 'clamp'
+                })
+              }],
+              opacity: scrollY.interpolate({
+                inputRange: [0, getAnimationValues().startShow, getAnimationValues().endShow],
+                outputRange: [0, 0.7, 1],
+                extrapolate: 'clamp'
+              })
+            }
+          ]}
+        >
+          <View style={styles.recommendationsHeader}>
+            <Text style={styles.recommendationsTitle}>Recommended Videos</Text>
+            <Pressable 
+              onPress={() => {
+                // Stop current video before navigating
+                if (video.current) {
+                  video.current.pauseAsync()
+                    .then(() => {
+                      video.current?.unloadAsync()
+                        .catch(err => console.log('Error unloading video:', err));
+                      router.push("/" as any);
+                    })
+                    .catch(err => {
+                      console.log('Error pausing video:', err);
+                      router.push("/" as any);
+                    });
+                } else {
+                  router.push("/" as any);
+                }
+              }}
+            >
+              <Text style={styles.seeAllText}>See All <ChevronRight size={14} color="#1877F2" /></Text>
+            </Pressable>
           </View>
-        )}
+          
+          <View style={styles.recommendationsGrid}>
+            {recommendedVideos.map((item) => (
+              <RecommendationItem 
+                key={item.id} 
+                item={item} 
+                onPress={() => handleRecommendationPress(item.id)} 
+              />
+            ))}
+          </View>
+        </Animated.View>
       </ScrollView>
     </KeyboardAvoidingView>
   );
@@ -780,6 +923,12 @@ const styles = StyleSheet.create({
   videoContainer: {
     width: '100%',
     position: 'relative',
+    backgroundColor: '#000',
+    justifyContent: 'center',
+    alignItems: 'center',
+    overflow: 'hidden',
+    borderBottomWidth: 1,
+    borderBottomColor: 'rgba(50, 50, 50, 0.5)',
   },
   header: {
     flexDirection: 'row',
@@ -788,6 +937,9 @@ const styles = StyleSheet.create({
     paddingHorizontal: 20,
     paddingBottom: 20,
     backgroundColor: 'rgba(0, 0, 0, 0.8)',
+    zIndex: 10,
+    borderBottomWidth: 1,
+    borderBottomColor: 'rgba(50, 50, 50, 0.3)',
   },
   backButton: {
     marginRight: 15,
@@ -803,23 +955,44 @@ const styles = StyleSheet.create({
   video: {
     width: '100%',
     height: '100%',
+    backgroundColor: '#000',
   },
-  controls: {
+  videoOverlay: {
+    ...StyleSheet.absoluteFillObject,
+    justifyContent: 'center',
+    alignItems: 'center',
+    backgroundColor: 'rgba(0, 0, 0, 0.2)',
+  },
+  bottomControls: {
     position: 'absolute',
-    bottom: 20,
-    right: 20,
+    bottom: 40,
+    left: 0,
+    right: 0,
     flexDirection: 'row',
-    justifyContent: 'flex-end',
+    justifyContent: 'space-between',
+    paddingHorizontal: 20,
   },
   muteButton: {
     backgroundColor: 'rgba(0, 0, 0, 0.6)',
     padding: 10,
     borderRadius: 50,
-    elevation: 5,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.3,
-    shadowRadius: 4,
+    width: 44,
+    height: 44,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  progressBarContainer: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
+    height: 3,
+    backgroundColor: 'rgba(0, 0, 0, 0.4)',
+    zIndex: 10,
+  },
+  progressBar: {
+    backgroundColor: '#1877F2',
+    height: '100%',
   },
   info: {
     padding: 20,
@@ -993,11 +1166,6 @@ const styles = StyleSheet.create({
     fontSize: 16,
     fontFamily: 'Inter_600SemiBold',
     marginBottom: 8,
-  },
-  emptyCommentsSubtext: {
-    color: '#999',
-    fontSize: 14,
-    fontFamily: 'Inter_400Regular',
   },
   commentsList: {
     paddingHorizontal: 16,

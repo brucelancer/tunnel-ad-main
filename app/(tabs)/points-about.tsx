@@ -928,7 +928,13 @@ export default function PointsAboutScreen() {
         {/* Points Balance */}
         <View style={styles.balanceSection}>
           <Text style={styles.balanceLabel}>Available Points</Text>
-          <Text style={styles.balanceValue}>{points}</Text>
+          <View style={styles.balanceRow}>
+            <Text style={styles.balanceValue}>{points}</Text>
+            <Image
+              source={require('@/assets/images/tunnel-coin-4.png')}
+             
+            />
+          </View>
           
           <Pressable 
             style={styles.notificationButtonLarge}
@@ -1020,11 +1026,21 @@ const styles = StyleSheet.create({
     fontFamily: 'Inter_500Medium',
     marginBottom: 5,
   },
+  balanceRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginBottom: 20,
+  },
   balanceValue: {
     color: '#00ff00',
     fontSize: 48,
     fontFamily: 'Inter_700Bold',
-    marginBottom: 20,
+    marginRight: 10,
+  },
+  tunnelIcon: {
+    width: 40,
+    height: 40,
+    marginLeft: 8,
   },
   infoSection: {
     backgroundColor: '#111',

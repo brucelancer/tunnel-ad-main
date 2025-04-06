@@ -53,7 +53,7 @@ import { PinchGestureHandler, State, GestureHandlerRootView } from 'react-native
 import { urlFor, getSanityClient } from '@/tunnel-ad-main/services/postService';
 import Svg, { Path } from 'react-native-svg';
 import * as sanityAuthService from '@/tunnel-ad-main/services/sanityAuthService';
-import FloatingChatButton from './FloatingChatButton';
+import FloatingActionButton from './FloatingActionButton';
 import { eventEmitter } from '../app/utils/eventEmitter';
 // Import videoService to fetch videos
 import videoService from '@/tunnel-ad-main/services/videoService.js';
@@ -849,6 +849,76 @@ export default function Feed() {
     pinchScale.setValue(1);
   };
 
+  // Add horizontal swipe gesture handling for image navigation
+  const imageSwipeX = useRef(new Animated.Value(0)).current;
+  const swipeDistance = useRef(0);
+  const currentScaleValue = useRef(1);
+
+  // Add listener to track scale
+  useEffect(() => {
+    const scaleListener = combinedScale.addListener(({value}) => {
+      currentScaleValue.current = value;
+    });
+    
+    return () => {
+      combinedScale.removeListener(scaleListener);
+    };
+  }, []);
+  
+  // Image viewer swipe pan responder
+  const imageSwipePanResponder = useRef(
+    PanResponder.create({
+      onMoveShouldSetPanResponder: (_, gesture) => {
+        // Only handle horizontal swipes when not zoomed in
+        return Math.abs(gesture.dx) > Math.abs(gesture.dy) && 
+               currentScaleValue.current <= 1.1;
+      },
+      onPanResponderGrant: () => {
+        // Store the current swipe position
+        swipeDistance.current = 0;
+      },
+      onPanResponderMove: (_, gesture) => {
+        // Only allow horizontal swiping if not zoomed in
+        if (currentScaleValue.current <= 1.1) {
+          swipeDistance.current = gesture.dx;
+          imageSwipeX.setValue(gesture.dx);
+        }
+      },
+      onPanResponderRelease: (_, gesture) => {
+        // Determine if the swipe was significant enough to change images
+        const { dx, vx } = gesture;
+        
+        if (currentScaleValue.current <= 1.1 && 
+            (Math.abs(dx) > SCREEN_WIDTH / 3 || Math.abs(vx) > 0.5)) {
+          // Significant swipe - change image
+          if (dx > 0 && currentImageIndex > 0) {
+            // Swipe right - show previous image
+            setCurrentImageIndex(prevIndex => prevIndex - 1);
+          } else if (dx < 0 && currentImageIndex < currentPostImages.length - 1) {
+            // Swipe left - show next image
+            setCurrentImageIndex(prevIndex => prevIndex + 1);
+          } else {
+            // Reset position with animation
+            Animated.spring(imageSwipeX, {
+              toValue: 0,
+              friction: 5,
+              tension: 40,
+              useNativeDriver: true
+            }).start();
+          }
+        } else {
+          // Reset position with animation
+          Animated.spring(imageSwipeX, {
+            toValue: 0,
+            friction: 5,
+            tension: 40,
+            useNativeDriver: true
+          }).start();
+        }
+      }
+    })
+  ).current;
+
   // Create a pan responder for the viewer with panning and double-tap
   const viewerPanResponder = useRef(
     PanResponder.create({
@@ -871,9 +941,12 @@ export default function Feed() {
         translateY.setValue(0);
       },
       onPanResponderMove: (_, gesture) => {
-        // Update pan position
-        translateX.setValue(gesture.dx);
-        translateY.setValue(gesture.dy);
+        // Only allow panning if zoomed in
+        if (currentScaleValue.current > 1.1) {
+          // Update pan position
+          translateX.setValue(gesture.dx);
+          translateY.setValue(gesture.dy);
+        }
       },
       onPanResponderRelease: (_, gesture) => {
         // Apply offset to value
@@ -881,7 +954,7 @@ export default function Feed() {
         translateY.flattenOffset();
         
         // Detect swipe to dismiss
-        if (Math.abs(gesture.dy) > 100 && Math.abs(gesture.vy) > 0.5) {
+        if (Math.abs(gesture.dy) > 100 && Math.abs(gesture.vy) > 0.5 && currentScaleValue.current <= 1.1) {
           setModalVisible(false);
         }
       },
@@ -893,16 +966,17 @@ export default function Feed() {
     })
   ).current;
 
-  // Reset zoom and pan values when modal is closed
+  // Reset zoom and pan values when modal is closed or when image changes
   useEffect(() => {
     if (!modalVisible) {
-      // Reset to initial state
+      // Reset to initial state when modal is closed
       baseScale.setValue(1);
       pinchScale.setValue(1);
       translateX.setValue(0);
       translateY.setValue(0);
+      imageSwipeX.setValue(0);
     }
-  }, [modalVisible]);
+  }, [modalVisible, currentImageIndex]);
 
   // Handler for pinch gesture (zooming)
   const onPinchGestureEvent = Animated.event(
@@ -928,10 +1002,53 @@ export default function Feed() {
       lastTap.current = now;
     } else {
       // Opening the modal with the selected image
-      setSelectedImage(imageUri);
       setCurrentPostImages(allImages);
       setCurrentImageIndex(initialIndex);
+      setSelectedImage(allImages[initialIndex]);
       setModalVisible(true);
+    }
+  };
+
+  // Function to handle image swiping by updating the current index
+  const handleSwipe = (direction: 'left' | 'right') => {
+    if (direction === 'left' && currentImageIndex < currentPostImages.length - 1) {
+      // Next image
+      setSelectedImage(currentPostImages[currentImageIndex + 1]);
+      setCurrentImageIndex(prevIndex => {
+        const newIndex = prevIndex + 1;
+        
+        // Reset position immediately after changing image
+        imageSwipeX.setValue(-SCREEN_WIDTH * 0.5);
+        
+        // Animate back to center
+        Animated.spring(imageSwipeX, {
+          toValue: 0,
+          friction: 8,
+          tension: 40,
+          useNativeDriver: true
+        }).start();
+        
+        return newIndex;
+      });
+    } else if (direction === 'right' && currentImageIndex > 0) {
+      // Previous image
+      setSelectedImage(currentPostImages[currentImageIndex - 1]);
+      setCurrentImageIndex(prevIndex => {
+        const newIndex = prevIndex - 1;
+        
+        // Reset position immediately after changing image
+        imageSwipeX.setValue(SCREEN_WIDTH * 0.5);
+        
+        // Animate back to center
+        Animated.spring(imageSwipeX, {
+          toValue: 0,
+          friction: 8,
+          tension: 40,
+          useNativeDriver: true
+        }).start();
+        
+        return newIndex;
+      });
     }
   };
 
@@ -1203,23 +1320,6 @@ export default function Feed() {
         pathname: "/user-profile" as any,
         params: { id: userId }
       });
-    }
-  };
-
-  // Handle image swipe in modal
-  const handleSwipe = (direction: 'left' | 'right') => {
-    if (currentPostImages.length <= 1) return;
-    
-    let newIndex = currentImageIndex;
-    if (direction === 'left' && currentImageIndex < currentPostImages.length - 1) {
-      newIndex = currentImageIndex + 1;
-    } else if (direction === 'right' && currentImageIndex > 0) {
-      newIndex = currentImageIndex - 1;
-    }
-    
-    if (newIndex !== currentImageIndex) {
-      setCurrentImageIndex(newIndex);
-      setSelectedImage(currentPostImages[newIndex]);
     }
   };
 
@@ -1609,6 +1709,11 @@ export default function Feed() {
     );
   };
 
+  // Add navigateToCreatePost function from FloatingActionButton
+  const navigateToCreatePost = () => {
+    router.push("/newsfeed-upload" as any);
+  };
+  
   // Create post component
   const CreatePostComponent = () => (
     <View style={[styles.createPostContainer, { width: cardWidth }]}>
@@ -1626,7 +1731,7 @@ export default function Feed() {
         )}
         <Pressable
           style={styles.postInputContainer}
-          onPress={() => router.push("/newsfeed-upload" as any)}
+          onPress={navigateToCreatePost}
         >
           <View style={styles.postInput}>
             <Text style={styles.postInputPlaceholder}>What's on your mind?</Text>
@@ -1640,7 +1745,7 @@ export default function Feed() {
             <Pressable 
               style={styles.mediaButton} 
               hitSlop={{top: 10, bottom: 10, left: 10, right: 10}}
-              onPress={() => router.push("/newsfeed-upload" as any)}
+              onPress={navigateToCreatePost}
             >
               <ImageIcon size={16} color="#0070F3" />
               <Text style={styles.mediaButtonText}>Photo</Text>
@@ -1649,7 +1754,7 @@ export default function Feed() {
             <Pressable 
               style={styles.mediaButton} 
               hitSlop={{top: 10, bottom: 10, left: 10, right: 10}}
-              onPress={() => router.push("/newsfeed-upload" as any)}
+              onPress={navigateToCreatePost}
             >
               <Camera size={16} color="#0070F3" />
               <Text style={styles.mediaButtonText}>Camera</Text>
@@ -1659,7 +1764,7 @@ export default function Feed() {
         
         <Pressable 
           style={styles.postButton}
-          onPress={() => router.push("/newsfeed-upload" as any)}
+          onPress={navigateToCreatePost}
         >
           <Text style={styles.postButtonText}>Post</Text>
         </Pressable>
@@ -1790,6 +1895,34 @@ export default function Feed() {
     }
   };
 
+  // Add variables to track scroll position
+  const lastScrollY = useRef(0);
+  const scrollDirection = useRef<'up' | 'down'>('up');
+  const scrollThreshold = 10; // Minimum scroll distance to trigger direction change
+  
+  // Update the onScroll handler
+  const handleScroll = (event: any) => {
+    const currentScrollY = event.nativeEvent.contentOffset.y;
+    
+    // Determine scroll direction and emit event when direction changes
+    if (currentScrollY > lastScrollY.current + scrollThreshold) {
+      // Scrolling down
+      if (scrollDirection.current !== 'down') {
+        scrollDirection.current = 'down';
+        DeviceEventEmitter.emit('FEED_SCROLL', { direction: 'down' });
+      }
+    } else if (currentScrollY < lastScrollY.current - scrollThreshold) {
+      // Scrolling up
+      if (scrollDirection.current !== 'up') {
+        scrollDirection.current = 'up';
+        DeviceEventEmitter.emit('FEED_SCROLL', { direction: 'up' });
+      }
+    }
+    
+    // Update last scroll position
+    lastScrollY.current = currentScrollY;
+  };
+
   return (
     <KeyboardAvoidingView 
       style={styles.container} 
@@ -1807,7 +1940,10 @@ export default function Feed() {
         showsVerticalScrollIndicator={false}
         onScroll={Animated.event(
           [{ nativeEvent: { contentOffset: { y: scrollY } } }],
-          { useNativeDriver: true }
+          { 
+            useNativeDriver: true,
+            listener: handleScroll  // Add scroll listener
+          }
         )}
         refreshing={refreshing || hookRefreshing}
         onRefresh={handleRefresh}
@@ -1823,98 +1959,149 @@ export default function Feed() {
         columnWrapperStyle={isTablet ? styles.columnWrapper : undefined}
       />
       
-      {/* Image Viewer Modal with GestureHandlerRootView */}
+      {/* Image Viewer Modal with FlatList for improved scrolling */}
       <Modal
         visible={modalVisible}
         transparent={true}
         onRequestClose={() => setModalVisible(false)}
         animationType="fade"
       >
-        <GestureHandlerRootView style={{ flex: 1 }}>
-          <View style={styles.modalContainer}>
-            <TouchableWithoutFeedback onPress={() => setModalVisible(false)}>
-              <View style={styles.modalBackdrop} />
-            </TouchableWithoutFeedback>
+        <Pressable 
+          style={styles.modalContainer} 
+          onPress={() => setModalVisible(false)}
+        >
+          <View style={styles.modalBackdrop} />
+          
+          <Pressable 
+            style={styles.gestureContainer}
+            onPress={(e) => e.stopPropagation()}
+          >
+            {/* Close button */}
+            <Pressable 
+              style={styles.closeButton} 
+              onPress={() => setModalVisible(false)}
+            >
+              <Text style={styles.closeButtonText}>✕</Text>
+            </Pressable>
             
-            <View style={styles.imageViewer}>
-              {/* Navigation buttons */}
-              {currentPostImages.length > 1 && (
-                <>
-                  {currentImageIndex > 0 && (
-                    <Pressable 
-                      style={[styles.navButton, styles.leftNavButton]} 
-                      onPress={() => handleSwipe('right')}
-                    >
-                      <Text style={styles.navButtonText}>‹</Text>
-                    </Pressable>
-                  )}
-                  
-                  {currentImageIndex < currentPostImages.length - 1 && (
-                    <Pressable 
-                      style={[styles.navButton, styles.rightNavButton]} 
-                      onPress={() => handleSwipe('left')}
-                    >
-                      <Text style={styles.navButtonText}>›</Text>
-                    </Pressable>
-                  )}
-                </>
-              )}
-              
-              {/* Close button */}
-              <Pressable 
-                style={styles.closeButton} 
-                onPress={() => setModalVisible(false)}
-              >
-                <Text style={styles.closeButtonText}>✕</Text>
-              </Pressable>
-              
-              {/* Image with pinch zoom */}
-              {selectedImage && (
-                <PinchGestureHandler
-                  onGestureEvent={onPinchGestureEvent}
-                  onHandlerStateChange={({ nativeEvent }) => {
-                    if (nativeEvent.oldState === State.ACTIVE) {
-                      onPinchEnd();
+            {currentPostImages.length > 0 && (
+              <GestureHandlerRootView style={styles.imageViewerContent}>
+                <FlatList
+                  data={currentPostImages}
+                  horizontal
+                  pagingEnabled
+                  showsHorizontalScrollIndicator={false}
+                  initialScrollIndex={currentImageIndex}
+                  scrollEnabled={currentScaleValue.current <= 1.1}
+                  getItemLayout={(data, index) => ({
+                    length: SCREEN_WIDTH,
+                    offset: SCREEN_WIDTH * index,
+                    index,
+                  })}
+                  onMomentumScrollEnd={(e) => {
+                    const newIndex = Math.floor(e.nativeEvent.contentOffset.x / SCREEN_WIDTH);
+                    if (newIndex !== currentImageIndex) {
+                      setSelectedImage(currentPostImages[newIndex]);
+                      setCurrentImageIndex(newIndex);
+                      
+                      // Reset zoom and pan when changing images
+                      baseScale.setValue(1);
+                      pinchScale.setValue(1);
+                      translateX.setValue(0);
+                      translateY.setValue(0);
                     }
                   }}
-                >
-                  <Animated.View 
-                    style={styles.pinchableView}
-                    {...viewerPanResponder.panHandlers}
-                  >
-                    <TouchableWithoutFeedback 
-                      onPress={() => handleImagePress(selectedImage, currentPostImages, currentImageIndex)}
+                  renderItem={({ item, index }) => (
+                    <View 
+                      style={{ width: SCREEN_WIDTH, height: '100%' }}
+                      {...(currentScaleValue.current > 1.1 ? viewerPanResponder.panHandlers : {})}
                     >
-                      <Animated.Image
-                        source={{ uri: selectedImage }}
-                        style={[
-                          styles.modalImage,
-                          {
-                            transform: [
-                              { scale: combinedScale },
-                              { translateX },
-                              { translateY },
-                            ],
-                          },
-                        ]}
-                        resizeMode="contain"
-                      />
-                    </TouchableWithoutFeedback>
-                  </Animated.View>
-                </PinchGestureHandler>
-              )}
-              
-              {/* Image counter */}
-              {currentPostImages.length > 1 && (
-                <View style={styles.imageCounter}>
-                  <Text style={styles.imageCounterText}>
-                    {currentImageIndex + 1} / {currentPostImages.length}
-                  </Text>
-                </View>
-              )}
-            </View>
-          </View>
-        </GestureHandlerRootView>
+                      <PinchGestureHandler
+                        onGestureEvent={onPinchGestureEvent}
+                        onHandlerStateChange={({ nativeEvent }) => {
+                          if (nativeEvent.oldState === State.ACTIVE) {
+                            onPinchEnd();
+                          }
+                        }}
+                      >
+                        <Animated.View 
+                          style={[styles.pinchableView, { width: SCREEN_WIDTH }]}
+                        >
+                          <TouchableWithoutFeedback 
+                            onPress={() => {
+                              const now = Date.now();
+                              const DOUBLE_TAP_DELAY = 300;
+                              
+                              // Handle double tap to zoom
+                              if (now - lastTap.current < DOUBLE_TAP_DELAY) {
+                                if (currentScaleValue.current > 1.5) {
+                                  // Reset zoom if already zoomed in
+                                  baseScale.setValue(1);
+                                  pinchScale.setValue(1);
+                                  translateX.setValue(0);
+                                  translateY.setValue(0);
+                                } else {
+                                  // Zoom in to 2.5x at the center
+                                  baseScale.setValue(2.5);
+                                }
+                              } else {
+                                // Add a subtle touch feedback
+                                Animated.sequence([
+                                  Animated.timing(baseScale, {
+                                    toValue: currentScaleValue.current * 0.95,
+                                    duration: 100,
+                                    useNativeDriver: true
+                                  }),
+                                  Animated.timing(baseScale, {
+                                    toValue: currentScaleValue.current,
+                                    duration: 100,
+                                    useNativeDriver: true
+                                  })
+                                ]).start();
+                              }
+                              
+                              lastTap.current = now;
+                            }}
+                          >
+                            <Animated.Image
+                              source={{ uri: item }}
+                              style={[
+                                styles.modalImage,
+                                {
+                                  transform: [
+                                    { scale: combinedScale },
+                                    { translateX },
+                                    { translateY },
+                                  ],
+                                },
+                              ]}
+                              resizeMode="contain"
+                            />
+                          </TouchableWithoutFeedback>
+                        </Animated.View>
+                      </PinchGestureHandler>
+                    </View>
+                  )}
+                  keyExtractor={(item, index) => `modal-image-${index}`}
+                  ref={(ref) => {
+                    if (ref && currentImageIndex > 0) {
+                      ref.scrollToIndex({ index: currentImageIndex, animated: false });
+                    }
+                  }}
+                />
+                
+                {/* Image counter */}
+                {currentPostImages.length > 1 && (
+                  <View style={styles.imageCounter}>
+                    <Text style={styles.imageCounterText}>
+                      {currentImageIndex + 1} / {currentPostImages.length}
+                    </Text>
+                  </View>
+                )}
+              </GestureHandlerRootView>
+            )}
+          </Pressable>
+        </Pressable>
       </Modal>
       
       {/* User Profile Popup */}
@@ -1934,8 +2121,8 @@ export default function Feed() {
         isOwnPost={user && selectedPostId !== '' ? posts.find(p => p.id === selectedPostId)?.user.id === user._id : false}
       />
       
-      {/* Add FloatingChatButton */}
-      <FloatingChatButton />
+      {/* Add FloatingActionButton */}
+      <FloatingActionButton />
     </KeyboardAvoidingView>
   );
 }
@@ -2247,9 +2434,8 @@ const styles = StyleSheet.create({
   // Add modal styles
   modalContainer: {
     flex: 1,
-    backgroundColor: 'rgba(0,0,0,0.9)',
-    justifyContent: 'center',
-    alignItems: 'center',
+    backgroundColor: 'transparent',
+    position: 'relative',
   },
   modalBackdrop: {
     position: 'absolute',
@@ -2257,6 +2443,14 @@ const styles = StyleSheet.create({
     left: 0,
     right: 0,
     bottom: 0,
+    backgroundColor: 'rgba(0,0,0,0.9)',
+  },
+  gestureContainer: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+    // This ensures this container doesn't block touches to the backdrop
+    backgroundColor: 'transparent',
   },
   imageViewer: {
     width: '100%',
@@ -2722,5 +2916,11 @@ const styles = StyleSheet.create({
     lineHeight: 20,
     paddingHorizontal: 16,
     marginBottom: 12,
+  },
+  imageViewerContent: {
+    width: '100%',
+    height: '100%',
+    justifyContent: 'center',
+    alignItems: 'center',
   },
 }); 

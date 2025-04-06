@@ -15,9 +15,11 @@ import {
   Animated,
   Dimensions,
   TouchableOpacity,
-  useWindowDimensions
+  useWindowDimensions,
+  DeviceEventEmitter,
+  Alert
 } from 'react-native';
-import { useLocalSearchParams, useRouter, Stack } from 'expo-router';
+import { useLocalSearchParams, useRouter, Stack, useFocusEffect } from 'expo-router';
 import { BlurView } from 'expo-blur';
 import {
   ArrowLeft,
@@ -98,6 +100,13 @@ export default function ChatScreen() {
   const { width: windowWidth } = useWindowDimensions();
   const flatListRef = useRef<FlatList>(null);
   
+  // Redirect to conversations if no ID provided
+  useEffect(() => {
+    if (!id) {
+      router.replace("/conversations" as any);
+    }
+  }, [id, router]);
+  
   // States
   const [recipient, setRecipient] = useState<ChatUser | null>(null);
   const [messages, setMessages] = useState<Message[]>([]);
@@ -160,6 +169,19 @@ export default function ChatScreen() {
                     const exists = prevMessages.some(m => m._id === fullMessage._id);
                     if (!exists) {
                       // Add the new message and sort by creation date
+                      
+                      // If the message is from the other user, emit notification event
+                      if (fullMessage.sender._id === id) {
+                        // Only emit event if the user is not currently viewing this chat
+                        // Check if the app is not focused on this chat screen
+                        DeviceEventEmitter.emit('NEW_CHAT_MESSAGE', {
+                          senderId: fullMessage.sender._id,
+                          senderName: fullMessage.sender.name || fullMessage.sender.username,
+                          messageId: fullMessage._id,
+                          text: fullMessage.text
+                        });
+                      }
+                      
                       return [...prevMessages, fullMessage].sort((a, b) => 
                         new Date(a._createdAt).getTime() - new Date(b._createdAt).getTime()
                       );
@@ -206,6 +228,21 @@ export default function ChatScreen() {
       };
     }
   }, [currentUser, id]);
+  
+  // Clear notifications when chat screen is in focus
+  useFocusEffect(
+    useCallback(() => {
+      // When this screen comes into focus, clear message notifications
+      DeviceEventEmitter.emit('CHAT_MESSAGES_READ');
+      
+      // Also mark any unread messages as seen
+      markMessagesAsSeen();
+      
+      return () => {
+        // Component is unfocused
+      };
+    }, [])
+  );
   
   // Fetch recipient data
   const fetchRecipientData = async () => {
@@ -292,50 +329,43 @@ export default function ChatScreen() {
   
   // Mark messages as seen
   const markMessagesAsSeen = async () => {
+    if (!currentUser?._id || !id) return;
+    
     try {
+      // Find unseen messages from the recipient
+      const unseenMessages = messages.filter(
+        msg => msg.sender._id === id && !msg.seen
+      );
+      
+      if (unseenMessages.length === 0) return;
+      
+      console.log(`Marking ${unseenMessages.length} messages as seen`);
+      
+      // Update local state first for immediate UI feedback
+      setMessages(prevMessages => 
+        prevMessages.map(msg => 
+          msg.sender._id === id && !msg.seen
+            ? { ...msg, seen: true }
+            : msg
+        )
+      );
+      
+      // Notify that messages have been read
+      DeviceEventEmitter.emit('CHAT_MESSAGES_READ');
+      
+      // Make API call to update messages on the server
       const client = getSanityClient();
-      if (!client || !currentUser?._id || !id) return;
-      
-      // Find all unread messages from recipient
-      const unseenMessages = await client.fetch(`
-        *[_type == "message" && 
-          sender._ref == $recipientId && 
-          recipient._ref == $currentUserId && 
-          seen == false
-        ]._id
-      `, { 
-        currentUserId: currentUser._id,
-        recipientId: id
-      });
-      
-      // Mark all as seen with a transaction
-      if (unseenMessages && unseenMessages.length > 0) {
+      if (client) {
         const transaction = client.transaction();
         
-        unseenMessages.forEach((messageId: string) => {
-          transaction.patch(messageId, {
+        unseenMessages.forEach(message => {
+          transaction.patch(message._id, {
             set: { seen: true }
           });
         });
         
         await transaction.commit();
-        console.log(`Marked ${unseenMessages.length} messages as seen`);
-        
-        // Update local state to reflect seen status
-        setMessages(prevMessages => 
-          prevMessages.map(msg => 
-            unseenMessages.includes(msg._id) 
-              ? { ...msg, seen: true } 
-              : msg
-          )
-        );
-        
-        // Emit an event to notify other components that messages have been seen
-        eventEmitter.emit('messages-seen');
-      } else {
-        // Even if there are no unseen messages, still emit the event to ensure badges get updated
-        // This is crucial for synchronizing UI state between components
-        eventEmitter.emit('messages-seen');
+        console.log('Messages marked as seen on server');
       }
     } catch (error) {
       console.error('Error marking messages as seen:', error);
@@ -643,6 +673,27 @@ export default function ChatScreen() {
     );
   };
   
+  // Add a test function to simulate receiving a message
+  const simulateIncomingMessage = () => {
+    // Generate a random message ID
+    const fakeMessageId = `test-${Date.now()}`;
+    
+    // Emit a fake message notification event
+    DeviceEventEmitter.emit('NEW_CHAT_MESSAGE', {
+      senderId: id || 'unknown',
+      senderName: recipient?.name || 'Test User',
+      messageId: fakeMessageId,
+      text: 'This is a test message'
+    });
+    
+    // Show an alert to confirm the test was sent
+    Alert.alert(
+      'Test Notification Sent',
+      'Check the floating action button for the notification badge.',
+      [{ text: 'OK' }]
+    );
+  };
+  
   if (loading && !recipient) {
     return (
       <View style={styles.loadingContainer}>
@@ -789,6 +840,16 @@ export default function ChatScreen() {
             </Pressable>
           </View>
         </View>
+        
+        {/* Test button - only visible in development */}
+        {__DEV__ && (
+          <Pressable 
+            style={styles.testButton}
+            onPress={simulateIncomingMessage}
+          >
+            <Text style={styles.testButtonText}>Test Notification</Text>
+          </Pressable>
+        )}
       </KeyboardAvoidingView>
     </SafeAreaView>
   );
@@ -1059,5 +1120,18 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     marginLeft: 4,
+  },
+  testButton: {
+    backgroundColor: '#1877F2',
+    padding: 10,
+    borderRadius: 10,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginTop: 10,
+  },
+  testButtonText: {
+    color: 'white',
+    fontSize: 16,
+    fontFamily: 'Inter_600SemiBold',
   },
 }); 

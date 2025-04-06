@@ -11,6 +11,7 @@ import {
   ActivityIndicator,
   Image,
   Platform,
+  Modal,
 } from 'react-native';
 import {
   Film,
@@ -22,6 +23,13 @@ import {
   DollarSign,
   X,
   Image as ImageIcon,
+  Maximize2,
+  Info,
+  Eye,
+  Heart,
+  MessageCircle,
+  Play,
+  Pause,
 } from 'lucide-react-native';
 import { Video, ResizeMode } from 'expo-av';
 import * as ImagePicker from 'expo-image-picker';
@@ -53,6 +61,10 @@ export default function VideoTunnelling({ onSubmit }: VideoTunnellingProps) {
   const [uploadProgress, setUploadProgress] = useState(0);
   const [thumbnailUri, setThumbnailUri] = useState<string | null>(null);
   const [showThumbnailOptions, setShowThumbnailOptions] = useState(false);
+  const [detectedAspectRatio, setDetectedAspectRatio] = useState<number | null>(null);
+  const [showFullView, setShowFullView] = useState(false);
+  const [showInfo, setShowInfo] = useState(false);
+  const [showPreview, setShowPreview] = useState(false);
   
   const { user } = useSanityAuth();
   
@@ -65,28 +77,20 @@ export default function VideoTunnelling({ onSubmit }: VideoTunnellingProps) {
       Animated.sequence([
         Animated.timing(borderAnimation, {
           toValue: 1,
-          duration: 5000,
+          duration: 8000,
           useNativeDriver: true,
         }),
         Animated.timing(borderAnimation, {
           toValue: 0,
-          duration: 5000,
+          duration: 8000,
           useNativeDriver: true,
         })
       ]).start(() => animateBorder());
     };
 
-    if (contentType === 'personal') {
       animateBorder();
-    }
 
-    return () => {
-      borderAnimation.setValue(0);
-    };
-  }, [contentType]);
-
-  useEffect(() => {
-    // Running light animation for video link field
+    // Loop the link field animation too
     const animateLinkField = () => {
       Animated.loop(
         Animated.sequence([
@@ -104,18 +108,23 @@ export default function VideoTunnelling({ onSubmit }: VideoTunnellingProps) {
       ).start();
     };
 
-    // Only run animation if we're in ad mode AND there's no text in the input
-    if (contentType === 'ad' && !videoLink) {
       animateLinkField();
-    } else {
-      // Stop animation if there's text
-      linkFieldAnimation.setValue(0);
-    }
 
     return () => {
+      borderAnimation.setValue(0);
       linkFieldAnimation.setValue(0);
     };
-  }, [contentType, videoLink]);
+  }, []);
+
+  // Add useEffect to pause main video when modals open and resume when closed
+  useEffect(() => {
+    if ((showFullView || showPreview) && videoRef.current) {
+      videoRef.current.pauseAsync();
+    } else if (!showFullView && !showPreview && videoRef.current) {
+      // Resume video when both modals are closed
+      videoRef.current.playAsync();
+    }
+  }, [showFullView, showPreview]);
 
   const handleVideoUpload = async () => {
     try {
@@ -135,6 +144,7 @@ export default function VideoTunnelling({ onSubmit }: VideoTunnellingProps) {
         mediaTypes: 'videos',
         allowsEditing: true,
         quality: 1,
+        exif: true, // Get video metadata if available
       });
 
       if (!result.canceled && result.assets[0].uri) {
@@ -143,7 +153,21 @@ export default function VideoTunnelling({ onSubmit }: VideoTunnellingProps) {
         // Auto-detect orientation from video dimensions
         if (result.assets[0].width && result.assets[0].height) {
           const aspectRatio = result.assets[0].width / result.assets[0].height;
-          setVideoOrientation(aspectRatio >= 1 ? 'horizontal' : 'vertical');
+          const detectedOrientation = aspectRatio >= 1 ? 'horizontal' : 'vertical';
+          setVideoOrientation(detectedOrientation);
+          setDetectedAspectRatio(aspectRatio);
+          
+          // Format the orientation message
+          const orientationMsg = detectedOrientation === 'horizontal' 
+            ? 'landscape (widescreen)' 
+            : 'portrait (tall)';
+          
+          // Show detected orientation to user
+          Alert.alert(
+            'Video Orientation Detected', 
+            `Your video will be displayed in its original ${orientationMsg} format.`,
+            [{ text: 'OK', style: 'default' }]
+          );
         }
       }
     } catch (error) {
@@ -202,6 +226,9 @@ export default function VideoTunnelling({ onSubmit }: VideoTunnellingProps) {
     setUploadProgress(10);
     
     try {
+      // Calculate aspect ratio based on detected orientation
+      const exactAspectRatio = detectedAspectRatio || (videoOrientation === 'horizontal' ? 16/9 : 9/16);
+      
       // Prepare video data
       const videoData = {
         title,
@@ -210,8 +237,9 @@ export default function VideoTunnelling({ onSubmit }: VideoTunnellingProps) {
         videoOrientation,
         videoUri: personalVideoUri,
         videoLink,
-        aspectRatio: videoOrientation === 'horizontal' ? 16/9 : 9/16,
+        aspectRatio: exactAspectRatio,
         thumbnailUri,
+        type: videoOrientation, // Ensure 'type' field matches VideoItem interface in Feed
       };
       
       // Simulate progress for better UX
@@ -265,96 +293,32 @@ export default function VideoTunnelling({ onSubmit }: VideoTunnellingProps) {
 
   const renderContentType = (type: ContentType, icon: React.ReactNode, label: string) => {
     const isActive = contentType === type;
-    const typeStyles = getContentTypeStyles(type, isActive);
     
     return (
       <Pressable
         style={[
-          styles.contentTypeButton,
-          typeStyles.container
+          styles.typeButton,
+          isActive && styles.activeTypeButton
         ]}
         onPress={() => setContentType(type)}
       >
-        <View style={styles.contentTypeInner}>
-          <View style={styles.contentTypeIconContainer}>
+        <View style={styles.typeButtonInner}>
+          <View style={styles.typeIconContainer}>
             {React.cloneElement(icon as React.ReactElement, {
               color: '#FFFFFF',
               size: 24,
-              style: typeStyles.icon
+              style: { opacity: isActive ? 1 : 0.5 }
             })}
           </View>
           <Text style={[
-            styles.contentTypeText,
-            isActive && styles.activeContentTypeText
+            styles.typeText,
+            isActive && styles.activeTypeText
           ]}>
             {label}
           </Text>
           {isActive && <View style={styles.activeIndicator} />}
         </View>
       </Pressable>
-    );
-  };
-
-  const renderVideoOrientation = (orientation: VideoOrientation, icon: React.ReactNode, label: string) => (
-    <Pressable
-      style={styles.orientationButton}
-      onPress={() => setVideoOrientation(orientation)}
-    >
-      <LinearGradient
-        colors={videoOrientation === orientation ? ['#0070F3', '#00DFD8'] : ['rgba(255,255,255,0.05)', 'rgba(255,255,255,0.02)']}
-        style={[styles.orientationGradient, videoOrientation === orientation && styles.activeOrientationGradient]}
-        start={{ x: 0, y: 0 }}
-        end={{ x: 1, y: 1 }}
-      >
-        {icon}
-        <Text style={[styles.orientationText, videoOrientation === orientation && styles.activeOrientationText]}>
-          {label}
-        </Text>
-      </LinearGradient>
-    </Pressable>
-  );
-
-  const renderVideoUpload = () => {
-    const rotate = borderAnimation.interpolate({
-      inputRange: [0, 1],
-      outputRange: ['0deg', '360deg']
-    });
-
-    return (
-      <View style={[styles.uploadContainer, { aspectRatio: videoOrientation === 'horizontal' ? 16/9 : 9/16 }]}>
-        <Animated.View
-          style={[
-            styles.animatedBorder,
-            {
-              transform: [{ rotate }]
-            }
-          ]}
-        >
-          <LinearGradient
-            colors={['#0070F3', '#00DFD8', '#0070F3']}
-            start={{ x: 0, y: 0 }}
-            end={{ x: 1, y: 1 }}
-            style={StyleSheet.absoluteFill}
-          />
-        </Animated.View>
-        <Pressable 
-          style={styles.uploadZoneNew}
-          onPress={handleVideoUpload}
-        >
-          <LinearGradient
-            colors={['rgba(0,112,243,0.1)', 'rgba(0,223,216,0.1)']}
-            style={styles.uploadGradient}
-            start={{ x: 0, y: 0 }}
-            end={{ x: 1, y: 1 }}
-          >
-            <View style={styles.uploadContent}>
-              <Upload size={32} color="#0070F3" />
-              <Text style={[styles.uploadText, { color: '#0070F3' }]}>Upload Video</Text>
-              <Text style={styles.uploadSubtext}>MP4, MOV up to 100MB</Text>
-            </View>
-          </LinearGradient>
-        </Pressable>
-      </View>
     );
   };
 
@@ -465,29 +429,241 @@ export default function VideoTunnelling({ onSubmit }: VideoTunnellingProps) {
     }
   };
 
-  return (
-    <ScreenContainer>
-      <View style={styles.container}>
-        <View style={styles.contentTypeContainer}>
-          {renderContentType(
-            'personal',
-            <UserCircle2 size={24} color={contentType === 'personal' ? '#fff' : '#666'} />,
-            'Personal'
-          )}
-          {renderContentType(
-            'ad',
-            <DollarSign size={24} color={contentType === 'ad' ? '#fff' : '#666'} />,
-            'Advertisement'
-          )}
-        </View>
+  // Function to handle full-view button press
+  const handleFullView = () => {
+    // Pause the main video before opening full view
+    if (videoRef.current) {
+      videoRef.current.pauseAsync();
+    }
+    setShowFullView(true);
+  };
 
-        <View style={styles.formContainer}>
-          {renderTitleInput()}
-          {contentType === 'personal' && (
-            <>
-              <View style={styles.inputGroup}>
-                <Text style={styles.label}>Video</Text>
-                <View style={[styles.uploadContainer, { aspectRatio: videoOrientation === 'horizontal' ? 16/9 : 9/16 }]}>
+  // Function to handle info button press
+  const handleInfo = () => {
+    setShowInfo(true);
+  };
+
+  // Function to handle preview button press
+  const handlePreview = () => {
+    // Pause the main video before opening preview
+    if (videoRef.current) {
+      videoRef.current.pauseAsync();
+    }
+    setShowPreview(true);
+  };
+
+  // Function to close modals
+  const closeModals = () => {
+    setShowFullView(false);
+    setShowInfo(false);
+    setShowPreview(false);
+    
+    // Resume the main video when modals are closed
+    if (videoRef.current && !showInfo) {
+      setTimeout(() => {
+        videoRef.current?.playAsync();
+      }, 300); // Small delay to ensure modal is fully closed
+    }
+  };
+
+  // Full-view modal component
+  const renderFullViewModal = () => {
+    if (!personalVideoUri) return null;
+
+  return (
+      <Modal
+        visible={showFullView}
+        transparent={true}
+        animationType="fade"
+        onRequestClose={closeModals}
+      >
+        <View style={styles.modalFullView}>
+          <Pressable style={styles.modalCloseButton} onPress={closeModals}>
+            <X size={24} color="white" />
+          </Pressable>
+          <Video
+            source={{ uri: personalVideoUri }}
+            style={styles.fullScreenVideo}
+            resizeMode={ResizeMode.CONTAIN}
+            useNativeControls
+            shouldPlay
+            isLooping
+          />
+        </View>
+      </Modal>
+    );
+  };
+
+  // Info modal component
+  const renderInfoModal = () => {
+    return (
+      <Modal
+        visible={showInfo}
+        transparent={true}
+        animationType="slide"
+        onRequestClose={closeModals}
+      >
+        <View style={styles.modalContainer}>
+          <View style={styles.modalContent}>
+            <View style={styles.modalHeader}>
+              <Text style={styles.modalTitle}>Video Information</Text>
+              <Pressable onPress={closeModals}>
+                <X size={24} color="#1877F2" />
+              </Pressable>
+            </View>
+            
+            <View style={styles.infoContainer}>
+              <Text style={styles.infoLabel}>Orientation:</Text>
+              <Text style={styles.infoValue}>{videoOrientation === 'horizontal' ? 'Landscape' : 'Portrait'}</Text>
+              
+              {detectedAspectRatio && (
+                <>
+                  <Text style={styles.infoLabel}>Aspect Ratio:</Text>
+                  <Text style={styles.infoValue}>{detectedAspectRatio.toFixed(2)}:1</Text>
+                </>
+              )}
+              
+              <Text style={styles.infoLabel}>Format:</Text>
+              <Text style={styles.infoValue}>MP4</Text>
+              
+              <Text style={styles.infoNote}>
+                Your video will maintain its original orientation and aspect ratio when uploaded.
+                The preview in the feed will be optimized for the best viewing experience.
+              </Text>
+            </View>
+          </View>
+        </View>
+      </Modal>
+    );
+  };
+
+  // Preview modal component
+  const renderPreviewModal = () => {
+    if (!personalVideoUri) return null;
+    
+    return (
+      <Modal
+        visible={showPreview}
+        transparent={true}
+        animationType="slide"
+        onRequestClose={closeModals}
+      >
+        <View style={styles.previewModalContainer}>
+          <View style={styles.previewModalContent}>
+            <View style={styles.previewModalHeader}>
+              <Text style={styles.modalTitle}>Feed Preview</Text>
+              <Pressable onPress={closeModals}>
+                <X size={24} color="#1877F2" />
+              </Pressable>
+            </View>
+            
+            <View style={styles.feedPreviewContainer}>
+              <View style={styles.feedHeader}>
+                <View style={styles.feedUserInfo}>
+                  <View style={styles.feedUserAvatar}>
+                    <UserCircle2 size={24} color="#1877F2" />
+                  </View>
+                  <Text style={styles.feedUsername}>Your Profile</Text>
+                </View>
+                <Text style={styles.feedTime}>Just now</Text>
+              </View>
+              
+              <View style={[
+                styles.feedVideoContainer,
+                videoOrientation === 'horizontal' 
+                  ? styles.feedHorizontalVideo 
+                  : styles.feedVerticalVideo
+              ]}>
+                <Video
+                  source={{ uri: personalVideoUri }}
+                  style={styles.feedVideo}
+                  resizeMode={videoOrientation === 'horizontal' ? ResizeMode.CONTAIN : ResizeMode.COVER}
+                  useNativeControls
+                  shouldPlay
+                  isLooping
+                />
+              </View>
+              
+              <View style={styles.feedCaption}>
+                <Text style={styles.feedTitle}>{videoTitle || 'Video Title'}</Text>
+                <Text style={styles.feedDescription} numberOfLines={2}>
+                  {personalDescription || 'Your video description will appear here'}
+                </Text>
+              </View>
+              
+              <View style={styles.feedControls}>
+                <View style={styles.feedControlItem}>
+                  <Heart size={18} color="#F04757" style={styles.feedControlIcon} />
+                  <Text style={styles.feedControlText}>0</Text>
+                </View>
+                <View style={styles.feedControlItem}>
+                  <MessageCircle size={18} color="#1877F2" style={styles.feedControlIcon} />
+                  <Text style={styles.feedControlText}>0</Text>
+                </View>
+                <View style={styles.feedControlItem}>
+                  <Eye size={18} color="#999" style={styles.feedControlIcon} />
+                  <Text style={styles.feedControlText}>0</Text>
+                </View>
+              </View>
+            </View>
+            
+            <Text style={styles.previewNote}>
+              This is how your video will appear in the video feed after uploading.
+            </Text>
+          </View>
+        </View>
+      </Modal>
+    );
+  };
+
+  // Add control icons below video preview
+  const renderVideoControls = () => {
+    if (!personalVideoUri) return null;
+    
+    return (
+      <View style={styles.videoControlsContainer}>
+        <Pressable style={styles.videoControlButton} onPress={handleFullView}>
+          <Maximize2 size={24} color="#1877F2" />
+          <Text style={styles.videoControlText}>Full View</Text>
+        </Pressable>
+        
+        <Pressable style={styles.videoControlButton} onPress={handleInfo}>
+          <Info size={24} color="#1877F2" />
+          <Text style={styles.videoControlText}>Information</Text>
+        </Pressable>
+        
+        <Pressable style={styles.videoControlButton} onPress={handlePreview}>
+          <Eye size={24} color="#1877F2" />
+          <Text style={styles.videoControlText}>Preview</Text>
+        </Pressable>
+      </View>
+    );
+  };
+
+  // Make sure the orientation is correctly previewed
+  const renderVideoPreview = () => {
+    if (!personalVideoUri) return null;
+      
+    // Format the aspect ratio display in a user-friendly way
+    let aspectRatioDisplay = '';
+    if (detectedAspectRatio) {
+      if (detectedAspectRatio >= 1.7 && detectedAspectRatio <= 1.8) {
+        aspectRatioDisplay = '(16:9)';
+      } else if (detectedAspectRatio >= 1.3 && detectedAspectRatio <= 1.4) {
+        aspectRatioDisplay = '(4:3)';
+      } else if (detectedAspectRatio <= 0.6) {
+        aspectRatioDisplay = '(9:16)';
+      } else {
+        aspectRatioDisplay = `(${detectedAspectRatio.toFixed(1)}:1)`;
+      }
+    }
+      
+    return (
+      <View style={styles.videoOuterContainer}>
+        <View style={[
+          styles.videoPreviewContainer, 
+          videoOrientation === 'horizontal' ? styles.horizontalVideo : styles.verticalVideo
+        ]}>
                   <Animated.View
                     style={[
                       styles.animatedBorder,
@@ -502,63 +678,119 @@ export default function VideoTunnelling({ onSubmit }: VideoTunnellingProps) {
                     ]}
                   >
                     <LinearGradient
-                      colors={['#0070F3', '#00DFD8', '#0070F3']}
+              colors={['#1877F2', '#00DFD8', '#1877F2']}
                       start={{ x: 0, y: 0 }}
                       end={{ x: 1, y: 1 }}
                       style={StyleSheet.absoluteFill}
                     />
                   </Animated.View>
-                  {!personalVideoUri ? (
-                    <Pressable 
-                      style={styles.uploadZoneNew}
-                      onPress={handleVideoUpload}
-                    >
-                      <LinearGradient
-                        colors={['rgba(0,112,243,0.1)', 'rgba(0,223,216,0.1)']}
-                        style={styles.uploadGradient}
-                        start={{ x: 0, y: 0 }}
-                        end={{ x: 1, y: 1 }}
-                      >
-                        <View style={styles.uploadContent}>
-                          <Upload size={32} color="#0070F3" />
-                          <Text style={[styles.uploadText, { color: '#0070F3' }]}>Upload Video</Text>
-                          <Text style={styles.uploadSubtext}>MP4, MOV up to 100MB</Text>
-                        </View>
-                      </LinearGradient>
-                    </Pressable>
-                  ) : (
-                    <View style={styles.uploadZoneNew}>
+          <View style={styles.videoInnerContainer}>
                       <Video
                         ref={videoRef}
                         source={{ uri: personalVideoUri }}
                         style={styles.videoPreview}
-                        resizeMode={ResizeMode.COVER}
-                      />
+              resizeMode={videoOrientation === 'horizontal' ? ResizeMode.CONTAIN : ResizeMode.COVER}
+              useNativeControls
+              isLooping
+              shouldPlay
+            />
+            <LinearGradient
+              colors={['transparent', 'rgba(0,0,0,0.5)']}
+              style={styles.videoGradientOverlay}
+              start={{ x: 0, y: 0 }}
+              end={{ x: 0, y: 1 }}
+            />
+          </View>
+          <View style={styles.orientationOverlay}>
+            <Text style={styles.orientationLabelText}>
+              {videoOrientation === 'horizontal' ? 'LANDSCAPE' : 'PORTRAIT'} {aspectRatioDisplay}
+            </Text>
+          </View>
                       <Pressable
-                        style={styles.removeButton}
+            style={styles.closeButton}
                         onPress={() => setPersonalVideoUri(null)}
+          >
+            <View style={styles.closeButtonInner}>
+              <X size={20} color="white" />
+            </View>
+          </Pressable>
+        </View>
+      </View>
+    );
+  };
+
+  return (
+    <ScreenContainer>
+      <View style={styles.container}>
+       
+        <View style={styles.formContainer}>
+          {/* Remove alert from top of form */}
+          
+          {contentType === 'personal' && (
+            <>
+              <Text style={styles.sectionTitle}>Video</Text>
+              <View style={styles.videoSection}>
+                {!personalVideoUri ? (
+                  <Pressable 
+                    style={styles.uploadButton}
+                    onPress={handleVideoUpload}
                       >
                         <LinearGradient
-                          colors={['#0070F3', '#00DFD8']}
-                          style={styles.removeGradient}
+                      colors={['#1877F2', '#00DFD8']}
+                      style={styles.uploadGradient}
                           start={{ x: 0, y: 0 }}
                           end={{ x: 1, y: 1 }}
                         >
-                          <X size={20} color="white" />
+                      <Upload size={24} color="#FFFFFF" />
+                      <Text style={styles.uploadButtonText}>Upload Video</Text>
                         </LinearGradient>
                       </Pressable>
-                    </View>
+                ) : (
+                  <>
+                    {renderVideoPreview()}
+                    {renderVideoControls()}
+                  </>
                   )}
                 </View>
+
+              {personalVideoUri && (
+                <>
+                  {renderTitleInput()}
+                  <View style={styles.inputGroup}>
+                    <Text style={styles.label}>Description</Text>
+                    <TextInput
+                      style={[styles.input, styles.textArea]}
+                      value={personalDescription}
+                      onChangeText={setPersonalDescription}
+                      placeholder="Write a compelling description"
+                      placeholderTextColor="#666"
+                      multiline
+                      numberOfLines={4}
+                    />
               </View>
 
               {/* Add Thumbnail Section */}
               <View style={styles.inputGroup}>
                 <Text style={styles.label}>Thumbnail</Text>
                 <View style={[styles.uploadContainer, { aspectRatio: videoOrientation === 'horizontal' ? 16/9 : 9/16 }]}>
+                      {!thumbnailUri ? (
+                        <Pressable 
+                          style={styles.uploadZoneSimple}
+                          onPress={captureThumbnail}
+                          disabled={!personalVideoUri && !videoLink}
+                        >
+                          <View style={styles.uploadContent}>
+                            <ImageIcon size={24} color={!personalVideoUri && !videoLink ? '#666' : '#0070F3'} />
+                            <Text style={styles.uploadSimpleText}>
+                              Add Thumbnail
+                            </Text>
+                          </View>
+                        </Pressable>
+                      ) : (
+                        <View style={styles.thumbnailContainer}>
                   <Animated.View
                     style={[
-                      styles.animatedBorder,
+                              styles.thumbnailAnimatedBorder,
                       {
                         transform: [{
                           rotate: borderAnimation.interpolate({
@@ -570,98 +802,45 @@ export default function VideoTunnelling({ onSubmit }: VideoTunnellingProps) {
                     ]}
                   >
                     <LinearGradient
-                      colors={['#0070F3', '#00DFD8', '#0070F3']}
+                              colors={['#1877F2', '#00DFD8', '#1877F2']}
                       start={{ x: 0, y: 0 }}
                       end={{ x: 1, y: 1 }}
                       style={StyleSheet.absoluteFill}
                     />
                   </Animated.View>
-                  {!thumbnailUri ? (
-                    <Pressable 
-                      style={styles.uploadZoneNew}
-                      onPress={captureThumbnail}
-                      disabled={!personalVideoUri && !videoLink}
-                    >
-                      <LinearGradient
-                        colors={['rgba(0,112,243,0.1)', 'rgba(0,223,216,0.1)']}
-                        style={styles.uploadGradient}
-                        start={{ x: 0, y: 0 }}
-                        end={{ x: 1, y: 1 }}
-                      >
-                        <View style={styles.uploadContent}>
-                          <ImageIcon size={32} color={!personalVideoUri && !videoLink ? '#666' : '#0070F3'} />
-                          <Text style={[
-                            styles.uploadText, 
-                            { color: !personalVideoUri && !videoLink ? '#666' : '#0070F3' }
-                          ]}>
-                            Add Thumbnail
-                          </Text>
-                          <Text style={styles.uploadSubtext}>
-                            {!personalVideoUri && !videoLink 
-                              ? 'Upload or link a video first' 
-                              : 'For better visibility in feed'
-                            }
-                          </Text>
-                        </View>
-                      </LinearGradient>
-                    </Pressable>
-                  ) : (
-                    <View style={styles.uploadZoneNew}>
+                          <View style={styles.thumbnailInnerContainer}>
                       <Image
                         source={{ uri: thumbnailUri }}
-                        style={styles.videoPreview}
+                              style={styles.thumbnailPreview}
                         resizeMode="cover"
                       />
+                          </View>
                       <Pressable
-                        style={styles.removeButton}
+                            style={styles.thumbnailRemoveButton}
                         onPress={() => setThumbnailUri(null)}
                       >
-                        <LinearGradient
-                          colors={['#0070F3', '#00DFD8']}
-                          style={styles.removeGradient}
-                          start={{ x: 0, y: 0 }}
-                          end={{ x: 1, y: 1 }}
-                        >
-                          <X size={20} color="white" />
-                        </LinearGradient>
+                            <View style={styles.removeButtonInner}>
+                              <X size={16} color="white" />
+                            </View>
                       </Pressable>
                     </View>
                   )}
                 </View>
-                <Text style={styles.thumbnailHelp}>
-                  A thumbnail makes your video more appealing in the feed. Choose one or we'll generate it automatically.
-                </Text>
               </View>
-
-              <View style={styles.inputGroup}>
-                <Text style={styles.label}>Video Orientation</Text>
-                <View style={styles.orientationContainer}>
-                  {renderVideoOrientation(
-                    'horizontal',
-                    <Monitor size={20} color={videoOrientation === 'horizontal' ? '#fff' : '#666'} />,
-                    'Horizontal'
-                  )}
-                  {renderVideoOrientation(
-                    'vertical',
-                    <Smartphone size={20} color={videoOrientation === 'vertical' ? '#fff' : '#666'} />,
-                    'Vertical'
-                  )}
-                </View>
-              </View>
-              
-              <View style={styles.inputGroup}>
-                <Text style={styles.label}>Description</Text>
-                <TextInput
-                  style={[styles.input, styles.textArea]}
-                  value={personalDescription}
-                  onChangeText={setPersonalDescription}
-                  placeholder="Write a compelling description"
-                  placeholderTextColor="#666"
-                  multiline
-                  numberOfLines={4}
-                />
-              </View>
+                </>
+              )}
             </>
+          )}
+
+          {/* Show alert message only when video is selected but other fields are missing */}
+          {((contentType === 'personal' && personalVideoUri && (!videoTitle || !personalDescription)) || 
+            (contentType === 'ad' && videoLink && (!videoTitle || !adDescription))) && (
+            <View style={styles.alertContainer}>
+              <Info size={18} color="#1877F2" />
+              <Text style={styles.alertText}>
+                Fill all fields to complete your video tunnelling
+              </Text>
+              </View>
           )}
 
           {contentType === 'ad' && (
@@ -776,6 +955,9 @@ export default function VideoTunnelling({ onSubmit }: VideoTunnellingProps) {
             </View>
           )}
 
+          {/* Show submit button only when all required fields are filled */}
+          {((contentType === 'personal' && personalVideoUri && videoTitle && personalDescription) || 
+            (contentType === 'ad' && videoLink && videoTitle && adDescription)) && (
           <Pressable
             style={[styles.submitButton, (isUploading) && styles.disabledButton]}
             onPress={handleSubmit}
@@ -794,8 +976,13 @@ export default function VideoTunnelling({ onSubmit }: VideoTunnellingProps) {
               </Text>
             )}
           </Pressable>
+          )}
         </View>
       </View>
+      
+      {renderFullViewModal()}
+      {renderInfoModal()}
+      {renderPreviewModal()}
     </ScreenContainer>
   );
 }
@@ -803,52 +990,122 @@ export default function VideoTunnelling({ onSubmit }: VideoTunnellingProps) {
 const styles = StyleSheet.create({
   container: {
     flex: 1,
+    padding: 16,
   },
-  contentTypeContainer: {
-    flexDirection: 'row',
-    paddingHorizontal: 20,
-    paddingBottom: 20,
-    gap: 12,
+  headingContainer: {
+    marginBottom: 30,
   },
-  contentTypeButton: {
-    flex: 1,
-    height: 56,
-    borderRadius: 16,
-    overflow: 'hidden',
-    backgroundColor: 'transparent',
+  headingText: {
+    color: '#1877F2',
+    fontSize: 32,
+    fontFamily: 'Inter_700Bold',
   },
-  contentTypeInner: {
-    flex: 1,
-    flexDirection: 'row',
+  subHeadingText: {
+    color: '#666',
+    fontSize: 16,
+    fontFamily: 'Inter_400Regular',
+    marginTop: 8,
+  },
+  sectionTitle: {
+    color: '#FFFFFF',
+    fontSize: 20,
+    fontFamily: 'Inter_600SemiBold',
+    marginBottom: 16,
+  },
+  videoSection: {
     alignItems: 'center',
     justifyContent: 'center',
-    padding: 12,
-    gap: 10,
-    backgroundColor: 'transparent',
+    marginBottom: 24,
+    width: '100%',
+  },
+  uploadButton: {
+    width: '100%',
+    height: 54,
+    borderRadius: 27,
+    overflow: 'hidden',
+    marginVertical: 10,
     position: 'relative',
   },
-  contentTypeIconContainer: {
-    width: 32,
-    height: 32,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  contentTypeText: {
-    color: '#FFFFFF',
-    fontSize: 15,
-    fontFamily: 'Inter_500Medium',
-    opacity: 0.5,
-  },
-  activeContentTypeText: {
-    opacity: 1,
-  },
-  activeIndicator: {
+  uploadButtonAnimatedBorder: {
     position: 'absolute',
-    bottom: 0,
+    top: 0,
     left: 0,
     right: 0,
-    height: 2,
-    backgroundColor: '#FFFFFF',
+    height: '100%',
+    width: 600,
+    zIndex: 1,
+  },
+  uploadButtonGlow: {
+    flex: 1,
+    opacity: 0.8,
+  },
+  uploadGradient: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    padding: 16,
+    gap: 8,
+  },
+  uploadButtonText: {
+    color: 'white',
+    fontSize: 16,
+    fontFamily: 'Inter_600SemiBold',
+  },
+  uploadZoneSimple: {
+    flex: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderWidth: 1,
+    borderColor: '#333',
+    borderRadius: 8,
+    borderStyle: 'dashed',
+    backgroundColor: 'rgba(255,255,255,0.05)',
+  },
+  uploadSimpleText: {
+    color: '#0070F3',
+    fontSize: 14,
+    fontFamily: 'Inter_500Medium',
+    marginTop: 8,
+  },
+  thumbnailContainer: {
+    width: '100%',
+    height: '100%',
+    position: 'relative',
+    overflow: 'hidden',
+    borderRadius: 12,
+    backgroundColor: '#000',
+  },
+  thumbnailInnerContainer: {
+    margin: 5,
+    borderRadius: 6,
+    overflow: 'hidden',
+    backgroundColor: '#000',
+    width: '100%',
+    height: '100%',
+    zIndex: 2,
+  },
+  thumbnailPreview: {
+    width: '100%',
+    height: '100%',
+  },
+  thumbnailRemoveButton: {
+    position: 'absolute',
+    top: 10,
+    right: 10,
+    width: 30,
+    height: 30,
+    borderRadius: 15,
+    backgroundColor: 'rgba(0, 145, 255, 0.8)',
+    alignItems: 'center',
+    justifyContent: 'center',
+    zIndex: 10,
+  },
+  removeButtonInner: {
+    width: '100%',
+    height: '100%',
+    alignItems: 'center',
+    justifyContent: 'center',
   },
   formContainer: {
     padding: 20,
@@ -885,48 +1142,27 @@ const styles = StyleSheet.create({
   },
   animatedBorder: {
     position: 'absolute',
-    top: -50,
-    left: -50,
-    right: -50,
-    bottom: -50,
-    borderRadius: 20,
+    top: -100,
+    left: -100,
+    right: -100,
+    bottom: -100,
+    borderRadius: 16,
     overflow: 'hidden',
+    zIndex: 1,
   },
-  uploadZoneNew: {
-    flex: 1,
-    margin: 2,
-    borderRadius: 18,
+  videoInnerContainer: {
+    margin: 5,
+    borderRadius: 12,
     overflow: 'hidden',
     backgroundColor: '#000',
-  },
-  uploadGradient: {
-    flex: 1,
-    padding: 20,
+    width: '100%',
+    height: '100%',
+    zIndex: 2,
   },
   uploadContent: {
-    flex: 1,
     alignItems: 'center',
     justifyContent: 'center',
-    backgroundColor: 'rgba(0,0,0,0.3)',
-    borderRadius: 16,
-  },
-  uploadText: {
-    color: '#fff',
-    fontSize: 18,
-    fontFamily: 'Inter_600SemiBold',
-    marginTop: 12,
-  },
-  uploadSubtext: {
-    color: '#666',
-    fontSize: 14,
-    fontFamily: 'Inter_400Regular',
-    marginTop: 6,
-  },
-  previewContainer: {
-    width: '100%',
-    borderRadius: 20,
-    overflow: 'hidden',
-    backgroundColor: '#1A1A1A',
+    padding: 24,
   },
   videoPreview: {
     width: '100%',
@@ -946,38 +1182,6 @@ const styles = StyleSheet.create({
     flex: 1,
     alignItems: 'center',
     justifyContent: 'center',
-  },
-  orientationContainer: {
-    flexDirection: 'row',
-    gap: 12,
-    marginBottom: 20,
-  },
-  orientationButton: {
-    flex: 1,
-    height: 44,
-    borderRadius: 12,
-    overflow: 'hidden',
-  },
-  orientationGradient: {
-    flex: 1,
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    padding: 10,
-    gap: 6,
-    borderWidth: 1,
-    borderColor: 'rgba(255,255,255,0.1)',
-  },
-  activeOrientationGradient: {
-    borderColor: '#0070F3',
-  },
-  orientationText: {
-    color: '#666',
-    fontSize: 14,
-    fontFamily: 'Inter_500Medium',
-  },
-  activeOrientationText: {
-    color: '#fff',
   },
   adContainer: {
     width: SCREEN_WIDTH,
@@ -1072,9 +1276,12 @@ const styles = StyleSheet.create({
     lineHeight: 24,
   },
   submitButton: {
-    marginTop: 32,
-    borderRadius: 24,
-    overflow: 'hidden',
+    height: 56,
+    borderRadius: 28,
+    backgroundColor: '#1877F2',
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginTop: 16,
   },
   disabledButton: {
     opacity: 0.7,
@@ -1087,9 +1294,8 @@ const styles = StyleSheet.create({
   },
   submitButtonText: {
     color: '#fff',
-    fontSize: 20,
+    fontSize: 16,
     fontFamily: 'Inter_600SemiBold',
-    textTransform: 'capitalize',
   },
   linkIcon: {
     marginRight: 12,
@@ -1139,5 +1345,379 @@ const styles = StyleSheet.create({
     fontFamily: 'Inter_400Regular',
     marginTop: 6,
     paddingHorizontal: 8,
+  },
+  videoOuterContainer: {
+    width: '100%',
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: 0,
+  },
+  videoPreviewContainer: {
+    position: 'relative',
+    borderRadius: 16,
+    overflow: 'hidden',
+    backgroundColor: '#000',
+  },
+  horizontalVideo: {
+    width: SCREEN_WIDTH - 32,
+    aspectRatio: 16/9,
+  },
+  verticalVideo: {
+    width: SCREEN_WIDTH * 0.9,
+    aspectRatio: 9/16,
+    maxHeight: SCREEN_WIDTH * 1.5,
+  },
+  orientationOverlay: {
+    position: 'absolute',
+    bottom: 0,
+    left: 0,
+    right: 0,
+    backgroundColor: 'transparent',
+    padding: 12,
+    alignItems: 'center',
+    zIndex: 4,
+  },
+  orientationLabelText: {
+    color: '#FFFFFF',
+    fontSize: 16,
+    fontFamily: 'Inter_600SemiBold',
+    textShadowColor: 'rgba(0, 0, 0, 0.5)',
+    textShadowOffset: { width: 1, height: 1 },
+    textShadowRadius: 2,
+  },
+  closeButton: {
+    position: 'absolute',
+    top: 10,
+    right: 10,
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    backgroundColor: 'rgba(0, 145, 255, 0.8)',
+    alignItems: 'center',
+    justifyContent: 'center',
+    zIndex: 10,
+  },
+  closeButtonInner: {
+    width: '100%',
+    height: '100%',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  orientationNote: {
+    color: '#0070F3',
+    fontSize: 12,
+    fontFamily: 'Inter_500Medium',
+    marginTop: 12,
+    textAlign: 'center',
+  },
+  orientationInfo: {
+    color: '#0070F3',
+    fontSize: 14,
+    fontFamily: 'Inter_500Medium',
+    marginTop: 8,
+    textAlign: 'center',
+  },
+  // Content type styles
+  typeButton: {
+    flex: 1,
+    height: 56,
+    borderRadius: 16,
+    overflow: 'hidden',
+    backgroundColor: 'transparent',
+  },
+  activeTypeButton: {
+    backgroundColor: 'rgba(255,255,255,0.05)',
+  },
+  typeButtonInner: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    padding: 12,
+    gap: 10,
+    backgroundColor: 'transparent',
+    position: 'relative',
+  },
+  typeIconContainer: {
+    width: 32,
+    height: 32,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  typeText: {
+    color: '#FFFFFF',
+    fontSize: 15,
+    fontFamily: 'Inter_500Medium',
+    opacity: 0.5,
+  },
+  activeTypeText: {
+    opacity: 1,
+  },
+  activeIndicator: {
+    position: 'absolute',
+    bottom: 0,
+    left: 0,
+    right: 0,
+    height: 2,
+    backgroundColor: '#FFFFFF',
+  },
+  previewContainer: {
+    width: '100%',
+    borderRadius: 20,
+    overflow: 'hidden',
+    backgroundColor: '#1A1A1A',
+  },
+  videoGradientOverlay: {
+    position: 'absolute',
+    bottom: 0,
+    left: 0,
+    right: 0,
+    height: 60,
+    zIndex: 3,
+  },
+  thumbnailAnimatedBorder: {
+    position: 'absolute',
+    top: -50,
+    left: -50,
+    right: -50,
+    bottom: -50,
+    borderRadius: 12,
+    overflow: 'hidden',
+    zIndex: 1,
+  },
+  // Video controls styles
+  videoControlsContainer: {
+    flexDirection: 'row',
+    justifyContent: 'space-around',
+    paddingVertical: 10,
+    marginVertical: 10,
+    width: '100%',
+    backgroundColor: 'rgba(0,0,0,0.2)',
+    borderRadius: 12,
+  },
+  videoControlButton: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: 8,
+    paddingHorizontal: 16,
+  },
+  videoControlText: {
+    color: '#1877F2',
+    fontSize: 12,
+    fontFamily: 'Inter_500Medium',
+    marginTop: 4,
+  },
+  
+  // Modal styles
+  modalFullView: {
+    flex: 1,
+    backgroundColor: '#000',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  fullScreenVideo: {
+    width: '100%',
+    height: '100%',
+  },
+  modalCloseButton: {
+    position: 'absolute',
+    top: 40,
+    right: 20,
+    zIndex: 10,
+    backgroundColor: 'rgba(0,0,0,0.5)',
+    padding: 10,
+    borderRadius: 20,
+  },
+  modalContainer: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+    backgroundColor: 'rgba(0,0,0,0.7)',
+  },
+  modalContent: {
+    width: '90%',
+    backgroundColor: '#121212',
+    borderRadius: 16,
+    padding: 20,
+    borderWidth: 1,
+    borderColor: '#1877F2',
+  },
+  modalHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 20,
+    paddingBottom: 10,
+    borderBottomWidth: 1,
+    borderBottomColor: 'rgba(255,255,255,0.1)',
+  },
+  modalTitle: {
+    color: '#1877F2',
+    fontSize: 18,
+    fontFamily: 'Inter_600SemiBold',
+  },
+  
+  // Info modal styles
+  infoContainer: {
+    marginVertical: 10,
+  },
+  infoLabel: {
+    color: '#999',
+    fontSize: 14,
+    fontFamily: 'Inter_500Medium',
+    marginTop: 12,
+  },
+  infoValue: {
+    color: '#fff',
+    fontSize: 16,
+    fontFamily: 'Inter_600SemiBold',
+    marginTop: 4,
+  },
+  infoNote: {
+    color: '#999',
+    fontSize: 14,
+    fontFamily: 'Inter_400Regular',
+    marginTop: 20,
+    lineHeight: 20,
+  },
+  
+  // Preview modal styles
+  previewModalContainer: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+    backgroundColor: 'rgba(0,0,0,0.7)',
+  },
+  previewModalContent: {
+    width: '90%',
+    maxHeight: '90%',
+    backgroundColor: '#121212',
+    borderRadius: 16,
+    padding: 20,
+    borderWidth: 1,
+    borderColor: '#1877F2',
+  },
+  previewModalHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 20,
+    paddingBottom: 10,
+    borderBottomWidth: 1,
+    borderBottomColor: 'rgba(255,255,255,0.1)',
+  },
+  feedPreviewContainer: {
+    backgroundColor: '#1A1A1A',
+    borderRadius: 12,
+    overflow: 'hidden',
+    marginBottom: 20,
+  },
+  feedHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    padding: 10,
+  },
+  feedUserInfo: {
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+  feedUserAvatar: {
+    width: 30,
+    height: 30,
+    borderRadius: 15,
+    backgroundColor: 'rgba(255,255,255,0.1)',
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginRight: 10,
+  },
+  feedUsername: {
+    color: '#fff',
+    fontSize: 14,
+    fontFamily: 'Inter_600SemiBold',
+  },
+  feedTime: {
+    color: '#999',
+    fontSize: 12,
+    fontFamily: 'Inter_400Regular',
+  },
+  feedVideoContainer: {
+    width: '100%',
+    backgroundColor: '#000',
+    overflow: 'hidden',
+  },
+  feedHorizontalVideo: {
+    aspectRatio: 16/9,
+    width: '100%',
+    height: undefined, // Let height be determined by aspect ratio
+    minHeight: 200, // Set minimum height
+  },
+  feedVerticalVideo: {
+    aspectRatio: 9/16,
+    alignSelf: 'center',
+    width: '70%', // Reduced from 100% to keep within bounds
+  },
+  feedVideo: {
+    width: '100%',
+    height: '100%',
+  },
+  feedCaption: {
+    padding: 10,
+  },
+  feedTitle: {
+    color: '#fff',
+    fontSize: 16,
+    fontFamily: 'Inter_600SemiBold',
+    marginBottom: 4,
+  },
+  feedDescription: {
+    color: '#ccc',
+    fontSize: 14,
+    fontFamily: 'Inter_400Regular',
+  },
+  feedControls: {
+    flexDirection: 'row',
+    justifyContent: 'space-around',
+    paddingVertical: 10,
+    borderTopWidth: 1,
+    borderTopColor: 'rgba(255,255,255,0.1)',
+  },
+  feedControlItem: {
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+  feedControlIcon: {
+    marginRight: 5,
+  },
+  feedControlText: {
+    color: '#999',
+    fontSize: 14,
+    fontFamily: 'Inter_500Medium',
+  },
+  previewNote: {
+    color: '#999',
+    fontSize: 14,
+    fontFamily: 'Inter_400Regular',
+    textAlign: 'center',
+    marginTop: 10,
+  },
+  // Add styles for the alert container
+  alertContainer: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: 'rgba(24, 119, 242, 0.1)',
+    borderRadius: 12,
+    padding: 10,
+    marginTop: 16,
+    marginBottom: 10,
+    borderLeftWidth: 3,
+    borderLeftColor: '#1877F2',
+  },
+  alertText: {
+    color: '#fff',
+    fontSize: 14,
+    fontFamily: 'Inter_500Medium',
+    marginLeft: 10,
+    flex: 1,
   },
 }); 
