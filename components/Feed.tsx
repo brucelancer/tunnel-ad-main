@@ -60,6 +60,16 @@ import videoService from '@/tunnel-ad-main/services/videoService.js';
 
 const { width: SCREEN_WIDTH } = Dimensions.get('window');
 
+// Utility function to format counts with K and M abbreviations
+const formatCount = (count: number): string => {
+  if (count >= 1000000) {
+    return (count / 1000000).toFixed(1).replace(/\.0$/, '') + 'M';
+  } else if (count >= 1000) {
+    return (count / 1000).toFixed(1).replace(/\.0$/, '') + 'K';
+  }
+  return count.toString();
+};
+
 // Add VideoItem interface to match VideoFeed component
 interface VideoItem {
   id: string;
@@ -986,7 +996,7 @@ export default function Feed() {
 
   // Handler for double tap (reset zoom)
   const lastTap = useRef(0);
-  const handleImagePress = (imageUri: string, allImages: string[], initialIndex: number) => {
+  const handleImagePress = (imageUri: string, allImages: string[], initialIndex: number, postId?: string) => {
     const now = Date.now();
     const DOUBLE_TAP_DELAY = 300;
     
@@ -1005,6 +1015,9 @@ export default function Feed() {
       setCurrentPostImages(allImages);
       setCurrentImageIndex(initialIndex);
       setSelectedImage(allImages[initialIndex]);
+      if (postId) {
+        setSelectedPostId(postId);
+      }
       setModalVisible(true);
     }
   };
@@ -1539,7 +1552,7 @@ export default function Feed() {
                 <View style={styles.gridRow}>
                   <Pressable 
                     style={styles.gridItem}
-                    onPress={() => handleImagePress(item.images[0], item.images, 0)}
+                    onPress={() => handleImagePress(item.images[0], item.images, 0, item.id)}
                   >
                     <Image
                       source={{ uri: item.images[0] }}
@@ -1548,7 +1561,7 @@ export default function Feed() {
                   </Pressable>
                   <Pressable 
                     style={styles.gridItem}
-                    onPress={() => handleImagePress(item.images[1], item.images, 1)}
+                    onPress={() => handleImagePress(item.images[1], item.images, 1, item.id)}
                   >
                     <Image
                       source={{ uri: item.images[1] }}
@@ -1559,7 +1572,7 @@ export default function Feed() {
                 <View style={styles.gridRow}>
                   <Pressable 
                     style={styles.gridItem}
-                    onPress={() => handleImagePress(item.images[2], item.images, 2)}
+                    onPress={() => handleImagePress(item.images[2], item.images, 2, item.id)}
                   >
                     <Image
                       source={{ uri: item.images[2] }}
@@ -1568,7 +1581,7 @@ export default function Feed() {
                   </Pressable>
                   <Pressable 
                     style={styles.gridItem}
-                    onPress={() => handleImagePress(item.images[3], item.images, 3)}
+                    onPress={() => handleImagePress(item.images[3], item.images, 3, item.id)}
                   >
                     <Image
                       source={{ uri: item.images[3] }}
@@ -1588,7 +1601,7 @@ export default function Feed() {
                 renderItem={({ item: image, index }) => (
                   <View style={{ width: cardWidth }}>
                     <Pressable 
-                      onPress={() => handleImagePress(image, item.images, index)}
+                      onPress={() => handleImagePress(image, item.images, index, item.id)}
                     >
                       <Image
                         source={{ uri: image }}
@@ -1644,7 +1657,7 @@ export default function Feed() {
                 fill={isLiked ? '#FF3B30' : 'transparent'} 
               />
               <Text style={[styles.actionText, isLiked ? styles.actionTextActive : null]}>
-                {item.likes}
+                {formatCount(item.likes)}
               </Text>
             </Pressable>
             
@@ -1654,7 +1667,7 @@ export default function Feed() {
               hitSlop={{top: 10, bottom: 10, left: 10, right: 10}}
             >
               <MessageCircle size={20} color="#888" />
-              <Text style={styles.actionText}>{item.comments}</Text>
+              <Text style={styles.actionText}>{formatCount(item.comments)}</Text>
             </Pressable>
             
             <Pressable 
@@ -1833,12 +1846,16 @@ export default function Feed() {
           <View style={styles.actionGroup}>
             <View style={styles.actionButton}>
               <ThumbsUp size={20} color="#888" />
-              <Text style={styles.actionText}>{item.likes || 0}</Text>
+              <Text style={styles.actionText}>{formatCount(item.likes || 0)}</Text>
             </View>
-            <View style={styles.actionButton}>
+            <Pressable 
+              style={styles.actionButton}
+              onPress={() => handleComment(item.id)}
+              hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+            >
               <MessageCircle size={20} color="#888" />
-              <Text style={styles.actionText}>{item.comments || 0}</Text>
-            </View>
+              <Text style={styles.actionText}>{formatCount(item.comments || 0)}</Text>
+            </Pressable>
             <Pressable 
               style={styles.actionButton}
               onPress={() => navigateToVideoFeed(item)}
@@ -1986,6 +2003,15 @@ export default function Feed() {
             
             {currentPostImages.length > 0 && (
               <GestureHandlerRootView style={styles.imageViewerContent}>
+                {/* Image counter - moved from bottom to top */}
+                {currentPostImages.length > 1 && (
+                  <View style={styles.imageCounter}>
+                    <Text style={styles.imageCounterText}>
+                      {currentImageIndex + 1} / {currentPostImages.length}
+                    </Text>
+                  </View>
+                )}
+                
                 <FlatList
                   data={currentPostImages}
                   horizontal
@@ -2090,12 +2116,31 @@ export default function Feed() {
                   }}
                 />
                 
-                {/* Image counter */}
-                {currentPostImages.length > 1 && (
-                  <View style={styles.imageCounter}>
-                    <Text style={styles.imageCounterText}>
-                      {currentImageIndex + 1} / {currentPostImages.length}
-                    </Text>
+                {/* Post metrics footer */}
+                {selectedPostId && (
+                  <View style={styles.imageViewerFooter}>
+                    <View style={styles.metricsContainer}>
+                      <View style={styles.metricItem}>
+                        <Heart size={20} color="#FF3B30" fill={likedPosts[selectedPostId] ? "#FF3B30" : "transparent"} />
+                        <Text style={styles.metricText}>
+                          {formatCount(posts.find(post => post.id === selectedPostId)?.likes || 0)}
+                        </Text>
+                      </View>
+                      
+                      <View style={styles.metricItem}>
+                        <MessageCircle size={20} color="#0070F3" />
+                        <Text style={styles.metricText}>
+                          {formatCount(posts.find(post => post.id === selectedPostId)?.comments || 0)}
+                        </Text>
+                      </View>
+                      
+                      <View style={styles.metricItem}>
+                        <Award size={20} color="#FFD700" />
+                        <Text style={styles.metricText}>
+                          {formatCount(posts.find(post => post.id === selectedPostId)?.points || 0)}
+                        </Text>
+                      </View>
+                    </View>
                   </View>
                 )}
               </GestureHandlerRootView>
@@ -2511,10 +2556,12 @@ const styles = StyleSheet.create({
   },
   imageCounter: {
     position: 'absolute',
-    bottom: 40,
+    top: 90, // moved from bottom to top
+    alignSelf: 'center',
     padding: 10,
     backgroundColor: 'rgba(0,0,0,0.5)',
     borderRadius: 20,
+    zIndex: 10,
   },
   imageCounterText: {
     color: 'white',
@@ -2922,5 +2969,30 @@ const styles = StyleSheet.create({
     height: '100%',
     justifyContent: 'center',
     alignItems: 'center',
+  },
+  imageViewerFooter: {
+    position: 'absolute',
+    bottom: 0,
+    left: 0,
+    right: 0,
+    backgroundColor: 'rgba(0,0,0,0.7)',
+    padding: 16,
+    paddingBottom: Platform.OS === 'ios' ? 40 : 16,
+  },
+  metricsContainer: {
+    flexDirection: 'row',
+    justifyContent: 'space-around',
+    alignItems: 'center',
+  },
+  metricItem: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    padding: 8,
+  },
+  metricText: {
+    color: 'white',
+    fontSize: 16,
+    fontFamily: 'Inter_600SemiBold',
+    marginLeft: 8,
   },
 }); 

@@ -98,7 +98,7 @@ export default function NewsfeedUpload() {
     try {
       const result = await ImagePicker.launchImageLibraryAsync({
         mediaTypes: ImagePicker.MediaTypeOptions.Images,
-        allowsEditing: true,
+        allowsEditing: false,
         quality: 1,
         allowsMultipleSelection: true,
         selectionLimit: 4
@@ -128,7 +128,7 @@ export default function NewsfeedUpload() {
       }
       
       const result = await ImagePicker.launchCameraAsync({
-        allowsEditing: true,
+        allowsEditing: false,
         quality: 1,
       });
 

@@ -120,7 +120,7 @@ const AVAILABLE_HEIGHT = SCREEN_HEIGHT;
 const STATUS_BAR_HEIGHT = Platform.OS === 'ios' ? 44 : StatusBar.currentHeight || 0;
 
 // Header tab options
-const HEADER_TABS = ['Videos', 'Feed', 'Points', 'Search'];
+
 
 type VideoType = 'vertical' | 'horizontal';
 
@@ -1281,6 +1281,8 @@ const VideoItemComponent = memo(({
   // Add status state variable
   const [status, setStatus] = useState<any>(null);
   const [commentCount, setCommentCount] = useState(0);
+  // Add fullscreen mode state (0: regular, 1: minimal UI, 2: video only)
+  const [fullscreenMode, setFullscreenMode] = useState(0);
   
   const videoRef = useRef<any>(null);
   const pointsAnimation = useRef(new Animated.Value(0)).current;
@@ -1917,6 +1919,23 @@ const VideoItemComponent = memo(({
     }
   };
 
+  // Listen for reset fullscreen mode event
+  useEffect(() => {
+    // When toggling fullscreen off, reset the fullscreen mode
+    if (!isFullScreen) {
+      setFullscreenMode(0);
+    }
+
+    // Listen for events to reset fullscreen mode
+    const resetSubscription = DeviceEventEmitter.addListener('RESET_FULLSCREEN_MODE', () => {
+      setFullscreenMode(0);
+    });
+
+    return () => {
+      resetSubscription.remove();
+    };
+  }, [isFullScreen]);
+
   return (
     <View style={[
       styles.videoContainer,
@@ -1950,202 +1969,248 @@ const VideoItemComponent = memo(({
       
         {/* UI Overlay with SafeAreaView for better positioning */}
         <SafeAreaView style={[
-        styles.overlay,
+          styles.overlay,
           item.type === 'vertical' ? styles.verticalOverlay : styles.horizontalOverlay
-      ]}>
-          {/* Existing overlay content */}
-        <View style={[styles.videoInfo, videoInfoStyle]}>
-            {/* Author info */}
-          <View style={styles.authorContainer}>
-              {item.authorAvatar ? (
-                <Image 
-                  source={{ uri: item.authorAvatar }} 
-                  style={styles.authorAvatar} 
-                />
-              ) : (
-                <View style={styles.authorAvatarPlaceholder} />
-              )}
-              <View style={styles.authorNameContainer}>
-                <Text 
-                  style={[
-                    styles.author,
-                    // Enhance text visibility in fullscreen mode
-                    isFullScreen && {
-                      fontSize: SCREEN_WIDTH * 0.05,
-                      textShadowColor: 'rgba(0,0,0,0.7)',
-                      textShadowRadius: 5
-                    }
-                  ]} 
-                  numberOfLines={1} 
-                  ellipsizeMode="tail"
-                >
-              {item.author}
-            </Text>
-                {/* Show verification badge if applicable */}
-                {(item.isVerified || item.isBlueVerified) && (
-                  <View style={styles.authorVerifiedBadge}>
-                    {item.isBlueVerified ? (
-                      <TunnelBlueVerifiedMark size={Math.max(15, SCREEN_WIDTH * 0.04)} />
-                    ) : (
-                      <TunnelVerifiedMark size={Math.max(12, SCREEN_WIDTH * 0.03)} />
-                    )}
+        ]}>
+          {/* Show author info and description only in mode 0 when fullscreen */}
+          {(!isFullScreen || (isFullScreen && fullscreenMode === 0)) && (
+            <View style={[styles.videoInfo, videoInfoStyle]}>
+              {/* Author info */}
+              <View style={styles.authorContainer}>
+                {item.authorAvatar ? (
+                  <Image 
+                    source={{ uri: item.authorAvatar }} 
+                    style={styles.authorAvatar} 
+                  />
+                ) : (
+                  <View style={styles.authorAvatarPlaceholder} />
+                )}
+                <View style={styles.authorNameContainer}>
+                  <Text 
+                    style={[
+                      styles.author,
+                      // Enhance text visibility in fullscreen mode
+                      isFullScreen && {
+                        fontSize: SCREEN_WIDTH * 0.05,
+                        textShadowColor: 'rgba(0,0,0,0.7)',
+                        textShadowRadius: 5
+                      }
+                    ]} 
+                    numberOfLines={1} 
+                    ellipsizeMode="tail"
+                  >
+                    {item.author}
+                  </Text>
+                  {/* Show verification badge if applicable */}
+                  {(item.isVerified || item.isBlueVerified) && (
+                    <View style={styles.authorVerifiedBadge}>
+                      {item.isBlueVerified ? (
+                        <TunnelBlueVerifiedMark size={Math.max(15, SCREEN_WIDTH * 0.04)} />
+                      ) : (
+                        <TunnelVerifiedMark size={Math.max(12, SCREEN_WIDTH * 0.03)} />
+                      )}
+                    </View>
+                  )}
+                </View>
+                {remainingTime && !hasEarnedPoints && (
+                  <View style={styles.countdownWrapper}>
+                    <View style={styles.countdownDot} />
+                    <Text style={styles.inlineCountdown}>
+                      <Text style={styles.countdownLabel}>WATCH </Text>
+                      {remainingTime}
+                    </Text>
                   </View>
                 )}
               </View>
-            {remainingTime && !hasEarnedPoints && (
-              <View style={styles.countdownWrapper}>
-                <View style={styles.countdownDot} />
-                <Text style={styles.inlineCountdown}>
-                  <Text style={styles.countdownLabel}>WATCH </Text>
-                  {remainingTime}
-                </Text>
-              </View>
-            )}
-          </View>
-            
-            {/* Video description with enhanced visibility in fullscreen */}
-            <Text 
-              style={[
-                styles.description,
-                isFullScreen && {
-                  fontSize: SCREEN_WIDTH * 0.04,
-                  textShadowColor: 'rgba(0,0,0,0.7)',
-                  textShadowRadius: 5
-                }
-              ]}
-              numberOfLines={isFullScreen ? 3 : 2} 
-              ellipsizeMode="tail"
-            >
-            {item.description}
-          </Text>
-            <View style={styles.buttonRow}>
-              <View style={styles.statsContainer}>
-                <Eye 
-                  color="white" 
-                  size={SCREEN_WIDTH * 0.04} 
-                  opacity={0.9}
-                />
-                <Text style={styles.viewCountText}>
-                  {formatCount(item.views || 0)}
-                </Text>
-              </View>
-              <Pressable style={styles.watchFullIconButton} onPress={handleWatchFull}>
-                <ExternalLink color="white" size={SCREEN_WIDTH * 0.05} opacity={0.9} />
-              </Pressable>
-              <Pressable style={styles.fullScreenButton} onPress={toggleFullScreen}>
-                {isFullScreen ? 
-                  <Minimize color="white" size={SCREEN_WIDTH * 0.05} /> : 
-                  <Maximize color="white" size={SCREEN_WIDTH * 0.05} />
-                }
-              </Pressable>
-            </View>
-          </View>
-          <View style={[
-            styles.actionButtons, 
-            actionButtonsStyle,
-            isFullScreen && {
-              bottom: Platform.OS === 'ios' ? 20 : 10,
-              gap: SCREEN_HEIGHT * 0.035
-            }
-          ]}>
-          <View style={styles.likeContainer}>
-            <Pressable onPress={handleLike} style={styles.actionButton}>
-              <ThumbsUp 
-                color={reactions.userAction === 'like' ? '#1877F2' : 'white'} 
-                fill={reactions.userAction === 'like' ? '#1877F2' : 'transparent'}
-                size={Math.max(Math.min(videoSize.height * 0.06, SCREEN_WIDTH * 0.08), 24)} 
-              />
-              <Text style={[styles.actionCount, reactions.userAction === 'like' && styles.activeCount]}>
-                {reactions.likes}
-              </Text>
-            </Pressable>
-
-            {/* Comment button */}
-            <View style={styles.commentButtonContainer}>
-              <Pressable 
-                onPress={() => {
-                  setHasDiscoveredComments(true);
-                  Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
-                  openComments();
-                }}
-                style={styles.commentButton}
-              >
-                <View style={styles.commentIconContainer}>
-                  <MessageCircle 
-                    color="white" 
-                    size={Math.max(Math.min(videoSize.height * 0.055, SCREEN_WIDTH * 0.08), 24)} 
-                  />
-                </View>
-                <Text style={styles.actionCount}>{commentCount}</Text>
-            </Pressable>
-              {!hasDiscoveredComments && (
-                <View style={styles.discoveryDot} />
-              )}
-            </View>
-
-            {/* Share button */}
-            <Pressable onPress={onShare} style={styles.shareButton}>
-              <Share2 
-                color="white" 
-                size={Math.max(Math.min(videoSize.height * 0.06, SCREEN_WIDTH * 0.08), 24)} 
-              />
-            </Pressable>
-            
-            {/* Auto-scroll button */}
-              <Pressable 
+              
+              {/* Video description with enhanced visibility in fullscreen */}
+              <Text 
                 style={[
-                styles.autoScrollButton,
-                autoScroll && styles.autoScrollButtonActive
-                ]} 
-                onPress={toggleAutoScroll}
-              >
-                <PlayCircle 
-                color={autoScroll ? '#1877F2' : 'white'} 
-                fill={autoScroll ? 'rgba(24, 119, 242, 0.3)' : 'transparent'}
-                size={Math.max(Math.min(videoSize.height * 0.06, SCREEN_WIDTH * 0.08), 24)} 
-                />
-                <Text style={[
-                styles.actionCount, 
-                autoScroll ? styles.activeCount : null
-                ]}>
-                Auto
-                </Text>
-              </Pressable>
-          </View>
-          
-          <View style={styles.watchedContainer}>
-            {hasEarnedPoints && <CheckCircle color="#00ff00" size={SCREEN_WIDTH * 0.06} />}
-            {showStaticPoints && !showPointsAnimation && (
-              <View style={styles.staticPoints}>
-                <Text style={styles.pointsText}>+10 P</Text>
-              </View>
-            )}
-            {showPointsAnimation && (
-              <Animated.View
-                style={[
-                  styles.pointsEarned,
-                  {
-                    transform: [
-                      { translateY: pointsAnimation.interpolate({
-                        inputRange: [0, 75, 150],
-                        outputRange: [0, -75, -150],
-                        extrapolate: 'clamp'
-                      })},
-                      { scale: pointsScale }
-                    ],
-                    opacity: pointsAnimation.interpolate({
-                      inputRange: [0, 75, 150],
-                      outputRange: [1, 1, 0],
-                      extrapolate: 'clamp'
-                    })
+                  styles.description,
+                  isFullScreen && {
+                    fontSize: SCREEN_WIDTH * 0.04,
+                    textShadowColor: 'rgba(0,0,0,0.7)',
+                    textShadowRadius: 5
                   }
                 ]}
+                numberOfLines={isFullScreen ? 3 : 2} 
+                ellipsizeMode="tail"
               >
-                <Text style={styles.pointsText}>+{item.points} 🎉</Text>
-              </Animated.View>
-            )}
-          </View>
-        </View>
+                {item.description}
+              </Text>
+                
+              {/* Always show fullscreen button */}
+              <View style={styles.buttonRow}>
+                {(!isFullScreen || fullscreenMode === 0) && (
+                  <>
+                    <View style={styles.statsContainer}>
+                      <Eye 
+                        color="white" 
+                        size={SCREEN_WIDTH * 0.04} 
+                        opacity={0.9}
+                      />
+                      <Text style={styles.viewCountText}>
+                        {formatCount(item.views || 0)}
+                      </Text>
+                    </View>
+                    <Pressable style={styles.watchFullIconButton} onPress={handleWatchFull}>
+                      <ExternalLink color="white" size={SCREEN_WIDTH * 0.05} opacity={0.9} />
+                    </Pressable>
+                  </>
+                )}
+                <Pressable 
+                  style={styles.fullScreenButton} 
+                  onPress={() => {
+                    if (isFullScreen) {
+                      // Toggle between fullscreen modes
+                      setFullscreenMode((prev) => (prev === 0 ? 1 : 0));
+                    } else {
+                      // Enter fullscreen
+                      toggleFullScreen?.();
+                      setFullscreenMode(0);
+                    }
+                  }}
+                >
+                  {isFullScreen ? 
+                    <Minimize color="white" size={SCREEN_WIDTH * 0.05} /> : 
+                    <Maximize color="white" size={SCREEN_WIDTH * 0.05} />
+                  }
+                </Pressable>
+              </View>
+            </View>
+          )}
+          
+          {/* Show action buttons only in mode 0 when fullscreen */}
+          {(!isFullScreen || (isFullScreen && fullscreenMode === 0)) && (
+            <View style={[
+              styles.actionButtons, 
+              actionButtonsStyle,
+              isFullScreen && {
+                bottom: Platform.OS === 'ios' ? 20 : 10,
+                gap: SCREEN_HEIGHT * 0.035
+              }
+            ]}>
+              <View style={styles.likeContainer}>
+                <Pressable onPress={handleLike} style={styles.actionButton}>
+                  <ThumbsUp 
+                    color={reactions.userAction === 'like' ? '#1877F2' : 'white'} 
+                    fill={reactions.userAction === 'like' ? '#1877F2' : 'transparent'}
+                    size={Math.max(Math.min(videoSize.height * 0.06, SCREEN_WIDTH * 0.08), 24)} 
+                  />
+                  <Text style={[styles.actionCount, reactions.userAction === 'like' && styles.activeCount]}>
+                    {reactions.likes}
+                  </Text>
+                </Pressable>
+
+                {/* Comment button */}
+                <View style={styles.commentButtonContainer}>
+                  <Pressable 
+                    onPress={() => {
+                      setHasDiscoveredComments(true);
+                      Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+                      openComments();
+                    }}
+                    style={styles.commentButton}
+                  >
+                    <View style={styles.commentIconContainer}>
+                      <MessageCircle 
+                        color="white" 
+                        size={Math.max(Math.min(videoSize.height * 0.055, SCREEN_WIDTH * 0.08), 24)} 
+                      />
+                    </View>
+                    <Text style={styles.actionCount}>{commentCount}</Text>
+                  </Pressable>
+                  {!hasDiscoveredComments && (
+                    <View style={styles.discoveryDot} />
+                  )}
+                </View>
+
+                {/* Share button */}
+                <Pressable onPress={onShare} style={styles.shareButton}>
+                  <Share2 
+                    color="white" 
+                    size={Math.max(Math.min(videoSize.height * 0.06, SCREEN_WIDTH * 0.08), 24)} 
+                  />
+                </Pressable>
+                
+                {/* Auto-scroll button */}
+                <Pressable 
+                  style={[
+                    styles.autoScrollButton,
+                    autoScroll && styles.autoScrollButtonActive
+                  ]} 
+                  onPress={toggleAutoScroll}
+                >
+                  <PlayCircle 
+                    color={autoScroll ? '#1877F2' : 'white'} 
+                    fill={autoScroll ? 'rgba(24, 119, 242, 0.3)' : 'transparent'}
+                    size={Math.max(Math.min(videoSize.height * 0.06, SCREEN_WIDTH * 0.08), 24)} 
+                  />
+                  <Text style={[
+                    styles.actionCount, 
+                    autoScroll ? styles.activeCount : null
+                  ]}>
+                    Auto
+                  </Text>
+                </Pressable>
+              </View>
+            
+              <View style={styles.watchedContainer}>
+                {hasEarnedPoints && <CheckCircle color="#00ff00" size={SCREEN_WIDTH * 0.06} />}
+                {showStaticPoints && !showPointsAnimation && (
+                  <View style={styles.staticPoints}>
+                    <Text style={styles.staticPointsText}>+10 P</Text>
+                  </View>
+                )}
+                {showPointsAnimation && (
+                  <Animated.View
+                    style={[
+                      styles.pointsEarned,
+                      {
+                        transform: [
+                          { translateY: pointsAnimation.interpolate({
+                            inputRange: [0, 75, 150],
+                            outputRange: [0, -75, -150],
+                            extrapolate: 'clamp'
+                          })},
+                          { scale: pointsScale }
+                        ],
+                        opacity: pointsAnimation.interpolate({
+                          inputRange: [0, 75, 150],
+                          outputRange: [1, 1, 0],
+                          extrapolate: 'clamp'
+                        })
+                      }
+                    ]}
+                  >
+                    <Text style={styles.earnedPointsText}>+{item.points} 🎉</Text>
+                  </Animated.View>
+                )}
+              </View>
+            </View>
+          )}
+          
+          {/* Fullscreen mode 1: Minimal UI - Only show the fullscreen button at the bottom right */}
+          {isFullScreen && fullscreenMode === 1 && (
+            <View style={{
+              position: 'absolute',
+              bottom: 20,
+              right: 20,
+              backgroundColor: 'rgba(0,0,0,0.5)',
+              borderRadius: 25,
+              padding: 10,
+            }}>
+              <Pressable 
+                onPress={() => {
+                  toggleFullScreen?.();
+                  setFullscreenMode(0);
+                }}
+              >
+                <Minimize color="white" size={SCREEN_WIDTH * 0.05} />
+              </Pressable>
+            </View>
+          )}
+        </SafeAreaView>
         
         {showButtons && (
           <View style={styles.buttonPopup}>
@@ -2155,7 +2220,6 @@ const VideoItemComponent = memo(({
             </Pressable>
           </View>
         )}
-        </SafeAreaView>
       </Animated.View>
       
       {/* Comments section */}
@@ -2185,30 +2249,55 @@ interface TopHeaderProps {
   activeTab: number;
   onTabPress: (tab: string, index: number) => void;
   isFullScreen: boolean;
+  points?: number;
+  onAddPress: () => void;
+  onSearchPress: () => void;
 }
 
 // Add a new TopHeader component for navigation
-const TopHeader: React.FC<TopHeaderProps> = ({ activeTab, onTabPress, isFullScreen }) => {
+const TopHeader: React.FC<TopHeaderProps> = ({ 
+  activeTab, 
+  onTabPress, 
+  isFullScreen,
+  points = 0,
+  onAddPress,
+  onSearchPress
+}) => {
   if (isFullScreen) return null;
   
   return (
     <SafeAreaView style={styles.headerContainer}>
       <View style={styles.headerContent}>
-        {HEADER_TABS.map((tab, index) => (
+        {/* Left side - Title */}
+        <Text style={styles.headerTitle}>tunnel</Text>
+        
+        {/* Right side - Icons */}
+        <View style={styles.headerRightButtons}>
+          {/* Add button */}
           <Pressable
-            key={tab}
-            style={styles.headerTab}
-            onPress={() => onTabPress(tab, index)}
+            style={styles.headerIconButton}
+            onPress={onAddPress}
           >
-            <Text style={[
-              styles.headerTabText,
-              activeTab === index && styles.headerTabTextActive
-            ]}>
-              {tab}
-            </Text>
-            {activeTab === index && <View style={styles.headerTabIndicator} />}
+            <Plus size={24} color="#1877F2" />
           </Pressable>
-        ))}
+          
+          {/* Search button */}
+          <Pressable
+            style={styles.headerIconButton}
+            onPress={onSearchPress}
+          >
+            <Search size={24} color="#1877F2" />
+          </Pressable>
+          
+          {/* Points display */}
+          <Pressable
+            style={styles.pointsButton}
+            onPress={() => onTabPress('Points', 2)}
+          >
+            <Coins size={20} color="#FFD700" />
+            <Text style={styles.pointsText}>{points}</Text>
+          </Pressable>
+        </View>
       </View>
     </SafeAreaView>
   );
@@ -2242,6 +2331,18 @@ export default function VideoFeed() {
 
   const { user } = useSanityAuth();
   const router = useRouter();
+  
+  // Add handler functions here, before any conditional returns
+  // Handler functions for the header actions
+  const handleAddPress = useCallback(() => {
+    // Navigate to the tunnelling screen for uploading new videos
+    router.push('/components/video-tunnelling' as any);
+  }, [router]);
+
+  const handleSearchPress = useCallback(() => {
+    // Navigate to the search screen
+    router.push('/search' as any);
+  }, [router]);
   
   // Animation values
   const premiumModalScale = useRef(new Animated.Value(0.3)).current;
@@ -2299,6 +2400,8 @@ export default function VideoFeed() {
           StatusBar.setHidden(true);
         } else {
           StatusBar.setHidden(false);
+          // Emit an event to reset fullscreen mode when exiting fullscreen
+          DeviceEventEmitter.emit('RESET_FULLSCREEN_MODE', {});
         }
       }
       
@@ -3073,6 +3176,9 @@ export default function VideoFeed() {
         activeTab={activeHeaderTab} 
         onTabPress={handleTabPress} 
         isFullScreen={isFullScreen}
+        points={user?.points || 0}
+        onAddPress={handleAddPress}
+        onSearchPress={handleSearchPress}
       />
       
       <FlatList
@@ -3303,41 +3409,82 @@ const styles = StyleSheet.create({
   },
   // Add header styles
   headerContainer: {
-    backgroundColor: 'transparent',
     position: 'absolute',
     top: 0,
     left: 0,
     right: 0,
-    zIndex: 100,
-    paddingTop: Platform.OS === 'ios' ? STATUS_BAR_HEIGHT : 0,
+    zIndex: 10,
+    backgroundColor: 'transparent',
+    paddingTop: Platform.OS === 'ios' ? 0 : STATUS_BAR_HEIGHT,
   },
   headerContent: {
     flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingHorizontal: 16,
+    height: 50,
+  },
+  // Add new styles for header elements
+  headerTitle: {
+    color: '#FFF',
+    fontSize: 20,
+    fontFamily: 'Inter_700Bold',
+    letterSpacing: 0.3,
+  },
+  headerRightButtons: {
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+  headerIconButton: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    backgroundColor: 'rgba(24, 119, 242, 0.1)',
     justifyContent: 'center',
     alignItems: 'center',
-    paddingVertical: 10,
+    marginLeft: 10,
   },
+  pointsButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: 'rgba(24, 119, 242, 0.15)',
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    borderRadius: 20,
+    marginLeft: 10,
+  },
+  pointsText: {
+    color: '#FFD700',
+    fontFamily: 'Inter_600SemiBold',
+    fontSize: 16,
+    marginLeft: 5,
+  },
+  
+  // Keep existing tab styles for compatibility with other parts of the app
   headerTab: {
-    paddingHorizontal: 15,
+    paddingHorizontal: 16,
+    paddingVertical: 10,
     alignItems: 'center',
     position: 'relative',
   },
   headerTabText: {
-    color: 'rgba(255, 255, 255, 0.6)',
+    color: '#888',
     fontSize: 16,
-    fontWeight: '500',
+    fontFamily: 'Inter_500Medium',
   },
   headerTabTextActive: {
-    color: '#fff',
-    fontWeight: '700',
+    color: '#1877F2',
+    fontFamily: 'Inter_600SemiBold',
   },
   headerTabIndicator: {
     position: 'absolute',
-    bottom: -10,
-    width: 6,
-    height: 6,
-    borderRadius: 3,
-    backgroundColor: '#fff',
+    bottom: 0,
+    left: 16,
+    right: 16,
+    height: 3,
+    backgroundColor: '#1877F2',
+    borderTopLeftRadius: 3,
+    borderTopRightRadius: 3,
   },
   videoContainer: {
     width: SCREEN_WIDTH,
@@ -3590,7 +3737,7 @@ const styles = StyleSheet.create({
     minWidth: 90,
     alignItems: 'center',
   },
-  pointsText: {
+  earnedPointsText: {
     color: '#00ff00',
     fontSize: 15,
     fontWeight: 'bold',
@@ -3606,6 +3753,14 @@ const styles = StyleSheet.create({
     backgroundColor: 'transparent',
     alignItems: 'center',
     justifyContent: 'center',
+  },
+  staticPointsText: {
+    color: '#00ff00',
+    fontSize: 15,
+    fontWeight: 'bold',
+    textAlign: 'center',
+    textShadowColor: 'rgba(0, 0, 0, 0.3)',
+    textShadowRadius: 3,
   },
   autoScrollButton: {
     alignItems: 'center',

@@ -624,23 +624,23 @@ export default function VideoDetailScreen() {
         contentContainerStyle={{ flexGrow: 1 }}
       >
         <View style={[styles.videoContainer, getVideoHeight()]}>
-          <Video
-            ref={video}
-            style={styles.video}
-            source={{ uri: videoData.url }}
-            useNativeControls={false}
+      <Video
+        ref={video}
+        style={styles.video}
+        source={{ uri: videoData.url }}
+        useNativeControls={false}
             resizeMode={videoData.type === 'vertical' ? ResizeMode.COVER : ResizeMode.CONTAIN}
-            isLooping={false}
-            onPlaybackStatusUpdate={handlePlaybackStatusUpdate}
-            isMuted={isMuted}
-            shouldPlay
-          />
+        isLooping={false}
+        onPlaybackStatusUpdate={handlePlaybackStatusUpdate}
+        isMuted={isMuted}
+        shouldPlay
+      />
 
           {/* Enhanced video controls with better positioning */}
           <View style={styles.videoOverlay}>
             {/* Bottom controls - keeping only mute button */}
             <View style={styles.bottomControls}>
-              <Pressable onPress={toggleMute} style={styles.muteButton}>
+        <Pressable onPress={toggleMute} style={styles.muteButton}>
                 {isMuted ? <VolumeX color="white" size={22} /> : <Volume2 color="white" size={22} />}
               </Pressable>
             </View>
@@ -669,10 +669,10 @@ export default function VideoDetailScreen() {
               >
                 <RefreshCw color="white" size={40} />
                 <Text style={styles.restartText}>Restart Video</Text>
-              </Pressable>
+        </Pressable>
             </View>
           )}
-        </View>
+      </View>
 
         <Animated.View style={[
           styles.info,
@@ -848,8 +848,8 @@ export default function VideoDetailScreen() {
               >
                 <Send size={18} color={newComment.trim() ? "#1877F2" : "#666"} />
               </TouchableOpacity>
-            </View>
-          </View>
+      </View>
+    </View>
         </Animated.View>
 
         {/* Recommendations section - always visible, 2 videos per row */}
