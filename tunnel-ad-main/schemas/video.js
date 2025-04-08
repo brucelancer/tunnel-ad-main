@@ -97,6 +97,13 @@ export default {
       initialValue: 0
     },
     {
+      name: 'likedBy',
+      title: 'Liked By',
+      type: 'array',
+      of: [{ type: 'reference', to: [{ type: 'user' }] }],
+      initialValue: []
+    },
+    {
       name: 'comments',
       title: 'Comments',
       type: 'array',

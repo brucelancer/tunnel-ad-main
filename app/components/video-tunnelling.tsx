@@ -621,10 +621,13 @@ export default function VideoTunnelling({ onSubmit }: VideoTunnellingProps) {
         <View style={styles.modalContainer}>
           <View style={styles.modalContent}>
             <View style={styles.modalHeader}>
-              <Text style={styles.modalTitle}>Video Information</Text>
+              <View style={styles.modalTitleContainer}>
+                <Star size={24} color="#0070F3" />
+                <Text style={styles.modalTitle}>Video Information</Text>
+        </View>
               <Pressable onPress={closeModals}>
-                <X size={24} color="#1877F2" />
-              </Pressable>
+                <X size={24} color="#666" />
+      </Pressable>
             </View>
             
             <View style={styles.infoContainer}>
@@ -870,7 +873,7 @@ export default function VideoTunnelling({ onSubmit }: VideoTunnellingProps) {
               {videoOrientation === 'horizontal' ? 'LANDSCAPE' : 'PORTRAIT'} {aspectRatioDisplay}
             </Text>
           </View>
-                    <Pressable 
+        <Pressable 
             style={{
               position: 'absolute',
               top: 10,
@@ -902,14 +905,14 @@ export default function VideoTunnelling({ onSubmit }: VideoTunnellingProps) {
   // Function to render instruction items in the help modal
   const renderInstructionItem = (icon: React.ReactNode, title: string, description: string) => (
     <View style={styles.instructionItem}>
-                      <LinearGradient
-                        colors={['rgba(0,112,243,0.1)', 'rgba(0,223,216,0.1)']}
+          <LinearGradient
+            colors={['rgba(0,112,243,0.1)', 'rgba(0,223,216,0.1)']}
         style={styles.instructionIcon}
-                        start={{ x: 0, y: 0 }}
-                        end={{ x: 1, y: 1 }}
-                      >
+            start={{ x: 0, y: 0 }}
+            end={{ x: 1, y: 1 }}
+          >
         {icon}
-                      </LinearGradient>
+          </LinearGradient>
       <View style={styles.instructionText}>
         <Text style={styles.instructionTitle}>{title}</Text>
         <Text style={styles.instructionDescription}>{description}</Text>
@@ -1001,7 +1004,7 @@ export default function VideoTunnelling({ onSubmit }: VideoTunnellingProps) {
                 <Animated.Text style={[styles.headerTitle, { color: animatedColor }]}>
                   Video Tunnelling
                 </Animated.Text>
-                <Text style={styles.headerSubtitle}>Share your videos and earn points!</Text>
+                <Text style={styles.headerSubtitle}>Earn points by sharing!</Text>
               </View>
               <Pressable
                 style={styles.helpButton}
@@ -1028,13 +1031,13 @@ export default function VideoTunnelling({ onSubmit }: VideoTunnellingProps) {
                 <View style={styles.modalHeader}>
                   <View style={styles.modalTitleContainer}>
                     <Star size={24} color="#0070F3" />
-                    <Text style={styles.modalTitle}>How to Earn Points with Videos</Text>
-      </View>
+                    <Text style={styles.modalTitle}>How to Earn Points?</Text>
+                  </View>
                     <Pressable 
-                  style={styles.closeButton}
-                  onPress={() => setShowInstructions(false)}
-                >
-                  <X size={24} color="#666" />
+                    style={styles.closeButton}
+                    onPress={() => setShowInstructions(false)}
+                  >
+                    <X size={20} color="#FFF" />
                     </Pressable>
                 </View>
                 
@@ -1228,18 +1231,18 @@ export default function VideoTunnelling({ onSubmit }: VideoTunnellingProps) {
                 {/* Personal video upload UI */}
                 {contentType === 'personal' && (
                   <View style={styles.videoSelectContainer}>
-                    {!personalVideoUri ? (
+                  {!personalVideoUri ? (
                       <View style={styles.uploadButtonsContainer}>
-                        <Pressable 
+                    <Pressable 
                           style={styles.uploadButton}
-                          onPress={handleVideoUpload}
-                        >
-                          <LinearGradient
+                      onPress={handleVideoUpload}
+                    >
+                      <LinearGradient
                             colors={['#1877F2', '#00DFD8']}
-                            style={styles.uploadGradient}
-                            start={{ x: 0, y: 0 }}
-                            end={{ x: 1, y: 1 }}
-                          >
+                        style={styles.uploadGradient}
+                        start={{ x: 0, y: 0 }}
+                        end={{ x: 1, y: 1 }}
+                      >
                             <Upload size={32} color="#FFFFFF" />
                             <Text style={styles.uploadButtonText}>Select from Gallery</Text>
                       </LinearGradient>
@@ -1776,6 +1779,7 @@ const styles = StyleSheet.create({
     flex: 1,
     backgroundColor: '#0000',
     width: '100%',
+    paddingHorizontal: 0,
   },
   header: {
     flexDirection: 'row',
@@ -1865,7 +1869,7 @@ const styles = StyleSheet.create({
   stepContainer: {
     marginVertical: 16,
     width: '100%',
-    paddingHorizontal: 16, // Move padding to the step container level for proper alignment
+    paddingHorizontal: 16, // Padding at the step level for content but full width container
   },
   stepTitle: {
     color: '#FFF',
@@ -2539,31 +2543,37 @@ const styles = StyleSheet.create({
   },
   modalContent: {
     width: '90%',
-    maxWidth: SCREEN_WIDTH - 40,
-    maxHeight: '80%',
-    backgroundColor: '#121212',
+    maxWidth: 500,
+    backgroundColor: '#111',
     borderRadius: 16,
     overflow: 'hidden',
+    maxHeight: '85%',
   },
   modalHeader: {
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
-    marginBottom: 20,
-    paddingBottom: 10,
+    paddingHorizontal: 16,
+    paddingVertical: 16,
     borderBottomWidth: 1,
     borderBottomColor: 'rgba(255,255,255,0.1)',
-  },
-  modalTitle: {
-    color: '#1877F2',
-    fontSize: 18,
-    fontFamily: 'Inter_600SemiBold',
+    width: '100%',
   },
   modalTitleContainer: {
     flexDirection: 'row',
     alignItems: 'center',
-    marginBottom: 10,
+    flex: 1,
+    flexWrap: 'wrap',
+    marginRight: 8,
   },
+  modalTitle: {
+    color: '#FFF',
+    fontSize: 16,
+    fontFamily: 'Inter_600SemiBold',
+    marginLeft: 8,
+    flexShrink: 1,
+  },
+
   infoContainer: {
     marginVertical: 10,
   },

@@ -267,7 +267,7 @@ const MOCK_VIDEOS = [
 ];
 
 // Fetch videos from Sanity
-export const fetchVideos = async (limit = 20, lastId = null, contentType = null) => {
+export const fetchVideos = async (limit = 20, lastId = null, contentType = null, userId = null) => {
   try {
     let query = `*[_type == "video"]`;
     const params = {};
@@ -304,8 +304,15 @@ export const fetchVideos = async (limit = 20, lastId = null, contentType = null)
       "isVerified": author->username == "admin" || author->username == "moderator",
       "isBlueVerified": author->isBlueVerified,
       "thumbnail": thumbnail.asset->url,
-      createdAt
-    }`;
+      createdAt`;
+      
+    // Add hasLiked check if userId is provided and is a valid string
+    if (userId && typeof userId === 'string') {
+      query += `, "hasLiked": count(likedBy[_ref == $userId]) > 0`;
+      params.userId = userId;
+    }
+    
+    query += `}`;
     
     console.log('Fetching videos with query:', query);
     const videos = await client.fetch(query, params) || [];
@@ -315,14 +322,16 @@ export const fetchVideos = async (limit = 20, lastId = null, contentType = null)
       ...video,
       id: video._id, // Add id field to match existing interface
       url: video.videoUrl || video.url, // Use file URL if available, otherwise use provided URL
-      authorAvatar: video.authorAvatar ? urlFor(video.authorAvatar).url() : null // Convert Sanity image to URL
+      authorAvatar: video.authorAvatar ? urlFor(video.authorAvatar).url() : null, // Convert Sanity image to URL
+      hasLiked: video.hasLiked || false // Ensure hasLiked is always defined
     }));
   } catch (error) {
     console.error('Error fetching videos from Sanity, using mock data:', error);
     // Return mock videos when Sanity fails
     return MOCK_VIDEOS.map(video => ({
       ...video,
-      id: video._id
+      id: video._id,
+      hasLiked: false // Mock videos are never liked by default
     })).slice(0, limit);
   }
 };
@@ -383,6 +392,70 @@ export const updateVideoStats = async (videoId, stats) => {
   }
 };
 
+// Toggle like for a video
+export const toggleLikeVideo = async (videoId, userId) => {
+  try {
+    console.log('Toggling like for video:', videoId, 'by user:', userId);
+    
+    // Ensure userId is valid
+    if (!userId || typeof userId !== 'string') {
+      console.error('Invalid userId provided for toggleLikeVideo:', userId);
+      return { success: false, error: 'Invalid user ID' };
+    }
+    
+    // Check if the video exists and if the user has already liked it
+    const video = await client.fetch(
+      `*[_type == "video" && _id == $videoId][0] {
+        _id,
+        likes,
+        "hasLiked": count(likedBy[_ref == $userId]) > 0
+      }`,
+      { videoId, userId }
+    );
+    
+    if (!video) {
+      console.error('Video not found:', videoId);
+      return { success: false, error: 'Video not found' };
+    }
+    
+    const hasLiked = video.hasLiked;
+    const currentLikes = video.likes || 0;
+    const newLikes = hasLiked ? Math.max(0, currentLikes - 1) : currentLikes + 1;
+    
+    if (hasLiked) {
+      // User already liked the video, so unlike it
+      await client
+        .patch(videoId)
+        .unset([`likedBy[_ref == "${userId}"]`])
+        .set({ likes: newLikes })
+        .commit();
+    } else {
+      // User hasn't liked the video, so like it
+      await client
+        .patch(videoId)
+        .setIfMissing({ likedBy: [] })
+        .append('likedBy', [{ 
+          _type: 'reference', 
+          _ref: userId,
+          _key: `${userId}-${Date.now()}` // Add a unique key combining userId and timestamp
+        }])
+        .set({ likes: newLikes })
+        .commit();
+    }
+    
+    // Return the updated like status
+    return {
+      success: true,
+      videoId,
+      likes: newLikes,
+      hasLiked: !hasLiked
+    };
+  } catch (error) {
+    console.error('Error toggling video like:', error);
+    return { success: false, error: error.message };
+  }
+};
+
 // Delete a video
 export const deleteVideo = async (videoId, userId) => {
   try {
@@ -413,5 +486,6 @@ export default {
   updateVideoStats,
   deleteVideo,
   uploadVideoToSanity,
+  toggleLikeVideo,
   urlFor
 }; 

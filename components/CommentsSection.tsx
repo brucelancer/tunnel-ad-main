@@ -429,7 +429,7 @@ const CommentsSection: React.FC<CommentsSectionProps> = ({
               color: 'white',
               textAlign: 'center',
             }}>
-              {commentCount} comments
+              {commentCount || '0'} comments
             </Text>
             <Pressable onPress={handleClose} style={{
               padding: 8,

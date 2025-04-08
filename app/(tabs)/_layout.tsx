@@ -1,10 +1,28 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
-import { View, StyleSheet, TouchableOpacity, Dimensions, DeviceEventEmitter, Animated } from 'react-native';
+import { View, StyleSheet, TouchableOpacity, Dimensions, DeviceEventEmitter, Animated, Image } from 'react-native';
 import { Tabs, useRouter, usePathname } from 'expo-router';
-import { Home, Gift, User, Coins, Plus, FileText } from 'lucide-react-native';
+import { Home, Gift, User, Coins, Plus, FileText, Bell } from 'lucide-react-native';
 import { LinearGradient } from 'expo-linear-gradient';
+import { useSanityAuth } from '../hooks/useSanityAuth';
+import { urlFor } from '../../tunnel-ad-main/services/postService';
 
 const { width, height } = Dimensions.get('window');
+
+// Define user types to fix TypeScript errors
+interface UserProfile {
+  avatar?: any;
+  bio?: string;
+  interests?: string[];
+}
+
+interface SanityUser {
+  _id: string;
+  username?: string;
+  firstName?: string;
+  lastName?: string;
+  profile?: UserProfile;
+  [key: string]: any;
+}
 
 export default function TabLayout() {
   const [isFullScreen, setIsFullScreen] = useState(false);
@@ -13,8 +31,53 @@ export default function TabLayout() {
   const pathname = usePathname();
   const [activeTab, setActiveTab] = useState('index');
   
+  // Get auth user data to access the profile avatar
+  const { user } = useSanityAuth();
+  // Add local user state to handle live updates
+  const [localUser, setLocalUser] = useState<SanityUser | null>(null);
+  
+  // Update local user when auth user changes
+  useEffect(() => {
+    if (user) {
+      setLocalUser(user);
+    } else {
+      setLocalUser(null);
+    }
+  }, [user]);
+  
+  // Listen for auth state changes to update profile icon immediately
+  useEffect(() => {
+    const authStateListener = DeviceEventEmitter.addListener(
+      'AUTH_STATE_CHANGED',
+      (event) => {
+        if (event?.isAuthenticated === true && event?.userData) {
+          setLocalUser(event.userData);
+        } else if (event?.isAuthenticated === false) {
+          setLocalUser(null);
+        }
+      }
+    );
+    
+    return () => {
+      authStateListener.remove();
+    };
+  }, []);
+  
   // Add animated value for tab bar
   const tabBarTranslateY = useRef(new Animated.Value(0)).current;
+  
+  // Function to get avatar URL from user data
+  const getAvatarUrl = (userObj: SanityUser | null): string | null => {
+    if (userObj?.profile?.avatar) {
+      try {
+        return urlFor(userObj.profile.avatar).width(80).height(80).url();
+      } catch (error) {
+        console.log('Error getting avatar URL:', error);
+        return null;
+      }
+    }
+    return null;
+  };
   
   // Update active tab when pathname changes
   useEffect(() => {
@@ -83,6 +146,26 @@ export default function TabLayout() {
     }
   }, [activeTab, tabBarVisible]);
 
+  // Render profile tab icon - avatar if logged in, default icon if not
+  const renderProfileIcon = ({ color, focused }: { color: string; focused: boolean }) => {
+    // Get avatar URL from local user state (for live updates)
+    const avatarUrl = getAvatarUrl(localUser);
+    
+    if (localUser && avatarUrl) {
+      return (
+        <View style={[styles.avatarContainer, focused && styles.avatarContainerFocused]}>
+          <Image
+            source={{ uri: avatarUrl }}
+            style={styles.avatarImage}
+          />
+        </View>
+      );
+    }
+    
+    // Fallback to default icon
+    return <User color={color} size={24} />;
+  };
+
   return (
     <Tabs
       screenOptions={({ route }) => ({
@@ -93,8 +176,9 @@ export default function TabLayout() {
           paddingTop: 10,
           paddingBottom: 40,
           position: 'absolute',
-          bottom: 0,
+          bottom: -10,
           left: 0,
+          
           right: 0,
           elevation: 0,
           borderTopColor: 'rgba(255, 255, 255, 0.05)',
@@ -108,7 +192,7 @@ export default function TabLayout() {
         } as any, // Cast to any to avoid TypeScript errors with animated values
         tabBarActiveTintColor: '#1877F2',
         tabBarInactiveTintColor: '#888',
-        tabBarShowLabel: route.name !== 'tunnelling',
+        tabBarShowLabel: route.name !== 'upload',
         tabBarItemStyle: {
           height: 60,
         },
@@ -146,6 +230,15 @@ export default function TabLayout() {
           tabBarIcon: ({ color }) => <FileText color={color} size={24} />,
         }}
       />
+        {/* Notifications tab */}
+        <Tabs.Screen
+        name="notifications"
+        options={{
+          title: 'Info',
+          tabBarIcon: ({ color }) => <Bell color={color} size={24} />,
+        }}
+      />
+
       <Tabs.Screen
         name="points-about"
         options={{
@@ -153,38 +246,10 @@ export default function TabLayout() {
           tabBarIcon: ({ color }) => <Coins color={color} size={24} />,
         }}
       />
-      {/* Tunnelling tab with floating button */}
-      <Tabs.Screen
-        name="tunnelling"
-        options={{
-          title: '',
-          tabBarIcon: ({ focused }) => (
-            <View style={styles.floatingButtonWrapper}>
-              <View style={styles.floatingButtonContainer}>
-                <LinearGradient
-                  colors={['#0070F3', '#00DFD8']}
-                  style={styles.floatingButton}
-                  start={{ x: 0, y: 0 }}
-                  end={{ x: 1, y: 1 }}
-                >
-                  <Plus color="#FFFFFF" size={28} />
-                </LinearGradient>
-                {focused && (
-                  <View style={styles.focusRingContainer}>
-                    <LinearGradient
-                      colors={['rgba(0,112,243,0.5)', 'rgba(0,223,216,0.5)']}
-                      style={styles.focusRing}
-                      start={{ x: 0, y: 0 }}
-                      end={{ x: 1, y: 1 }}
-                    />
-                  </View>
-                )}
-              </View>
-              <View style={styles.buttonShadow} />
-            </View>
-          ),
-        }}
-      />
+      
+    
+      
+    
       
       <Tabs.Screen
         name="redeem"
@@ -197,7 +262,7 @@ export default function TabLayout() {
         name="profile"
         options={{
           title: 'Profile',
-          tabBarIcon: ({ color }) => <User color={color} size={24} />,
+          tabBarIcon: renderProfileIcon,
         }}
       />
     </Tabs>
@@ -254,5 +319,23 @@ const styles = StyleSheet.create({
     shadowRadius: 15,
     elevation: 10,
     zIndex: 1,
+  },
+  avatarContainer: {
+    width: 30,
+    height: 30,
+    borderRadius: 15,
+    overflow: 'hidden',
+    backgroundColor: '#2A2A2A',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  avatarContainerFocused: {
+    borderWidth: 2,
+    borderColor: '#1877F2',
+  },
+  avatarImage: {
+    width: '100%',
+    height: '100%',
+    borderRadius: 15,
   },
 });

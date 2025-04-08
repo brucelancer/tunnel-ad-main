@@ -1252,7 +1252,7 @@ const VideoItemComponent = memo(({
   onVideoRef, 
   isLocked = false, 
   autoScroll, 
-  toggleAutoScroll, 
+  toggleAutoScroll,
   autoScrollPulse,
   showPremiumAd,
   isTabFocused,
@@ -1265,6 +1265,7 @@ const VideoItemComponent = memo(({
 }: VideoItemProps): JSX.Element => {
   const { addPoints, hasWatchedVideo } = usePoints();
   const { getVideoReactions, updateReaction, loadReactions } = useReactions();
+  const { user } = useSanityAuth();  // Add this line to get the current user
   
   // Add state variables here
   const [hasEarnedPoints, setHasEarnedPoints] = useState(false);
@@ -1657,7 +1658,7 @@ const VideoItemComponent = memo(({
       }
       
       // Show points animation
-      animatePoints();
+          animatePoints();
       
       // Mark video as watched
       await addPoints(item.points, item.id);
@@ -1802,12 +1803,77 @@ const VideoItemComponent = memo(({
   };
 
   const handleLike = async () => {
-    const newAction = reactions.userAction === 'like' ? null : 'like';
-    setReactions({
-      ...reactions,
-      userAction: newAction,
-      likes: newAction === 'like' ? reactions.likes + 1 : reactions.likes - 1
-    });
+    // Check if user is authenticated
+    if (!user || !user._id) {
+      // Show authentication prompt
+      Alert.alert(
+        'Authentication Required',
+        'Please log in to like videos',
+        [
+          { text: 'Cancel', style: 'cancel' },
+          { 
+            text: 'Log In', 
+            onPress: () => {
+              // Navigate to auth screen or show auth modal
+              if (router) {
+                router.push('/auth' as any);
+              }
+            }
+          }
+        ]
+      );
+      return;
+    }
+    
+    try {
+      // Optimistically update UI
+      const newAction = reactions.userAction === 'like' ? null : 'like';
+      setReactions({
+        ...reactions,
+        userAction: newAction,
+        likes: newAction === 'like' ? reactions.likes + 1 : reactions.likes - 1
+      });
+      
+      // Provide haptic feedback
+      Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+      
+      // Update on server
+      const result = await videoService.toggleLikeVideo(item.id, user._id);
+      
+      // If server response indicates failure, revert the optimistic update
+      if (!result.success) {
+        console.error('Server error when liking video:', result.error);
+        setReactions({
+          ...reactions,
+          userAction: reactions.userAction,
+          likes: reactions.likes
+        });
+        
+        // Also update local storage to match
+        updateReaction(item.id, reactions.userAction);
+        
+        Alert.alert('Error', 'Failed to like the video. Please try again.');
+        return;
+      }
+      
+      // Update local storage with the server result
+      updateReaction(item.id, newAction);
+      
+    } catch (err) {
+      console.error('Error liking video:', err);
+      
+      // Revert to previous state
+      setReactions({
+        ...reactions,
+        userAction: reactions.userAction,
+        likes: reactions.likes
+      });
+      
+      // Also update local storage to match
+      updateReaction(item.id, reactions.userAction);
+      
+      Alert.alert('Error', 'Failed to like the video. Please try again.');
+    }
   };
 
   const handleDislike = async () => {
@@ -1969,78 +2035,78 @@ const VideoItemComponent = memo(({
       
         {/* UI Overlay with SafeAreaView for better positioning */}
         <SafeAreaView style={[
-          styles.overlay,
+        styles.overlay,
           item.type === 'vertical' ? styles.verticalOverlay : styles.horizontalOverlay
-        ]}>
+      ]}>
           {/* Show author info and description only in mode 0 when fullscreen */}
           {(!isFullScreen || (isFullScreen && fullscreenMode === 0)) && (
-            <View style={[styles.videoInfo, videoInfoStyle]}>
-              {/* Author info */}
-              <View style={styles.authorContainer}>
-                {item.authorAvatar ? (
-                  <Image 
-                    source={{ uri: item.authorAvatar }} 
-                    style={styles.authorAvatar} 
-                  />
-                ) : (
-                  <View style={styles.authorAvatarPlaceholder} />
-                )}
-                <View style={styles.authorNameContainer}>
-                  <Text 
-                    style={[
-                      styles.author,
-                      // Enhance text visibility in fullscreen mode
-                      isFullScreen && {
-                        fontSize: SCREEN_WIDTH * 0.05,
-                        textShadowColor: 'rgba(0,0,0,0.7)',
-                        textShadowRadius: 5
-                      }
-                    ]} 
-                    numberOfLines={1} 
-                    ellipsizeMode="tail"
-                  >
-                    {item.author}
-                  </Text>
-                  {/* Show verification badge if applicable */}
-                  {(item.isVerified || item.isBlueVerified) && (
-                    <View style={styles.authorVerifiedBadge}>
-                      {item.isBlueVerified ? (
-                        <TunnelBlueVerifiedMark size={Math.max(15, SCREEN_WIDTH * 0.04)} />
-                      ) : (
-                        <TunnelVerifiedMark size={Math.max(12, SCREEN_WIDTH * 0.03)} />
-                      )}
-                    </View>
-                  )}
-                </View>
-                {remainingTime && !hasEarnedPoints && (
-                  <View style={styles.countdownWrapper}>
-                    <View style={styles.countdownDot} />
-                    <Text style={styles.inlineCountdown}>
-                      <Text style={styles.countdownLabel}>WATCH </Text>
-                      {remainingTime}
-                    </Text>
+        <View style={[styles.videoInfo, videoInfoStyle]}>
+            {/* Author info */}
+          <View style={styles.authorContainer}>
+              {item.authorAvatar ? (
+                <Image 
+                  source={{ uri: item.authorAvatar }} 
+                  style={styles.authorAvatar} 
+                />
+              ) : (
+                <View style={styles.authorAvatarPlaceholder} />
+              )}
+              <View style={styles.authorNameContainer}>
+                <Text 
+                  style={[
+                    styles.author,
+                    // Enhance text visibility in fullscreen mode
+                    isFullScreen && {
+                      fontSize: SCREEN_WIDTH * 0.05,
+                      textShadowColor: 'rgba(0,0,0,0.7)',
+                      textShadowRadius: 5
+                    }
+                  ]} 
+                  numberOfLines={1} 
+                  ellipsizeMode="tail"
+                >
+              {item.author}
+            </Text>
+                {/* Show verification badge if applicable */}
+                {(item.isVerified || item.isBlueVerified) && (
+                  <View style={styles.authorVerifiedBadge}>
+                    {item.isBlueVerified ? (
+                      <TunnelBlueVerifiedMark size={Math.max(15, SCREEN_WIDTH * 0.04)} />
+                    ) : (
+                      <TunnelVerifiedMark size={Math.max(12, SCREEN_WIDTH * 0.03)} />
+                    )}
                   </View>
                 )}
               </View>
-              
-              {/* Video description with enhanced visibility in fullscreen */}
-              <Text 
-                style={[
-                  styles.description,
-                  isFullScreen && {
-                    fontSize: SCREEN_WIDTH * 0.04,
-                    textShadowColor: 'rgba(0,0,0,0.7)',
-                    textShadowRadius: 5
-                  }
-                ]}
-                numberOfLines={isFullScreen ? 3 : 2} 
-                ellipsizeMode="tail"
-              >
-                {item.description}
-              </Text>
+            {remainingTime && !hasEarnedPoints && (
+              <View style={styles.countdownWrapper}>
+                <View style={styles.countdownDot} />
+                <Text style={styles.inlineCountdown}>
+                  <Text style={styles.countdownLabel}>WATCH </Text>
+                  {remainingTime}
+                </Text>
+              </View>
+            )}
+          </View>
+            
+            {/* Video description with enhanced visibility in fullscreen */}
+            <Text 
+              style={[
+                styles.description,
+                isFullScreen && {
+                  fontSize: SCREEN_WIDTH * 0.04,
+                  textShadowColor: 'rgba(0,0,0,0.7)',
+                  textShadowRadius: 5
+                }
+              ]}
+              numberOfLines={isFullScreen ? 3 : 2} 
+              ellipsizeMode="tail"
+            >
+            {item.description}
+          </Text>
                 
               {/* Always show fullscreen button */}
-              <View style={styles.buttonRow}>
+            <View style={styles.buttonRow}>
                 {(!isFullScreen || fullscreenMode === 0) && (
                   <>
                     <View style={styles.statsContainer}>
@@ -2055,7 +2121,7 @@ const VideoItemComponent = memo(({
                     </View>
                     <Pressable style={styles.watchFullIconButton} onPress={handleWatchFull}>
                       <ExternalLink color="white" size={SCREEN_WIDTH * 0.05} opacity={0.9} />
-                    </Pressable>
+          </Pressable>
                   </>
                 )}
                 <Pressable 
@@ -2071,123 +2137,124 @@ const VideoItemComponent = memo(({
                     }
                   }}
                 >
-                  {isFullScreen ? 
-                    <Minimize color="white" size={SCREEN_WIDTH * 0.05} /> : 
-                    <Maximize color="white" size={SCREEN_WIDTH * 0.05} />
-                  }
-                </Pressable>
-              </View>
-            </View>
+                {isFullScreen ? 
+                  <Minimize color="white" size={SCREEN_WIDTH * 0.05} /> : 
+                  <Maximize color="white" size={SCREEN_WIDTH * 0.05} />
+                }
+          </Pressable>
+        </View>
+          </View>
           )}
           
           {/* Show action buttons only in mode 0 when fullscreen */}
           {(!isFullScreen || (isFullScreen && fullscreenMode === 0)) && (
-            <View style={[
-              styles.actionButtons, 
-              actionButtonsStyle,
-              isFullScreen && {
-                bottom: Platform.OS === 'ios' ? 20 : 10,
-                gap: SCREEN_HEIGHT * 0.035
-              }
-            ]}>
-              <View style={styles.likeContainer}>
-                <Pressable onPress={handleLike} style={styles.actionButton}>
-                  <ThumbsUp 
-                    color={reactions.userAction === 'like' ? '#1877F2' : 'white'} 
-                    fill={reactions.userAction === 'like' ? '#1877F2' : 'transparent'}
-                    size={Math.max(Math.min(videoSize.height * 0.06, SCREEN_WIDTH * 0.08), 24)} 
-                  />
-                  <Text style={[styles.actionCount, reactions.userAction === 'like' && styles.activeCount]}>
-                    {reactions.likes}
-                  </Text>
-                </Pressable>
+          <View style={[
+            styles.actionButtons, 
+            actionButtonsStyle,
+            isFullScreen && {
+              bottom: Platform.OS === 'ios' ? 20 : 10,
+              gap: SCREEN_HEIGHT * 0.035
+            }
+          ]}>
+          <View style={styles.likeContainer}>
+            {/* Like button */}
+            <Pressable onPress={handleLike} style={styles.actionButton}>
+              <ThumbsUp 
+                color={reactions.userAction === 'like' ? '#1877F2' : 'white'} 
+                fill={reactions.userAction === 'like' ? '#1877F2' : 'transparent'}
+                size={Math.max(Math.min(videoSize.height * 0.06, SCREEN_WIDTH * 0.08), 24)} 
+              />
+              <Text style={[styles.actionCount, reactions.userAction === 'like' && styles.activeCount]}>
+                {reactions.likes}
+              </Text>
+            </Pressable>
 
-                {/* Comment button */}
-                <View style={styles.commentButtonContainer}>
-                  <Pressable 
-                    onPress={() => {
-                      setHasDiscoveredComments(true);
-                      Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
-                      openComments();
-                    }}
-                    style={styles.commentButton}
-                  >
-                    <View style={styles.commentIconContainer}>
-                      <MessageCircle 
-                        color="white" 
-                        size={Math.max(Math.min(videoSize.height * 0.055, SCREEN_WIDTH * 0.08), 24)} 
-                      />
-                    </View>
-                    <Text style={styles.actionCount}>{commentCount}</Text>
-                  </Pressable>
-                  {!hasDiscoveredComments && (
-                    <View style={styles.discoveryDot} />
-                  )}
-                </View>
-
-                {/* Share button */}
-                <Pressable onPress={onShare} style={styles.shareButton}>
-                  <Share2 
+            {/* Comment button */}
+            <View style={styles.commentButtonContainer}>
+              <Pressable 
+                onPress={() => {
+                  setHasDiscoveredComments(true);
+                  Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+                  openComments();
+                }}
+                style={styles.commentButton}
+              >
+                <View style={styles.commentIconContainer}>
+                  <MessageCircle 
                     color="white" 
-                    size={Math.max(Math.min(videoSize.height * 0.06, SCREEN_WIDTH * 0.08), 24)} 
+                    size={Math.max(Math.min(videoSize.height * 0.055, SCREEN_WIDTH * 0.08), 24)} 
                   />
-                </Pressable>
-                
-                {/* Auto-scroll button */}
-                <Pressable 
-                  style={[
-                    styles.autoScrollButton,
-                    autoScroll && styles.autoScrollButtonActive
-                  ]} 
-                  onPress={toggleAutoScroll}
-                >
-                  <PlayCircle 
-                    color={autoScroll ? '#1877F2' : 'white'} 
-                    fill={autoScroll ? 'rgba(24, 119, 242, 0.3)' : 'transparent'}
-                    size={Math.max(Math.min(videoSize.height * 0.06, SCREEN_WIDTH * 0.08), 24)} 
-                  />
-                  <Text style={[
-                    styles.actionCount, 
-                    autoScroll ? styles.activeCount : null
-                  ]}>
-                    Auto
-                  </Text>
-                </Pressable>
-              </View>
-            
-              <View style={styles.watchedContainer}>
-                {hasEarnedPoints && <CheckCircle color="#00ff00" size={SCREEN_WIDTH * 0.06} />}
-                {showStaticPoints && !showPointsAnimation && (
-                  <View style={styles.staticPoints}>
-                    <Text style={styles.staticPointsText}>+10 P</Text>
-                  </View>
-                )}
-                {showPointsAnimation && (
-                  <Animated.View
-                    style={[
-                      styles.pointsEarned,
-                      {
-                        transform: [
-                          { translateY: pointsAnimation.interpolate({
-                            inputRange: [0, 75, 150],
-                            outputRange: [0, -75, -150],
-                            extrapolate: 'clamp'
-                          })},
-                          { scale: pointsScale }
-                        ],
-                        opacity: pointsAnimation.interpolate({
-                          inputRange: [0, 75, 150],
-                          outputRange: [1, 1, 0],
-                          extrapolate: 'clamp'
-                        })
-                      }
-                    ]}
-                  >
-                    <Text style={styles.earnedPointsText}>+{item.points} 🎉</Text>
-                  </Animated.View>
-                )}
-              </View>
+                </View>
+                <Text style={styles.actionCount}>{commentCount || '0'}</Text>
+            </Pressable>
+              {!hasDiscoveredComments && (
+                <View style={styles.discoveryDot} />
+              )}
             </View>
+            
+            {/* Auto-scroll button */}
+              <Pressable 
+                style={[
+                styles.autoScrollButton,
+                autoScroll && styles.autoScrollButtonActive
+                ]} 
+                onPress={toggleAutoScroll}
+              >
+                <PlayCircle 
+                color={autoScroll ? '#1877F2' : 'white'} 
+                fill={autoScroll ? 'rgba(24, 119, 242, 0.3)' : 'transparent'}
+                size={Math.max(Math.min(videoSize.height * 0.06, SCREEN_WIDTH * 0.08), 24)} 
+                />
+                <Text style={[
+                styles.actionCount, 
+                autoScroll ? styles.activeCount : null
+                ]}>
+                Auto
+                </Text>
+              </Pressable>
+          
+            {/* Share button */}
+          <Pressable onPress={onShare} style={styles.shareButton}>
+              <Share2 
+                color="white" 
+                size={Math.max(Math.min(videoSize.height * 0.06, SCREEN_WIDTH * 0.08), 24)} 
+              />
+          </Pressable>
+            </View>
+            
+          <View style={styles.watchedContainer}>
+            {hasEarnedPoints && <CheckCircle color="#00ff00" size={SCREEN_WIDTH * 0.06} />}
+            {showStaticPoints && !showPointsAnimation && (
+              <View style={styles.staticPoints}>
+                    <Text style={styles.staticPointsText}>+10 P</Text>
+              </View>
+            )}
+            {showPointsAnimation && (
+              <Animated.View
+                style={[
+                  styles.pointsEarned,
+                  {
+                    transform: [
+                      { translateY: pointsAnimation.interpolate({
+                        inputRange: [0, 75, 150],
+                        outputRange: [0, -75, -150],
+                        extrapolate: 'clamp'
+                      })},
+                      { scale: pointsScale }
+                    ],
+                    opacity: pointsAnimation.interpolate({
+                      inputRange: [0, 75, 150],
+                      outputRange: [1, 1, 0],
+                      extrapolate: 'clamp'
+                    })
+                  }
+                ]}
+              >
+                    <Text style={styles.earnedPointsText}>+{item.points} 🎉</Text>
+              </Animated.View>
+            )}
+          </View>
+        </View>
           )}
           
           {/* Fullscreen mode 1: Minimal UI - Only show the fullscreen button at the bottom right */}
@@ -2278,7 +2345,10 @@ const TopHeader: React.FC<TopHeaderProps> = ({
             style={styles.headerIconButton}
             onPress={onAddPress}
           >
-            <Plus size={24} color="#1877F2" />
+            <Image 
+              source={require('../assets/images/upload-icon.png')}
+              style={styles.uploadIcon}
+            />
           </Pressable>
           
           {/* Search button */}
@@ -2307,10 +2377,18 @@ const TopHeader: React.FC<TopHeaderProps> = ({
 const CommentsIndicator = () => null;
 
 export default function VideoFeed() {
+  const router = useRouter();
+  const { initialVideoId } = useLocalSearchParams();
+  
+  // Get authentication state
+  const { user } = useSanityAuth();
+  
+  // State variables
+  const [videos, setVideos] = useState<VideoItem[]>([]);
   const [currentVideoIndex, setCurrentVideoIndex] = useState(0);
+  const [isFullScreen, setIsFullScreen] = useState(false);
   const [loadingMore, setLoadingMore] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
-  const [videos, setVideos] = useState<VideoItem[]>([]);
   const [lastVideoId, setLastVideoId] = useState<string | null | undefined>(null);
   const [hasMoreVideos, setHasMoreVideos] = useState(true);
   const [isLoading, setIsLoading] = useState(true);
@@ -2320,17 +2398,10 @@ export default function VideoFeed() {
   const [showPremiumAd, setShowPremiumAd] = useState(false);
   const [watchedVideosCount, setWatchedVideosCount] = useState(0);
   const [isTabFocused, setIsTabFocused] = useState(true);
-  const [isFullScreen, setIsFullScreen] = useState(false);
   const [activeHeaderTab, setActiveHeaderTab] = useState(0);
   const [forceCloseCommentsFlags, setForceCloseCommentsFlags] = useState<Record<string, boolean>>({});
   // Add state for tracking if any comments section is open
   const [isCommentsOpen, setIsCommentsOpen] = useState(false);
-  
-  // Get route params if any - for playing a specific video from Feed
-  const { initialVideoId, autoPlay } = useLocalSearchParams<{ initialVideoId?: string; autoPlay?: string }>();
-
-  const { user } = useSanityAuth();
-  const router = useRouter();
   
   // Add handler functions here, before any conditional returns
   // Handler functions for the header actions
@@ -2529,14 +2600,17 @@ export default function VideoFeed() {
         return;
       }
       
+      // Get user ID for tracking likes
+      const userId = user?._id || null;
+      
       // Create a wrapper to handle the type mismatch
       const getVideos = async () => {
         if (refresh || !lastVideoId) {
-          return await videoService.fetchVideos(20, null);
+          return await videoService.fetchVideos(20, null, null, userId);
         } else {
           // Type assertion to any to bypass TypeScript's type checking
           const id = lastVideoId as any;
-          return await videoService.fetchVideos(20, id);
+          return await videoService.fetchVideos(20, id, null, userId);
         }
       };
       
@@ -2579,7 +2653,7 @@ export default function VideoFeed() {
       setRefreshing(false);
       setIsLoading(false);
     }
-  }, [lastVideoId, hasMoreVideos, loadingMore, videos.length, showRefreshFeedback]);
+  }, [lastVideoId, hasMoreVideos, loadingMore, videos.length, showRefreshFeedback, user?._id]);
   
   const preloadVideo = useCallback(async (videoId: string, videoUrl: string) => {
     // Skip if already preloaded
@@ -3663,14 +3737,14 @@ const styles = StyleSheet.create({
   actionButtons: {
     position: 'absolute',
     right: SCREEN_WIDTH * 0.05,
-    bottom: 0,
+    bottom: SCREEN_HEIGHT * 0.15,
     alignItems: 'center',
-    gap: SCREEN_HEIGHT * 0.025,
+    gap: SCREEN_HEIGHT * 0.035,
   },
   likeContainer: {
     alignItems: 'center',
-    gap: SCREEN_HEIGHT * 0.02,
-    marginBottom: SCREEN_HEIGHT * 0.01,
+    gap: SCREEN_HEIGHT * 0.03, // Increase gap between action buttons
+    marginBottom: SCREEN_HEIGHT * 0.02,
   },
   actionButton: {
     alignItems: 'center',
@@ -4070,7 +4144,8 @@ const styles = StyleSheet.create({
   
   commentButton: {
     alignItems: 'center',
-    marginBottom: 16,
+
+
   },
 
   
@@ -4092,7 +4167,7 @@ const styles = StyleSheet.create({
   commentButtonContainer: {
     position: 'relative',
     alignItems: 'center',
-    marginBottom: 16,
+ 
   },
   discoveryDot: {
     position: 'absolute',
@@ -4110,10 +4185,10 @@ const styles = StyleSheet.create({
     width: 44,
     height: 44,
     borderRadius: 22,
-    backgroundColor: 'rgba(255, 255, 255, 0.1)',
+   
     justifyContent: 'center',
     alignItems: 'center',
-    marginBottom: 4,
+   
   },
   swipeUpIndicatorContainer: {
     position: 'absolute',
@@ -4149,5 +4224,10 @@ const styles = StyleSheet.create({
     borderRadius: 16,
     alignItems: 'center',
     justifyContent: 'center',
+  },
+  uploadIcon: {
+    width: 28,
+    height: 28,
+    resizeMode: 'contain',
   },
 });
