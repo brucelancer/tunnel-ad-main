@@ -205,7 +205,11 @@ export const toggleLikeComment = async (commentId, userId, videoId) => {
       await client
         .patch(videoId)
         .setIfMissing({ [`comments[_key == "${commentId}"].likedBy`]: [] })
-        .append(`comments[_key == "${commentId}"].likedBy`, [{ _type: 'reference', _ref: userId }])
+        .append(`comments[_key == "${commentId}"].likedBy`, [{ 
+          _type: 'reference', 
+          _ref: userId,
+          _key: `${userId}-${Date.now()}` // Add a unique key combining userId and timestamp
+        }])
         .set({ [`comments[_key == "${commentId}"].likes`]: newLikes })
         .commit();
     }

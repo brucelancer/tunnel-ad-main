@@ -57,6 +57,7 @@ import FloatingActionButton from './FloatingActionButton';
 import { eventEmitter } from '../app/utils/eventEmitter';
 // Import videoService to fetch videos
 import videoService from '@/tunnel-ad-main/services/videoService.js';
+import * as postService from '@/tunnel-ad-main/services/postService';
 
 const { width: SCREEN_WIDTH } = Dimensions.get('window');
 
@@ -800,6 +801,12 @@ export default function Feed() {
   const [menuVisible, setMenuVisible] = useState(false);
   const [selectedPostId, setSelectedPostId] = useState<string>('');
   
+  // Track image dimensions cache to avoid re-measuring
+  const [imageDimensions, setImageDimensions] = useState<{[key: string]: {width: number, height: number}}>({});
+  
+  // Track expanded posts for "See More" functionality
+  const [expandedPosts, setExpandedPosts] = useState<{[key: string]: boolean}>({});
+  
   // Use the post feed hook for Sanity data
   const { 
     posts: sanityPosts, 
@@ -1011,14 +1018,36 @@ export default function Feed() {
       }
       lastTap.current = now;
     } else {
-      // Opening the modal with the selected image
+      // Opening the modal with the selected image (optimized)
       setCurrentPostImages(allImages);
       setCurrentImageIndex(initialIndex);
       setSelectedImage(allImages[initialIndex]);
       if (postId) {
         setSelectedPostId(postId);
       }
+      
+      // Pre-cache the current image first, then show the modal immediately
+      const prefetchImagesAsync = async () => {
+        // Pre-cache adjacent images for smoother navigation
+        const imagesToPreload = [];
+        if (initialIndex > 0) imagesToPreload.push(allImages[initialIndex - 1]);
+        if (initialIndex < allImages.length - 1) imagesToPreload.push(allImages[initialIndex + 1]);
+        
+        try {
+          // Pre-cache in parallel
+          await Promise.all(
+            imagesToPreload.map(img => 
+              Image.prefetch(img).catch(err => console.log('Prefetch error:', err))
+            )
+          );
+        } catch (error) {
+          console.log('Image prefetch error:', error);
+        }
+      };
+      
+      // Show modal immediately, and preload other images in background
       setModalVisible(true);
+      prefetchImagesAsync();
     }
   };
 
@@ -1026,42 +1055,48 @@ export default function Feed() {
   const handleSwipe = (direction: 'left' | 'right') => {
     if (direction === 'left' && currentImageIndex < currentPostImages.length - 1) {
       // Next image
-      setSelectedImage(currentPostImages[currentImageIndex + 1]);
-      setCurrentImageIndex(prevIndex => {
-        const newIndex = prevIndex + 1;
-        
-        // Reset position immediately after changing image
-        imageSwipeX.setValue(-SCREEN_WIDTH * 0.5);
-        
-        // Animate back to center
-        Animated.spring(imageSwipeX, {
-          toValue: 0,
-          friction: 8,
-          tension: 40,
-          useNativeDriver: true
-        }).start();
-        
-        return newIndex;
-      });
+      const newIndex = currentImageIndex + 1;
+      setSelectedImage(currentPostImages[newIndex]);
+      setCurrentImageIndex(newIndex);
+      
+      // Reset position immediately after changing image
+      imageSwipeX.setValue(-SCREEN_WIDTH * 0.5);
+      
+      // Animate back to center
+      Animated.spring(imageSwipeX, {
+        toValue: 0,
+        friction: 8,
+        tension: 40,
+        useNativeDriver: true
+      }).start();
+      
+      // Preload next image if available
+      if (newIndex < currentPostImages.length - 1) {
+        Image.prefetch(currentPostImages[newIndex + 1])
+          .catch(err => console.log('Prefetch error:', err));
+      }
     } else if (direction === 'right' && currentImageIndex > 0) {
       // Previous image
-      setSelectedImage(currentPostImages[currentImageIndex - 1]);
-      setCurrentImageIndex(prevIndex => {
-        const newIndex = prevIndex - 1;
-        
-        // Reset position immediately after changing image
-        imageSwipeX.setValue(SCREEN_WIDTH * 0.5);
-        
-        // Animate back to center
-        Animated.spring(imageSwipeX, {
-          toValue: 0,
-          friction: 8,
-          tension: 40,
-          useNativeDriver: true
-        }).start();
-        
-        return newIndex;
-      });
+      const newIndex = currentImageIndex - 1;
+      setSelectedImage(currentPostImages[newIndex]);
+      setCurrentImageIndex(newIndex);
+      
+      // Reset position immediately after changing image
+      imageSwipeX.setValue(SCREEN_WIDTH * 0.5);
+      
+      // Animate back to center
+      Animated.spring(imageSwipeX, {
+        toValue: 0,
+        friction: 8,
+        tension: 40,
+        useNativeDriver: true
+      }).start();
+      
+      // Preload previous image if available
+      if (newIndex > 0) {
+        Image.prefetch(currentPostImages[newIndex - 1])
+          .catch(err => console.log('Prefetch error:', err));
+      }
     }
   };
 
@@ -1532,7 +1567,7 @@ export default function Feed() {
         
         {/* Post content */}
         <Pressable onPress={() => handlePostPress(item)}>
-          <Text style={styles.postContent}>{item.content}</Text>
+          {getTruncatedText(item.content, item.id)}
         </Pressable>
         
         {/* Location */}
@@ -1605,7 +1640,15 @@ export default function Feed() {
                     >
                       <Image
                         source={{ uri: image }}
-                        style={styles.image}
+                        style={[
+                          styles.image,
+                          { 
+                            height: getOptimalImageHeight(image, cardWidth),
+                            aspectRatio: undefined // Let it calculate based on the actual dimensions
+                          }
+                        ]}
+                        onLoad={() => measureImage(image)} // Re-measure on load
+                        resizeMode="contain"
                       />
                     </Pressable>
                   </View>
@@ -1940,6 +1983,93 @@ export default function Feed() {
     lastScrollY.current = currentScrollY;
   };
 
+  // Function to measure and cache image dimensions
+  const measureImage = useCallback((imageUri: string) => {
+    // If we already have dimensions, return them
+    if (imageDimensions[imageUri]) {
+      return imageDimensions[imageUri];
+    }
+    
+    // Otherwise get image dimensions
+    Image.getSize(
+      imageUri,
+      (width, height) => {
+        // Calculate aspect ratio
+        setImageDimensions(prev => ({
+          ...prev,
+          [imageUri]: { width, height }
+        }));
+      },
+      (error) => {
+        console.error('Error getting image size:', error);
+      }
+    );
+    
+    // Return default dimensions while loading
+    return { width: 1, height: 1 };
+  }, [imageDimensions]);
+
+  // Calculate the best height for an image based on its aspect ratio 
+  const getOptimalImageHeight = useCallback((imageUri: string, containerWidth: number) => {
+    const dimensions = imageDimensions[imageUri];
+    if (!dimensions) {
+      // Trigger measurement and return a default height while loading
+      measureImage(imageUri);
+      return 300; // Default height
+    }
+    
+    // Calculate height while preserving aspect ratio and setting reasonable bounds
+    const { width, height } = dimensions;
+    const aspectRatio = width / height;
+    
+    let calculatedHeight = containerWidth / aspectRatio;
+    
+    // Set bounds to prevent extremely tall or short images
+    calculatedHeight = Math.min(calculatedHeight, 500); // Max height
+    calculatedHeight = Math.max(calculatedHeight, 200); // Min height
+    
+    return calculatedHeight;
+  }, [imageDimensions, measureImage]);
+
+  // Function to toggle text expansion for a post
+  const toggleTextExpansion = (postId: string) => {
+    setExpandedPosts(prev => ({
+      ...prev,
+      [postId]: !prev[postId]
+    }));
+  };
+  
+  // Function to truncate text and add "See More" button if needed
+  const getTruncatedText = (text: string, postId: string) => {
+    const wordCount = text.split(/\s+/).length;
+    const isExpanded = expandedPosts[postId];
+    
+    // If text is short or post is expanded, show full text
+    if (wordCount <= 50 || isExpanded) {
+      return (
+        <>
+          <Text style={styles.postContent}>{text}</Text>
+          {wordCount > 50 && (
+            <Pressable onPress={() => toggleTextExpansion(postId)}>
+              <Text style={styles.seeMoreLessText}>See Less</Text>
+            </Pressable>
+          )}
+        </>
+      );
+    }
+    
+    // Otherwise truncate text
+    const truncated = text.split(/\s+/).slice(0, 200).join(' ') + '...';
+    return (
+      <>
+        <Text style={styles.postContent}>{truncated}</Text>
+        <Pressable onPress={() => toggleTextExpansion(postId)}>
+          <Text style={styles.seeMoreLessText}>See More</Text>
+        </Pressable>
+      </>
+    );
+  };
+
   return (
     <KeyboardAvoidingView 
       style={styles.container} 
@@ -2035,79 +2165,92 @@ export default function Feed() {
                       pinchScale.setValue(1);
                       translateX.setValue(0);
                       translateY.setValue(0);
+                      
+                      // Preload next image if available
+                      if (newIndex < currentPostImages.length - 1) {
+                        Image.prefetch(currentPostImages[newIndex + 1])
+                          .catch(err => console.log('Prefetch error:', err));
+                      }
                     }
                   }}
-                  renderItem={({ item, index }) => (
-                    <View 
-                      style={{ width: SCREEN_WIDTH, height: '100%' }}
-                      {...(currentScaleValue.current > 1.1 ? viewerPanResponder.panHandlers : {})}
-                    >
-                      <PinchGestureHandler
-                        onGestureEvent={onPinchGestureEvent}
-                        onHandlerStateChange={({ nativeEvent }) => {
-                          if (nativeEvent.oldState === State.ACTIVE) {
-                            onPinchEnd();
-                          }
-                        }}
+                  renderItem={({ item, index }) => {
+                    // Prioritize loading for visible images
+                    const isPriority = index === currentImageIndex || 
+                                       index === currentImageIndex - 1 || 
+                                       index === currentImageIndex + 1;
+                    
+                    return (
+                      <View 
+                        style={{ width: SCREEN_WIDTH, height: '100%' }}
+                        {...(currentScaleValue.current > 1.1 ? viewerPanResponder.panHandlers : {})}
                       >
-                        <Animated.View 
-                          style={[styles.pinchableView, { width: SCREEN_WIDTH }]}
+                        <PinchGestureHandler
+                          onGestureEvent={onPinchGestureEvent}
+                          onHandlerStateChange={({ nativeEvent }) => {
+                            if (nativeEvent.oldState === State.ACTIVE) {
+                              onPinchEnd();
+                            }
+                          }}
                         >
-                          <TouchableWithoutFeedback 
-                            onPress={() => {
-                              const now = Date.now();
-                              const DOUBLE_TAP_DELAY = 300;
-                              
-                              // Handle double tap to zoom
-                              if (now - lastTap.current < DOUBLE_TAP_DELAY) {
-                                if (currentScaleValue.current > 1.5) {
-                                  // Reset zoom if already zoomed in
-                                  baseScale.setValue(1);
-                                  pinchScale.setValue(1);
-                                  translateX.setValue(0);
-                                  translateY.setValue(0);
-                                } else {
-                                  // Zoom in to 2.5x at the center
-                                  baseScale.setValue(2.5);
-                                }
-                              } else {
-                                // Add a subtle touch feedback
-                                Animated.sequence([
-                                  Animated.timing(baseScale, {
-                                    toValue: currentScaleValue.current * 0.95,
-                                    duration: 100,
-                                    useNativeDriver: true
-                                  }),
-                                  Animated.timing(baseScale, {
-                                    toValue: currentScaleValue.current,
-                                    duration: 100,
-                                    useNativeDriver: true
-                                  })
-                                ]).start();
-                              }
-                              
-                              lastTap.current = now;
-                            }}
+                          <Animated.View 
+                            style={[styles.pinchableView, { width: SCREEN_WIDTH }]}
                           >
-                            <Animated.Image
-                              source={{ uri: item }}
-                              style={[
-                                styles.modalImage,
-                                {
-                                  transform: [
-                                    { scale: combinedScale },
-                                    { translateX },
-                                    { translateY },
-                                  ],
-                                },
-                              ]}
-                              resizeMode="contain"
-                            />
-                          </TouchableWithoutFeedback>
-                        </Animated.View>
-                      </PinchGestureHandler>
-                    </View>
-                  )}
+                            <TouchableWithoutFeedback 
+                              onPress={() => {
+                                const now = Date.now();
+                                const DOUBLE_TAP_DELAY = 300;
+                                
+                                // Handle double tap to zoom
+                                if (now - lastTap.current < DOUBLE_TAP_DELAY) {
+                                  if (currentScaleValue.current > 1.5) {
+                                    // Reset zoom if already zoomed in
+                                    baseScale.setValue(1);
+                                    pinchScale.setValue(1);
+                                    translateX.setValue(0);
+                                    translateY.setValue(0);
+                                  } else {
+                                    // Zoom in to 2.5x at the center
+                                    baseScale.setValue(2.5);
+                                  }
+                                } else {
+                                  // Add a subtle touch feedback
+                                  Animated.sequence([
+                                    Animated.timing(baseScale, {
+                                      toValue: currentScaleValue.current * 0.95,
+                                      duration: 100,
+                                      useNativeDriver: true
+                                    }),
+                                    Animated.timing(baseScale, {
+                                      toValue: currentScaleValue.current,
+                                      duration: 100,
+                                      useNativeDriver: true
+                                    })
+                                  ]).start();
+                                }
+                                
+                                lastTap.current = now;
+                              }}
+                            >
+                              <Animated.Image
+                                source={{ uri: item }}
+                                style={[
+                                  styles.modalImage,
+                                  {
+                                    transform: [
+                                      { scale: combinedScale },
+                                      { translateX },
+                                      { translateY },
+                                    ],
+                                  },
+                                ]}
+                                resizeMode="contain"
+                              />
+                            </TouchableWithoutFeedback>
+                          </Animated.View>
+                        </PinchGestureHandler>
+                      </View>
+                    );
+                  }}
                   keyExtractor={(item, index) => `modal-image-${index}`}
                   ref={(ref) => {
                     if (ref && currentImageIndex > 0) {
@@ -2120,26 +2263,42 @@ export default function Feed() {
                 {selectedPostId && (
                   <View style={styles.imageViewerFooter}>
                     <View style={styles.metricsContainer}>
-                      <View style={styles.metricItem}>
-                        <Heart size={20} color="#FF3B30" fill={likedPosts[selectedPostId] ? "#FF3B30" : "transparent"} />
-                        <Text style={styles.metricText}>
+                      <Pressable 
+                        style={styles.metricItem}
+                        onPress={() => handleLike(selectedPostId)}
+                      >
+                        <Heart 
+                          size={20} 
+                          color="#FF3B30" 
+                          fill={posts.find(post => post.id === selectedPostId)?.hasLiked ? "#FF3B30" : "transparent"} 
+                        />
+                        <Text style={[
+                          styles.metricText,
+                          posts.find(post => post.id === selectedPostId)?.hasLiked && styles.actionTextActive
+                        ]}>
                           {formatCount(posts.find(post => post.id === selectedPostId)?.likes || 0)}
                         </Text>
-                      </View>
+                      </Pressable>
                       
-                      <View style={styles.metricItem}>
+                      <Pressable 
+                        style={styles.metricItem}
+                        onPress={() => handleComment(selectedPostId)}
+                      >
                         <MessageCircle size={20} color="#0070F3" />
                         <Text style={styles.metricText}>
                           {formatCount(posts.find(post => post.id === selectedPostId)?.comments || 0)}
                         </Text>
-                      </View>
+                      </Pressable>
                       
-                      <View style={styles.metricItem}>
+                      <Pressable 
+                        style={styles.metricItem}
+                        onPress={() => handleAwardPoints(selectedPostId, 5)}
+                      >
                         <Award size={20} color="#FFD700" />
                         <Text style={styles.metricText}>
                           {formatCount(posts.find(post => post.id === selectedPostId)?.points || 0)}
                         </Text>
-                      </View>
+                      </Pressable>
                     </View>
                   </View>
                 )}
@@ -2162,8 +2321,8 @@ export default function Feed() {
         onClose={handleCloseMenu}
         onReport={handleReport}
         onDelete={handleDeletePost}
-        canDelete={user && selectedPostId !== '' ? posts.find(p => p.id === selectedPostId)?.user.id === user._id : false}
-        isOwnPost={user && selectedPostId !== '' ? posts.find(p => p.id === selectedPostId)?.user.id === user._id : false}
+        canDelete={user && selectedPostId !== '' ? posts.find(p => p.id === selectedPostId)?.user.id === user?._id : false}
+        isOwnPost={user && selectedPostId !== '' ? posts.find(p => p.id === selectedPostId)?.user.id === user?._id : false}
       />
       
       {/* Add FloatingActionButton */}
@@ -2392,9 +2551,11 @@ const styles = StyleSheet.create({
   },
   image: {
     width: '100%',
-    height: 300,
-    resizeMode: 'cover',
+    height: undefined,
+    aspectRatio: 1,
+    resizeMode: 'contain',
     borderRadius: 16,
+    backgroundColor: '#111',
     marginHorizontal: 0,
   },
   dotsContainer: {
@@ -2465,6 +2626,7 @@ const styles = StyleSheet.create({
   actionTextActive: {
     color: '#FF3B30',
   },
+
   // Empty state
   emptyContainer: {
     padding: 40,
@@ -2601,6 +2763,8 @@ const styles = StyleSheet.create({
   gridImage: {
     width: '100%',
     height: '100%',
+    resizeMode: 'contain',
+    backgroundColor: '#111',
     borderRadius: 0,
   },
   // User Profile Popup Styles
@@ -2995,4 +3159,42 @@ const styles = StyleSheet.create({
     fontFamily: 'Inter_600SemiBold',
     marginLeft: 8,
   },
+  seeMoreLessText: {
+    color: '#0070F3', 
+    fontSize: 14,
+    fontFamily: 'Inter_500Medium',
+    paddingHorizontal: 16,
+    paddingBottom: 12,
+  },
+  submitPostButton: {
+    backgroundColor: '#0070F3',
+    alignItems: 'center',
+    justifyContent: 'center',
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    position: 'absolute',
+    bottom: 8,
+    right: 8,
+  },
+  postActionButtons: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    paddingTop: 16,
+  },
+  postActionButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingVertical: 8,
+    paddingHorizontal: 12,
+    borderRadius: 20,
+    backgroundColor: 'rgba(0,0,0,0.2)',
+  },
+  postActionText: {
+    color: '#BBB',
+    marginLeft: 4,
+    fontSize: 14,
+    fontFamily: 'Inter_500Medium',
+  },
+
 }); 

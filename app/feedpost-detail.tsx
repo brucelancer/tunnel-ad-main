@@ -132,11 +132,17 @@ interface Comment {
     avatar: string;
     isVerified: boolean;
   };
-  // For backward compatibility with Sanity data structure
-  author?: any;
+  // For Sanity data structure compatibility
   _key?: string;
   _createdAt?: string;
-  authorName?: string;
+  author?: {
+    _id?: string;
+    id?: string;
+    name?: string;
+    username?: string;
+    avatar?: string;
+    isVerified?: boolean;
+  };
 }
 
 export default function PostDetailScreen() {
@@ -1154,7 +1160,23 @@ export default function PostDetailScreen() {
                   <FlatList
                     data={comments}
                     renderItem={renderComment}
-                    keyExtractor={(item) => item.id || Math.random().toString()}
+                    keyExtractor={(item: Comment) => {
+                      // Type-safe key extraction with correct properties from the interface
+                      // First check for standard ID
+                      if (item.id) return `comment-id-${item.id}`;
+                      
+                      // Check for Sanity-specific key
+                      if (item._key) return `comment-key-${item._key}`;
+                      
+                      // Handle user info using optional chaining
+                      const userId = item.user?.id || item.author?._id || item.author?.id || 'unknown';
+                      
+                      // Get timestamp with fallbacks
+                      const timestamp = item.createdAt || item._createdAt || Date.now().toString();
+                      
+                      // Create a composite key that's guaranteed to be unique
+                      return `comment-${userId}-${timestamp}-${Math.random().toString(36).substr(2, 9)}`;
+                    }}
                     scrollEnabled={false} // Important to avoid nesting scrollable views
                     nestedScrollEnabled={false}
                     initialNumToRender={10}

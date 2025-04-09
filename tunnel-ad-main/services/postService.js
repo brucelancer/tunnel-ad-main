@@ -208,7 +208,11 @@ export const toggleLikePost = async (postId, userId) => {
       await client
         .patch(postId)
         .setIfMissing({ likes: [] })
-        .append('likes', [{ _type: 'reference', _ref: userId }])
+        .append('likes', [{ 
+          _type: 'reference', 
+          _ref: userId,
+          _key: `${userId}-${Date.now()}` // Add a unique key using userId and timestamp
+        }])
         .inc({ likesCount: 1 })
         .commit();
       
@@ -393,7 +397,11 @@ export const toggleSavePost = async (postId, userId) => {
       await client
         .patch(postId)
         .setIfMissing({ savedBy: [] })
-        .append('savedBy', [{ _type: 'reference', _ref: userId }])
+        .append('savedBy', [{ 
+          _type: 'reference', 
+          _ref: userId,
+          _key: `${userId}-${Date.now()}` // Add a unique key using userId and timestamp 
+        }])
         .commit();
       
       console.log('Save successful');
