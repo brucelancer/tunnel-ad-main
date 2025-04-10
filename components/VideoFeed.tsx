@@ -1284,6 +1284,7 @@ const VideoItemComponent = memo(({
   const [commentCount, setCommentCount] = useState(0);
   // Add fullscreen mode state (0: regular, 1: minimal UI, 2: video only)
   const [fullscreenMode, setFullscreenMode] = useState(0);
+  const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
   
   const videoRef = useRef<any>(null);
   const pointsAnimation = useRef(new Animated.Value(0)).current;
@@ -2002,6 +2003,44 @@ const VideoItemComponent = memo(({
     };
   }, [isFullScreen]);
 
+  // Check if the current user is the author of this video
+  const isOwnVideo = user && item.authorId === user._id;
+
+  // Add a function to handle video deletion
+  const handleDeleteVideo = async () => {
+    if (!user || !isOwnVideo) return;
+    
+    try {
+      // Call the delete video function from the service
+      await videoService.deleteVideo(item.id, user._id);
+      Alert.alert('Success', 'Your video has been deleted');
+      // Trigger a refresh of the video feed
+      DeviceEventEmitter.emit('REFRESH_FEED');
+    } catch (error) {
+      console.error('Error deleting video:', error);
+      Alert.alert('Error', 'Failed to delete video. Please try again.');
+    }
+  };
+
+  // Add function to show delete confirmation
+  const confirmDeleteVideo = () => {
+    Alert.alert(
+      'Delete Video',
+      'Are you sure you want to delete this video? This action cannot be undone.',
+      [
+        {
+          text: 'Cancel',
+          style: 'cancel',
+        },
+        {
+          text: 'Delete',
+          style: 'destructive',
+          onPress: handleDeleteVideo,
+        },
+      ]
+    );
+  };
+
   return (
     <View style={[
       styles.videoContainer,
@@ -2119,9 +2158,28 @@ const VideoItemComponent = memo(({
                         {formatCount(item.views || 0)}
                       </Text>
                     </View>
+                    
+                    {/* Add "Your Post" indicator for user's own videos */}
+                    {isOwnVideo && (
+                      <View style={styles.yourPostContainer}>
+                        <Text style={styles.yourPostText}>Your Post</Text>
+                      </View>
+                    )}
+                    
+                    {/* Add delete button for user's own videos */}
+                    {isOwnVideo && (
+                      <Pressable 
+                        style={styles.deleteVideoButton} 
+                        onPress={confirmDeleteVideo}
+                        hitSlop={{top: 10, bottom: 10, left: 10, right: 10}}
+                      >
+                        <Trash2 color="#FF4D67" size={SCREEN_WIDTH * 0.05} opacity={0.9} />
+                      </Pressable>
+                    )}
+                    
                     <Pressable style={styles.watchFullIconButton} onPress={handleWatchFull}>
                       <ExternalLink color="white" size={SCREEN_WIDTH * 0.05} opacity={0.9} />
-          </Pressable>
+                    </Pressable>
                   </>
                 )}
                 <Pressable 
@@ -2141,8 +2199,8 @@ const VideoItemComponent = memo(({
                   <Minimize color="white" size={SCREEN_WIDTH * 0.05} /> : 
                   <Maximize color="white" size={SCREEN_WIDTH * 0.05} />
                 }
-          </Pressable>
-        </View>
+                </Pressable>
+            </View>
           </View>
           )}
           
@@ -4064,9 +4122,9 @@ const styles = StyleSheet.create({
     borderColor: 'rgba(255, 255, 255, 0.3)',
   },
   premiumContinueButtonText: {
-    color: 'rgba(255, 255, 255, 0.7)',
-    fontSize: Math.min(SCREEN_WIDTH * 0.04, 18),
-    fontWeight: '500',
+    color: 'white',
+    fontFamily: 'Inter_600SemiBold',
+    fontSize: 16,
   },
   fullscreenOverlay: {
     paddingBottom: Platform.OS === 'ios' ? 34 : 20, // Safe area bottom padding
@@ -4229,5 +4287,20 @@ const styles = StyleSheet.create({
     width: 28,
     height: 28,
     resizeMode: 'contain',
+  },
+  yourPostContainer: {
+    backgroundColor: 'rgba(0, 112, 243, 0.2)',
+    borderRadius: 4,
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    marginRight: 10,
+  },
+  yourPostText: {
+    color: '#1877F2',
+    fontSize: 12,
+    fontWeight: 'bold',
+  },
+  deleteVideoButton: {
+    marginRight: 10,
   },
 });

@@ -23,7 +23,8 @@ import {
   TouchableOpacity,
   DeviceEventEmitter,
   Alert,
-  Keyboard
+  Keyboard,
+  Easing
 } from 'react-native';
 import { usePointsStore } from '@/store/usePointsStore';
 import { useRouter } from 'expo-router';
@@ -59,7 +60,7 @@ import { eventEmitter } from '../app/utils/eventEmitter';
 import videoService from '@/tunnel-ad-main/services/videoService.js';
 import * as postService from '@/tunnel-ad-main/services/postService';
 
-const { width: SCREEN_WIDTH } = Dimensions.get('window');
+const { width: SCREEN_WIDTH, height: SCREEN_HEIGHT } = Dimensions.get('window');
 
 // Utility function to format counts with K and M abbreviations
 const formatCount = (count: number): string => {
@@ -834,6 +835,8 @@ export default function Feed() {
   // Animation values for zooming and panning
   const translateX = useRef(new Animated.Value(0)).current;
   const translateY = useRef(new Animated.Value(0)).current;
+  const modalOpacity = useRef(new Animated.Value(1)).current;
+  const modalScale = useRef(new Animated.Value(1)).current;
   
   // Create a base scale value for the initial scale
   const baseScale = useRef(new Animated.Value(1)).current;
@@ -940,6 +943,10 @@ export default function Feed() {
   const viewerPanResponder = useRef(
     PanResponder.create({
       onStartShouldSetPanResponder: () => true,
+      onMoveShouldSetPanResponder: (_, gesture) => {
+        // Only handle significant movements
+        return Math.abs(gesture.dx) > 10 || Math.abs(gesture.dy) > 10;
+      },
       onPanResponderGrant: () => {
         // Store initial pan values
         let xOffset = 0;
@@ -958,11 +965,24 @@ export default function Feed() {
         translateY.setValue(0);
       },
       onPanResponderMove: (_, gesture) => {
-        // Only allow panning if zoomed in
+        // For zoomed images, allow both horizontal and vertical panning
         if (currentScaleValue.current > 1.1) {
-          // Update pan position
           translateX.setValue(gesture.dx);
           translateY.setValue(gesture.dy);
+        } else {
+          // For non-zoomed images, only allow vertical movement for dismiss gesture
+          translateY.setValue(gesture.dy);
+          
+          // Add subtle scaling and opacity effects as user drags down
+          if (gesture.dy > 0) {
+            // Calculate scale between 0.85 and 1.0 based on drag distance
+            const scale = Math.max(0.85, 1 - (gesture.dy / (SCREEN_HEIGHT * 1.5)));
+            modalScale.setValue(scale);
+            
+            // Calculate opacity between 0.5 and 1.0 based on drag distance
+            const opacity = Math.max(0.5, 1 - (gesture.dy / (SCREEN_HEIGHT * 0.8)));
+            modalOpacity.setValue(opacity);
+          }
         }
       },
       onPanResponderRelease: (_, gesture) => {
@@ -970,9 +990,28 @@ export default function Feed() {
         translateX.flattenOffset();
         translateY.flattenOffset();
         
-        // Detect swipe to dismiss
-        if (Math.abs(gesture.dy) > 100 && Math.abs(gesture.vy) > 0.5 && currentScaleValue.current <= 1.1) {
+        // Simplified dismiss logic - just close the modal immediately when conditions are met
+        if (currentScaleValue.current <= 1.1 && 
+            ((gesture.dy > 80) || (gesture.dy > 20 && gesture.vy > 0.3))) {
+          
+          // Simply close the modal without animations
           setModalVisible(false);
+          
+          // Reset values immediately
+          translateY.setValue(0);
+          modalOpacity.setValue(1);
+          modalScale.setValue(1);
+        } else {
+          // Reset position with spring animation
+          Animated.spring(translateY, {
+            toValue: 0,
+            tension: 40,
+            friction: 7,
+            useNativeDriver: true
+          }).start();
+          
+          // Reset scale
+          modalScale.setValue(1);
         }
       },
       onPanResponderTerminate: () => {
@@ -2044,12 +2083,20 @@ export default function Feed() {
     const wordCount = text.split(/\s+/).length;
     const isExpanded = expandedPosts[postId];
     
+    // Get the post from the feed data to check if it has images
+    const post = combinedFeed.find(item => item.id === postId);
+    const hasImages = post && post.images && post.images.length > 0;
+    
+    // Set different word count thresholds based on post type
+    // 10 words for posts with images, 20 words for text-only posts
+    const wordCountThreshold = hasImages ? 10 : 70;
+    
     // If text is short or post is expanded, show full text
-    if (wordCount <= 50 || isExpanded) {
+    if (wordCount <= wordCountThreshold || isExpanded) {
       return (
         <>
           <Text style={styles.postContent}>{text}</Text>
-          {wordCount > 50 && (
+          {wordCount > wordCountThreshold && (
             <Pressable onPress={() => toggleTextExpansion(postId)}>
               <Text style={styles.seeMoreLessText}>See Less</Text>
             </Pressable>
@@ -2059,7 +2106,7 @@ export default function Feed() {
     }
     
     // Otherwise truncate text
-    const truncated = text.split(/\s+/).slice(0, 200).join(' ') + '...';
+    const truncated = text.split(/\s+/).slice(0, wordCountThreshold).join(' ') + '...';
     return (
       <>
         <Text style={styles.postContent}>{truncated}</Text>
@@ -2119,9 +2166,19 @@ export default function Feed() {
         >
           <View style={styles.modalBackdrop} />
           
-          <Pressable 
-            style={styles.gestureContainer}
-            onPress={(e) => e.stopPropagation()}
+          {/* Apply the Pan Responder directly to a wrapper View rather than individual items */}
+          <Animated.View 
+            style={[
+              styles.gestureContainer, 
+              { 
+                transform: [
+                  { translateY: translateY },
+                  { scale: modalScale }
+                ],
+                opacity: modalOpacity
+              }
+            ]}
+            {...viewerPanResponder.panHandlers}
           >
             {/* Close button */}
             <Pressable 
@@ -2180,10 +2237,7 @@ export default function Feed() {
                                        index === currentImageIndex + 1;
                     
                     return (
-                      <View 
-                        style={{ width: SCREEN_WIDTH, height: '100%' }}
-                        {...(currentScaleValue.current > 1.1 ? viewerPanResponder.panHandlers : {})}
-                      >
+                      <View style={{ width: SCREEN_WIDTH, height: '100%' }}>
                         <PinchGestureHandler
                           onGestureEvent={onPinchGestureEvent}
                           onHandlerStateChange={({ nativeEvent }) => {
@@ -2238,8 +2292,11 @@ export default function Feed() {
                                   {
                                     transform: [
                                       { scale: combinedScale },
-                                      { translateX },
-                                      { translateY },
+                                      // Only apply translateX/Y for zoomed images
+                                      ...(currentScaleValue.current > 1.1 ? [
+                                        { translateX },
+                                        { translateY: Animated.multiply(translateY, 0) } // Reset Y translation for zoomed images
+                                      ] : [])
                                     ],
                                   },
                                 ]}
@@ -2304,7 +2361,7 @@ export default function Feed() {
                 )}
               </GestureHandlerRootView>
             )}
-          </Pressable>
+          </Animated.View>
         </Pressable>
       </Modal>
       
@@ -2642,24 +2699,21 @@ const styles = StyleSheet.create({
   modalContainer: {
     flex: 1,
     backgroundColor: 'transparent',
-    position: 'relative',
-  },
-  modalBackdrop: {
-    position: 'absolute',
-    top: 0,
-    left: 0,
-    right: 0,
-    bottom: 0,
-    backgroundColor: 'rgba(0,0,0,0.9)',
-  },
-  gestureContainer: {
-    flex: 1,
     justifyContent: 'center',
     alignItems: 'center',
-    // This ensures this container doesn't block touches to the backdrop
-    backgroundColor: 'transparent',
   },
-  imageViewer: {
+  modalBackdrop: {
+    ...StyleSheet.absoluteFillObject,
+    backgroundColor: '#000', // Solid black background
+  },
+  gestureContainer: {
+    width: '100%',
+    height: '100%',
+    justifyContent: 'center',
+    alignItems: 'center',
+    zIndex: 1,
+  },
+  imageViewerContent: {
     width: '100%',
     height: '100%',
     justifyContent: 'center',
@@ -2668,21 +2722,22 @@ const styles = StyleSheet.create({
   pinchableView: {
     width: '100%',
     height: '100%',
-    overflow: 'hidden',
     justifyContent: 'center',
     alignItems: 'center',
+    overflow: 'hidden',
   },
   modalImage: {
-    width: '100%',
-    height: '100%',
+    width: SCREEN_WIDTH,
+    height: SCREEN_HEIGHT * 0.8,
+    resizeMode: 'contain',
   },
   closeButton: {
     position: 'absolute',
-    top: 40,
+    top: Platform.OS === 'ios' ? 50 : 20,
     right: 20,
-    width: 40,
-    height: 40,
-    borderRadius: 20,
+    width: 36,
+    height: 36,
+    borderRadius: 18,
     backgroundColor: 'rgba(0,0,0,0.5)',
     justifyContent: 'center',
     alignItems: 'center',
@@ -2690,7 +2745,7 @@ const styles = StyleSheet.create({
   },
   closeButtonText: {
     color: 'white',
-    fontSize: 18,
+    fontSize: 20,
     fontWeight: 'bold',
   },
   navButton: {
@@ -3127,12 +3182,6 @@ const styles = StyleSheet.create({
     lineHeight: 20,
     paddingHorizontal: 16,
     marginBottom: 12,
-  },
-  imageViewerContent: {
-    width: '100%',
-    height: '100%',
-    justifyContent: 'center',
-    alignItems: 'center',
   },
   imageViewerFooter: {
     position: 'absolute',

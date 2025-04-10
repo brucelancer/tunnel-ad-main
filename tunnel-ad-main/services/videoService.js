@@ -469,7 +469,40 @@ export const deleteVideo = async (videoId, userId) => {
       throw new Error('Video not found or you do not have permission to delete it');
     }
     
-    // Delete the video document
+    // Find all references to this video document
+    const references = await client.fetch(
+      `*[references($videoId)]{ _id, _type }`,
+      { videoId }
+    );
+    
+    console.log(`Found ${references.length} references to video ${videoId}`);
+    
+    // Delete all references first
+    if (references.length > 0) {
+      console.log('Deleting references to video before deleting the video itself');
+      
+      for (const ref of references) {
+        try {
+          // Check what type of reference this is and handle accordingly
+          if (ref._type === 'post') {
+            // For post references, we might need to update the post to remove the video
+            await client
+              .patch(ref._id)
+              .unset(['video'])
+              .commit();
+            console.log(`Updated post ${ref._id} to remove reference to video ${videoId}`);
+          } else {
+            // For other types, attempt to delete the entire reference document
+            await client.delete(ref._id);
+            console.log(`Deleted reference document ${ref._id}`);
+          }
+        } catch (refError) {
+          console.warn(`Could not delete reference ${ref._id}: ${refError.message}`);
+        }
+      }
+    }
+    
+    // Delete the video document after handling all references
     await client.delete(videoId);
     console.log('Video deleted:', videoId);
     return true;
