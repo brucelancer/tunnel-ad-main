@@ -16,7 +16,7 @@ import {
   TouchableOpacity,
   Platform,
   useWindowDimensions,
-  SafeAreaView,
+  Modal,
 } from 'react-native';
 import { useLocalSearchParams, useRouter, Stack } from 'expo-router';
 import { BlurView } from 'expo-blur';
@@ -46,6 +46,7 @@ import {
   Grid,
   List,
   Edit3,
+  X,
 } from 'lucide-react-native';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useSanityAuth } from './hooks/useSanityAuth';
@@ -158,6 +159,11 @@ export default function UserProfileScreen() {
   const [following, setFollowing] = useState(false);
   const [viewType, setViewType] = useState<'grid' | 'list'>('grid');
   const [activeTab, setActiveTab] = useState<'posts' | 'saved' | 'tagged'>('posts');
+  
+  // Followers state
+  const [followers, setFollowers] = useState<UserData[]>([]);
+  const [followersLoading, setFollowersLoading] = useState(false);
+  const [showFollowersModal, setShowFollowersModal] = useState(false);
   
   // Animation values
   const scrollY = useRef(new Animated.Value(0)).current;
@@ -628,11 +634,79 @@ export default function UserProfileScreen() {
     );
   };
 
+  // Fetch followers function
+  const fetchFollowers = async () => {
+    if (!id) return;
+    
+    try {
+      setFollowersLoading(true);
+      
+      const client = getSanityClient();
+      if (!client) {
+        console.error('Failed to get Sanity client');
+        return;
+      }
+      
+      // Fetch users who are following this user
+      const followersData = await client.fetch(`
+        *[_type == "follow" && following._ref == $userId] {
+          "follower": follower->{
+            _id,
+            username,
+            firstName,
+            lastName,
+            "avatar": profile.avatar,
+            "isVerified": username == "admin" || username == "moderator",
+            "isBlueVerified": defined(isBlueVerified) && isBlueVerified == true
+          }
+        }
+      `, { userId: id });
+      
+      // Format followers data
+      const formattedFollowers = followersData.map((item: any) => {
+        const follower = item.follower;
+        if (!follower) return null;
+        
+        return {
+          id: follower._id,
+          name: follower.firstName && follower.lastName 
+            ? `${follower.firstName} ${follower.lastName}`.trim() 
+            : follower.username || 'User',
+          username: follower.username ? `@${follower.username}` : '@user',
+          avatar: follower.avatar ? urlFor(follower.avatar).url() : 'https://randomuser.me/api/portraits/lego/1.jpg',
+          isVerified: follower.isVerified || false,
+          isBlueVerified: follower.isBlueVerified || false
+        };
+      }).filter(Boolean);
+      
+      setFollowers(formattedFollowers);
+    } catch (error) {
+      console.error('Error fetching followers:', error);
+    } finally {
+      setFollowersLoading(false);
+    }
+  };
+  
+  // Handle follower click
+  const handleFollowerPress = (followerId: string) => {
+    router.push({
+      pathname: "/user-profile" as any,
+      params: { id: followerId }
+    });
+    setShowFollowersModal(false);
+  };
+
+  // Function to open followers modal
+  const openFollowersModal = () => {
+    fetchFollowers();
+    setShowFollowersModal(true);
+  };
+
   // Loading state
   if (loading && !userData) {
     return (
       <View style={styles.loadingContainer}>
-        <StatusBar barStyle="light-content" />
+        <StatusBar barStyle="light-content" translucent backgroundColor="transparent" />
         <ActivityIndicator size="large" color="#1877F2" />
         <Text style={styles.loadingText}>Loading profile...</Text>
       </View>
@@ -642,591 +716,652 @@ export default function UserProfileScreen() {
   const isMyProfile = currentUser?._id === id;
 
   return (
-    <SafeAreaView style={styles.safeArea}>
-      <View style={styles.container}>
-        <StatusBar barStyle="light-content" />
-        
-        {/* Animated header */}
+    <View style={[styles.container, { paddingTop: 0 }]}>
+      <StatusBar barStyle="light-content" translucent backgroundColor="transparent" />
+      
+      {/* Animated header */}
+      <Animated.View 
+        style={[
+          styles.header,
+          { 
+            height: headerHeight,
+            opacity: headerOpacity,
+            zIndex: 100
+          }
+        ]}
+      >
+        <BlurView intensity={80} style={StyleSheet.absoluteFill} />
+        <View style={[styles.headerContent, windowWidth > 768 && styles.tabletHeaderContent]}>
+          <Pressable
+            style={styles.backButton}
+            onPress={() => router.back()}
+            hitSlop={20}
+          >
+            <ArrowLeft color="white" size={windowWidth > 768 ? 28 : 24} />
+          </Pressable>
+          
+          {userData && (
+            <View style={styles.headerUserInfo}>
+              <Image 
+                source={{ uri: userData.avatar }} 
+                style={[styles.headerAvatar, { width: headerAvatarSize, height: headerAvatarSize, borderRadius: headerAvatarSize/2 }]} 
+              />
+              <View style={styles.headerTextContainer}>
+                <View style={styles.headerNameContainer}>
+                  <Text style={[styles.headerName, windowWidth > 768 && styles.tabletHeaderText]}>
+                    {userData?.name || 'User'}
+                  </Text>
+                  <View style={styles.verificationBadges}>
+                    {userData?.isBlueVerified && (
+                      <View style={styles.blueVerifiedBadge}>
+                        <TunnelVerifiedMark size={windowWidth > 768 ? 14 : 12} />
+                      </View>
+                    )}
+                    {userData?.isVerified && !userData?.isBlueVerified && (
+                      <View style={styles.verifiedBadge}>
+                        <TunnelVerifiedMark size={windowWidth > 768 ? 14 : 12} />
+                      </View>
+                    )}
+                  </View>
+                </View>
+                <Text style={[styles.headerUsername, windowWidth > 768 && { fontSize: 14 }]}>{userData.username}</Text>
+              </View>
+            </View>
+          )}
+          
+          <Pressable
+            style={styles.moreButton}
+            onPress={() => {}}
+            hitSlop={20}
+          >
+            <MoreHorizontal color="white" size={windowWidth > 768 ? 28 : 24} />
+          </Pressable>
+        </View>
+      </Animated.View>
+      
+      <Animated.ScrollView
+        style={styles.scrollView}
+        contentContainerStyle={[
+          styles.scrollContent,
+          { 
+            paddingHorizontal: windowWidth > 768 ? 20 : 0,
+            paddingTop: 0, // No top padding to allow content to flow under status bar
+            paddingBottom: 60, // Increased bottom padding for better scrolling experience
+            marginTop: Platform.OS === 'android' ? -(StatusBar.currentHeight || 0) : 0 // Status bar compensation only on Android
+          }
+        ]}
+        showsVerticalScrollIndicator={false}
+        scrollEventThrottle={16}
+        onScroll={Animated.event(
+          [{ nativeEvent: { contentOffset: { y: scrollY } } }],
+          { useNativeDriver: false }
+        )}
+        refreshControl={
+          <RefreshControl
+            refreshing={refreshing}
+            onRefresh={handleRefresh}
+            tintColor="#1877F2"
+            colors={["#1877F2"]}
+            progressViewOffset={headerHeightValue}
+          />
+        }
+      >
+        {/* Cover photo and profile section */}
         <Animated.View 
           style={[
-            styles.header,
+            styles.coverContainer,
             { 
-              height: headerHeight,
-              opacity: headerOpacity,
-              zIndex: 100
+              opacity: imageOpacity,
+              height: windowWidth > 768 ? 480 : 440, // Further increase height
+              marginTop: 0,
+              marginBottom: 10,
+              top: 0,
+              left: 0,
+              right: 0,
             }
           ]}
         >
-          <BlurView intensity={80} style={StyleSheet.absoluteFill} />
-          <View style={[styles.headerContent, windowWidth > 768 && styles.tabletHeaderContent]}>
-            <Pressable
-              style={styles.backButton}
-              onPress={() => router.back()}
-              hitSlop={20}
-            >
-              <ArrowLeft color="white" size={windowWidth > 768 ? 28 : 24} />
-            </Pressable>
-            
-            {userData && (
-              <View style={styles.headerUserInfo}>
-                <Image 
-                  source={{ uri: userData.avatar }} 
-                  style={[styles.headerAvatar, { width: headerAvatarSize, height: headerAvatarSize, borderRadius: headerAvatarSize/2 }]} 
-                />
-                <View style={styles.headerTextContainer}>
-                  <View style={styles.headerNameContainer}>
-                    <Text style={[styles.headerName, windowWidth > 768 && styles.tabletHeaderText]}>
-                      {userData?.name || 'User'}
-                    </Text>
-                    <View style={styles.verificationBadges}>
-                      {userData?.isBlueVerified && (
-                        <View style={styles.blueVerifiedBadge}>
-                          <TunnelVerifiedMark size={windowWidth > 768 ? 14 : 12} />
-                        </View>
-                      )}
-                      {userData?.isVerified && !userData?.isBlueVerified && (
-                        <View style={styles.verifiedBadge}>
-                          <TunnelVerifiedMark size={windowWidth > 768 ? 14 : 12} />
-                        </View>
-                      )}
-                    </View>
-                  </View>
-                  <Text style={[styles.headerUsername, windowWidth > 768 && { fontSize: 14 }]}>{userData.username}</Text>
-                </View>
-              </View>
-            )}
-            
-            <Pressable
-              style={styles.moreButton}
-              onPress={() => {}}
-              hitSlop={20}
-            >
-              <MoreHorizontal color="white" size={windowWidth > 768 ? 28 : 24} />
-            </Pressable>
-          </View>
-        </Animated.View>
-        
-        <Animated.ScrollView
-          style={styles.scrollView}
-          contentContainerStyle={[
-            styles.scrollContent,
+          <LinearGradient
+            colors={['rgba(24, 119, 242, 0.8)', 'rgba(0, 0, 0, 0.9)']}
+            style={styles.coverGradient}
+          />
+          
+          <View style={[
+            styles.profileSection, 
             { 
-              paddingHorizontal: windowWidth > 768 ? 20 : 0,
-              paddingTop: 0,
-              paddingBottom: 60 // Increased bottom padding for better scrolling experience
+              marginTop: windowWidth > 768 ? 110 : 90,
+              paddingHorizontal: contentPadding,
+              paddingBottom: 120 // Increase bottom padding even more
             }
-          ]}
-          showsVerticalScrollIndicator={false}
-          scrollEventThrottle={16}
-          onScroll={Animated.event(
-            [{ nativeEvent: { contentOffset: { y: scrollY } } }],
-            { useNativeDriver: false }
-          )}
-          refreshControl={
-            <RefreshControl
-              refreshing={refreshing}
-              onRefresh={handleRefresh}
-              tintColor="#1877F2"
-              colors={["#1877F2"]}
-              progressViewOffset={Platform.OS === 'ios' ? 80 : 60}
-            />
-          }
-        >
-          {/* Cover photo and profile section */}
-          <Animated.View 
-            style={[
-              styles.coverContainer,
-              { 
-                opacity: imageOpacity,
-                height: windowWidth > 768 ? 480 : 440, // Further increase height
-                marginTop: 0,
-                marginBottom: 10
-              }
-            ]}
-          >
-            <LinearGradient
-              colors={['rgba(24, 119, 242, 0.8)', 'rgba(0, 0, 0, 0.9)']}
-              style={styles.coverGradient}
-            />
-            
-            <View style={[
-              styles.profileSection, 
-              { 
-                marginTop: windowWidth > 768 ? 110 : 90,
-                paddingHorizontal: contentPadding,
-                paddingBottom: 120 // Increase bottom padding even more
-              }
-            ]}>
-              <View style={styles.avatarContainer}>
-                <Image 
-                  source={{ uri: userData?.avatar }} 
-                  style={[
-                    styles.avatar, 
-                    { 
-                      width: avatarSize, 
-                      height: avatarSize, 
-                      borderRadius: avatarSize/2,
-                      borderWidth: 3,
-                      borderColor: '#1877F2'
-                    }
-                  ]}
-                />
-              </View>
-              
-              <View style={[styles.userInfoContainer, windowWidth > 768 && { paddingHorizontal: 16 }]}>
-                {/* Restore name, username and bio sections */}
-                <View style={styles.nameContainer}>
-                  <Text style={[styles.userName, { fontSize: nameTextSize }]}>{userData?.name}</Text>
-                  {(userData?.isVerified || userData?.isBlueVerified) && (
-                    <View style={[
-                      styles.nameBadgeContainer,
-                      { 
-                        backgroundColor: 'transparent',
-                        marginLeft: windowWidth > 768 ? 12 : 8,
-                        padding: 2,
-                        alignItems: 'center',
-                        justifyContent: 'center',
-                      }
-                    ]}>
-                      <TunnelVerifiedMark size={windowWidth > 768 ? 24 : 20} />
-                    </View>
-                  )}
-                </View>
-                <Text style={[styles.userUsername, windowWidth > 768 && { fontSize: 18 }]}>{userData?.username}</Text>
-                
-                {/* Bio */}
-                {userData?.bio && (
-                  <TypingAnimatedText 
-                    text={userData.bio}
-                    style={[
-                      styles.userBio, 
-                      windowWidth > 768 && { fontSize: 16, lineHeight: 24 },
-                      { 
-                        marginTop: 12, 
-                        marginBottom: 16,
-                        color: '#FFF',
-                        backgroundColor: 'rgba(0,0,0,0.5)',
-                        padding: 12,
-                        borderRadius: 8,
-                        borderWidth: 1,
-                        borderColor: 'rgba(255,255,255,0.1)',
-                      }
-                    ]}
-                  />
-                )}
-                
-                {/* Location and join date */}
-                <View style={styles.userMetaContainer}>
-                  {userData?.location && (
-                    <View style={styles.userMetaItem}>
-                      <MapPin size={windowWidth > 768 ? 16 : 14} color="#888" />
-                      <Text style={[styles.userMetaText, windowWidth > 768 && { fontSize: 15 }]}>{userData.location}</Text>
-                    </View>
-                  )}
-                  
-                  {userData?.phone && (
-                    <View style={styles.userMetaItem}>
-                      <Phone size={windowWidth > 768 ? 16 : 14} color="#888" />
-                      <Text style={[styles.userMetaText, windowWidth > 768 && { fontSize: 15 }]}>{userData.phone}</Text>
-                    </View>
-                  )}
-                  
-                  <View style={styles.userMetaItem}>
-                    <Calendar size={windowWidth > 768 ? 16 : 14} color="#888" />
-                    <Text style={[styles.userMetaText, windowWidth > 768 && { fontSize: 15 }]}>
-                      Joined {userData?.memberSince}
-                    </Text>
-                  </View>
-                </View>
-                
-                {/* Action buttons */}
-                <View style={[styles.actionButtons, windowWidth > 768 && { marginTop: 8 }]}>
-                  {isMyProfile ? (
-                    <>
-                      <Pressable
-                        style={[
-                          styles.actionButton, 
-                          styles.editProfileButton,
-                          windowWidth > 768 && { height: 48 }
-                        ]}
-                        onPress={() => router.push('/editprofile' as any)}
-                      >
-                        <Text style={[styles.editProfileText, windowWidth > 768 && { fontSize: 16 }]}>Edit Profile</Text>
-                      </Pressable>
-                      
-                      <Pressable
-                        style={[
-                          styles.actionButton, 
-                          styles.shareButton,
-                          windowWidth > 768 && { width: 48, height: 48 }
-                        ]}
-                        onPress={() => {}}
-                      >
-                        <Share2 size={windowWidth > 768 ? 22 : 18} color="#FFF" />
-                      </Pressable>
-                    </>
-                  ) : (
-                    <>
-                      <Pressable
-                        style={[
-                          styles.actionButton, 
-                          following ? styles.unfollowButton : styles.followButton,
-                          windowWidth > 768 && { height: 48 }
-                        ]}
-                        onPress={handleFollowToggle}
-                      >
-                        <Text style={[
-                          following ? styles.unfollowText : styles.followText,
-                          windowWidth > 768 && { fontSize: 16 }
-                        ]}>
-                          {following ? 'Following' : 'Follow'}
-                        </Text>
-                      </Pressable>
-                      
-                      <Pressable
-                        style={[
-                          styles.actionButton, 
-                          styles.messageButton,
-                          windowWidth > 768 && { width: 48, height: 48 }
-                        ]}
-                        onPress={() => {}}
-                      >
-                        <MessageCircle size={windowWidth > 768 ? 22 : 18} color="#1877F2" />
-                      </Pressable>
-                      
-                      <Pressable
-                        style={[
-                          styles.actionButton, 
-                          styles.shareButton,
-                          windowWidth > 768 && { width: 48, height: 48 }
-                        ]}
-                        onPress={() => {}}
-                      >
-                        <Share2 size={windowWidth > 768 ? 22 : 18} color="#FFF" />
-                      </Pressable>
-                    </>
-                  )}
-                </View>
-              </View>
-            </View>
-          </Animated.View>
-          
-       
-          
-          {/* Social Stats section */}
-          <View style={[styles.socialStatsSection, { 
-            marginHorizontal: contentPadding,
-            marginBottom: 20,
-          }]}>
-            <Text style={styles.socialStatsTitle}>Social Stats</Text>
-            
-            <View style={styles.socialStatsGrid}>
-              <View style={styles.socialStatItem}>
-                <View style={[styles.socialStatIconContainer, { backgroundColor: 'rgba(24, 119, 242, 0.15)' }]}>
-                  <LayoutGrid size={windowWidth > 768 ? 20 : 16} color="#1877F2" />
-                </View>
-                <View style={styles.socialStatTextContainer}>
-                  <Text style={styles.socialStatValue}>{userData?.posts || '0'}</Text>
-                  <Text style={styles.socialStatLabel}>Posts</Text>
-                </View>
-              </View>
-              
-              <View style={styles.socialStatItem}>
-                <View style={[styles.socialStatIconContainer, { backgroundColor: 'rgba(255, 59, 48, 0.15)' }]}>
-                  <Heart size={windowWidth > 768 ? 20 : 16} color="#FF3B30" />
-                </View>
-                <View style={styles.socialStatTextContainer}>
-                  <Text style={styles.socialStatValue}>{userData?.likesCount || '0'}</Text>
-                  <Text style={styles.socialStatLabel}>Likes</Text>
-                </View>
-              </View>
-              
-              <View style={styles.socialStatItem}>
-                <View style={[styles.socialStatIconContainer, { backgroundColor: 'rgba(0, 122, 255, 0.15)' }]}>
-                  <UserPlus size={windowWidth > 768 ? 20 : 16} color="#007AFF" />
-                </View>
-                <View style={styles.socialStatTextContainer}>
-                  <Text style={styles.socialStatValue}>{userData?.followers || '0'}</Text>
-                  <Text style={styles.socialStatLabel}>Followers</Text>
-                </View>
-              </View>
-              
-              <View style={styles.socialStatItem}>
-                <View style={[styles.socialStatIconContainer, { backgroundColor: 'rgba(52, 199, 89, 0.15)' }]}>
-                  <UserPlus size={windowWidth > 768 ? 20 : 16} color="#34C759" />
-                </View>
-                <View style={styles.socialStatTextContainer}>
-                  <Text style={styles.socialStatValue}>{userData?.following || '0'}</Text>
-                  <Text style={styles.socialStatLabel}>Following</Text>
-                </View>
-              </View>
-            </View>
-          </View>
-          
-          {/* Interests section */}
-          {userData?.interests && userData.interests.length > 0 && (
-            <View style={[styles.interestsSection, { paddingHorizontal: contentPadding }]}>
-              <Text style={[styles.sectionTitle, { color: '#1877F2', fontSize: windowWidth > 768 ? 18 : 16 }]}>Interests</Text>
-              <View style={styles.tagsContainer}>
-                {userData.interests.map((interest, index) => (
-                  <View key={index} style={[
-                    styles.tagItem,
-                    windowWidth > 768 && { 
-                      paddingVertical: 8,
-                      paddingHorizontal: 16,
-                      borderRadius: 20,
-                    }
-                  ]}>
-                    <Text style={[styles.tagText, windowWidth > 768 && { fontSize: 14 }]}>{interest}</Text>
-                  </View>
-                ))}
-              </View>
-            </View>
-          )}
-          
-          {/* Content tabs */}
-          <View style={styles.tabsContainer}>
-            <View style={styles.tabsRow}>
-              <Pressable
+          ]}>
+            <View style={styles.avatarContainer}>
+              <Image 
+                source={{ uri: userData?.avatar }} 
                 style={[
-                  styles.tabButton,
-                  activeTab === 'posts' && styles.activeTabButton,
-                  windowWidth > 768 && { paddingVertical: 16 }
-                ]}
-                onPress={() => setActiveTab('posts')}
-              >
-                <LayoutGrid 
-                  size={windowWidth > 768 ? 22 : 18} 
-                  color={activeTab === 'posts' ? '#1877F2' : '#888'} 
-                />
-                <Text style={[
-                  styles.tabText,
-                  activeTab === 'posts' && styles.activeTabText,
-                  windowWidth > 768 && { fontSize: 16, marginLeft: 8 }
-                ]}>
-                  Posts
-                </Text>
-              </Pressable>
-              
-              <Pressable
-                style={[
-                  styles.tabButton,
-                  activeTab === 'saved' && styles.activeTabButton,
-                  windowWidth > 768 && { paddingVertical: 16 }
-                ]}
-                onPress={() => setActiveTab('saved')}
-              >
-                <Bookmark 
-                  size={windowWidth > 768 ? 22 : 18} 
-                  color={activeTab === 'saved' ? '#1877F2' : '#888'} 
-                />
-                <Text style={[
-                  styles.tabText,
-                  activeTab === 'saved' && styles.activeTabText,
-                  windowWidth > 768 && { fontSize: 16, marginLeft: 8 }
-                ]}>
-                  Saved
-                </Text>
-              </Pressable>
-              
-              <Pressable
-                style={[
-                  styles.tabButton,
-                  activeTab === 'tagged' && styles.activeTabButton,
-                  windowWidth > 768 && { paddingVertical: 16 }
-                ]}
-                onPress={() => setActiveTab('tagged')}
-              >
-                <UserPlus 
-                  size={windowWidth > 768 ? 22 : 18} 
-                  color={activeTab === 'tagged' ? '#1877F2' : '#888'} 
-                />
-                <Text style={[
-                  styles.tabText,
-                  activeTab === 'tagged' && styles.activeTabText,
-                  windowWidth > 768 && { fontSize: 16, marginLeft: 8 }
-                ]}>
-                  Tagged
-                </Text>
-              </Pressable>
-            </View>
-            
-            {/* Tab indicator line */}
-            <View style={styles.tabIndicatorContainer}>
-              <Animated.View 
-                style={[
-                  styles.tabIndicator,
-                  {
-                    left: activeTab === 'posts' ? '0%' : 
-                          activeTab === 'saved' ? '33.33%' : '66.66%',
-                    height: windowWidth > 768 ? 4 : 3,
-                    width: '33.33%'
+                  styles.avatar, 
+                  { 
+                    width: avatarSize, 
+                    height: avatarSize, 
+                    borderRadius: avatarSize/2,
+                    borderWidth: 3,
+                    borderColor: '#1877F2'
                   }
                 ]}
               />
             </View>
             
-            {/* View type toggle */}
-            <View style={[
-              styles.viewToggleContainer,
-              windowWidth > 768 && { top: 10, right: 20 }
-            ]}>
-              <Pressable
-                style={[
-                  styles.viewToggleButton,
-                  viewType === 'grid' && styles.activeViewToggle,
-                  windowWidth > 768 && { paddingVertical: 8, paddingHorizontal: 12 }
-                ]}
-                onPress={() => setViewType('grid')}
-              >
-                <Grid 
-                  size={windowWidth > 768 ? 22 : 18} 
-                  color={viewType === 'grid' ? '#1877F2' : '#888'} 
-                />
-              </Pressable>
+            <View style={[styles.userInfoContainer, windowWidth > 768 && { paddingHorizontal: 16 }]}>
+              {/* Restore name, username and bio sections */}
+              <View style={styles.nameContainer}>
+                <Text style={[styles.userName, { fontSize: nameTextSize }]}>{userData?.name}</Text>
+                {(userData?.isVerified || userData?.isBlueVerified) && (
+                  <View style={[
+                    styles.nameBadgeContainer,
+                    { 
+                      backgroundColor: 'transparent',
+                      marginLeft: windowWidth > 768 ? 12 : 8,
+                      padding: 2,
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                    }
+                  ]}>
+                    <TunnelVerifiedMark size={windowWidth > 768 ? 24 : 20} />
+                  </View>
+                )}
+              </View>
+              <Text style={[styles.userUsername, windowWidth > 768 && { fontSize: 18 }]}>{userData?.username}</Text>
               
-              <Pressable
-                style={[
-                  styles.viewToggleButton,
-                  viewType === 'list' && styles.activeViewToggle,
-                  windowWidth > 768 && { paddingVertical: 8, paddingHorizontal: 12 }
-                ]}
-                onPress={() => setViewType('list')}
-              >
-                <List 
-                  size={windowWidth > 768 ? 22 : 18} 
-                  color={viewType === 'list' ? '#1877F2' : '#888'} 
+              {/* Bio */}
+              {userData?.bio && (
+                <TypingAnimatedText 
+                  text={userData.bio}
+                  style={[
+                    styles.userBio, 
+                    windowWidth > 768 && { fontSize: 16, lineHeight: 24 },
+                    { 
+                      marginTop: 12, 
+                      marginBottom: 16,
+                      color: '#FFF',
+                      backgroundColor: 'rgba(0,0,0,0.5)',
+                      padding: 12,
+                      borderRadius: 8,
+                      borderWidth: 1,
+                      borderColor: 'rgba(255,255,255,0.1)',
+                    }
+                  ]}
                 />
-              </Pressable>
+              )}
+              
+              {/* Location and join date */}
+              <View style={styles.userMetaContainer}>
+                {userData?.location && (
+                  <View style={styles.userMetaItem}>
+                    <MapPin size={windowWidth > 768 ? 16 : 14} color="#888" />
+                    <Text style={[styles.userMetaText, windowWidth > 768 && { fontSize: 15 }]}>{userData.location}</Text>
+                  </View>
+                )}
+                
+                {userData?.phone && (
+                  <View style={styles.userMetaItem}>
+                    <Phone size={windowWidth > 768 ? 16 : 14} color="#888" />
+                    <Text style={[styles.userMetaText, windowWidth > 768 && { fontSize: 15 }]}>{userData.phone}</Text>
+                  </View>
+                )}
+                
+                <View style={styles.userMetaItem}>
+                  <Calendar size={windowWidth > 768 ? 16 : 14} color="#888" />
+                  <Text style={[styles.userMetaText, windowWidth > 768 && { fontSize: 15 }]}>
+                    Joined {userData?.memberSince}
+                  </Text>
+                </View>
+              </View>
+              
+              {/* Action buttons */}
+              <View style={[styles.actionButtons, windowWidth > 768 && { marginTop: 8 }]}>
+                {isMyProfile ? (
+                  <>
+                    <Pressable
+                      style={[
+                        styles.actionButton, 
+                        styles.editProfileButton,
+                        windowWidth > 768 && { height: 48 }
+                      ]}
+                      onPress={() => router.push('/editprofile' as any)}
+                    >
+                      <Text style={[styles.editProfileText, windowWidth > 768 && { fontSize: 16 }]}>Edit Profile</Text>
+                    </Pressable>
+                    
+                    <Pressable
+                      style={[
+                        styles.actionButton, 
+                        styles.shareButton,
+                        windowWidth > 768 && { width: 48, height: 48 }
+                      ]}
+                      onPress={() => {}}
+                    >
+                      <Share2 size={windowWidth > 768 ? 22 : 18} color="#FFF" />
+                    </Pressable>
+                  </>
+                ) : (
+                  <>
+                    <Pressable
+                      style={[
+                        styles.actionButton, 
+                        following ? styles.unfollowButton : styles.followButton,
+                        windowWidth > 768 && { height: 48 }
+                      ]}
+                      onPress={handleFollowToggle}
+                    >
+                      <Text style={[
+                        following ? styles.unfollowText : styles.followText,
+                        windowWidth > 768 && { fontSize: 16 }
+                      ]}>
+                        {following ? 'Following' : 'Follow'}
+                      </Text>
+                    </Pressable>
+                    
+                    <Pressable
+                      style={[
+                        styles.actionButton, 
+                        styles.messageButton,
+                        windowWidth > 768 && { width: 48, height: 48 }
+                      ]}
+                      onPress={() => {}}
+                    >
+                      <MessageCircle size={windowWidth > 768 ? 22 : 18} color="#1877F2" />
+                    </Pressable>
+                    
+                    <Pressable
+                      style={[
+                        styles.actionButton, 
+                        styles.shareButton,
+                        windowWidth > 768 && { width: 48, height: 48 }
+                      ]}
+                      onPress={() => {}}
+                    >
+                      <Share2 size={windowWidth > 768 ? 22 : 18} color="#FFF" />
+                    </Pressable>
+                  </>
+                )}
+              </View>
             </View>
           </View>
+        </Animated.View>
+        
+        {/* Social Stats section */}
+        <View style={[styles.socialStatsSection, { 
+          marginHorizontal: contentPadding,
+          marginBottom: 20,
+        }]}>
+          <Text style={styles.socialStatsTitle}>Social Stats</Text>
           
-          {/* Posts loading indicator */}
-          {postsLoading && (
-            <View style={styles.postsLoadingContainer}>
-              <ActivityIndicator size={windowWidth > 768 ? "large" : "small"} color="#1877F2" />
-              <Text style={[styles.postsLoadingText, windowWidth > 768 && { fontSize: 18 }]}>Loading posts...</Text>
+          <View style={styles.socialStatsGrid}>
+            <View style={styles.socialStatItem}>
+              <View style={[styles.socialStatIconContainer, { backgroundColor: 'rgba(24, 119, 242, 0.15)' }]}>
+                <LayoutGrid size={windowWidth > 768 ? 20 : 16} color="#1877F2" />
+              </View>
+              <View style={styles.socialStatTextContainer}>
+                <Text style={styles.socialStatValue}>{userData?.posts || '0'}</Text>
+                <Text style={styles.socialStatLabel}>Posts</Text>
+              </View>
             </View>
-          )}
-          
-          {/* Content display */}
-          {!postsLoading && (
-            <View style={styles.contentDisplay}>
-              {activeTab === 'posts' && userPosts.length > 0 ? (
-                viewType === 'grid' ? (
-                  <FlatList
-                    data={userPosts}
-                    numColumns={fixedNumColumns}
-                    key={columnKey}
-                    renderItem={renderGridItem}
-                    keyExtractor={item => item.id}
-                    scrollEnabled={false}
-                    contentContainerStyle={[
-                      styles.gridContainer,
-                      { paddingHorizontal: itemGap / 2 }
-                    ]}
-                    columnWrapperStyle={{ justifyContent: 'flex-start' }}
-                  />
-                ) : (
-                  <FlatList
-                    data={userPosts}
-                    renderItem={renderListItem}
-                    keyExtractor={item => item.id}
-                    scrollEnabled={false}
-                    contentContainerStyle={[
-                      styles.listContainer,
-                      { paddingHorizontal: contentPadding }
-                    ]}
-                  />
-                )
-              ) : (
-                // Empty state content maintained from before
-                <View style={[
-                  styles.contentPlaceholder,
-                  { paddingHorizontal: contentPadding }
+            
+            <View style={styles.socialStatItem}>
+              <View style={[styles.socialStatIconContainer, { backgroundColor: 'rgba(255, 59, 48, 0.15)' }]}>
+                <Heart size={windowWidth > 768 ? 20 : 16} color="#FF3B30" />
+              </View>
+              <View style={styles.socialStatTextContainer}>
+                <Text style={styles.socialStatValue}>{userData?.likesCount || '0'}</Text>
+                <Text style={styles.socialStatLabel}>Likes</Text>
+              </View>
+            </View>
+            
+            <Pressable 
+              style={styles.socialStatItem}
+              onPress={openFollowersModal}
+            >
+              <View style={[styles.socialStatIconContainer, { backgroundColor: 'rgba(0, 122, 255, 0.15)' }]}>
+                <UserPlus size={windowWidth > 768 ? 20 : 16} color="#007AFF" />
+              </View>
+              <View style={styles.socialStatTextContainer}>
+                <Text style={styles.socialStatValue}>{userData?.followers || '0'}</Text>
+                <Text style={styles.socialStatLabel}>Followers</Text>
+              </View>
+            </Pressable>
+            
+            <View style={styles.socialStatItem}>
+              <View style={[styles.socialStatIconContainer, { backgroundColor: 'rgba(52, 199, 89, 0.15)' }]}>
+                <UserPlus size={windowWidth > 768 ? 20 : 16} color="#34C759" />
+              </View>
+              <View style={styles.socialStatTextContainer}>
+                <Text style={styles.socialStatValue}>{userData?.following || '0'}</Text>
+                <Text style={styles.socialStatLabel}>Following</Text>
+              </View>
+            </View>
+          </View>
+        </View>
+        
+        {/* Interests section */}
+        {userData?.interests && userData.interests.length > 0 && (
+          <View style={[styles.interestsSection, { paddingHorizontal: contentPadding }]}>
+            <Text style={[styles.sectionTitle, { color: '#1877F2', fontSize: windowWidth > 768 ? 18 : 16 }]}>Interests</Text>
+            <View style={styles.tagsContainer}>
+              {userData.interests.map((interest, index) => (
+                <View key={index} style={[
+                  styles.tagItem,
+                  windowWidth > 768 && { 
+                    paddingVertical: 8,
+                    paddingHorizontal: 16,
+                    borderRadius: 20,
+                  }
                 ]}>
-                  {activeTab === 'posts' && !postsLoading && userPosts.length === 0 && (
-                    <View style={[
-                      styles.emptyStateContainer,
-                      windowWidth > 768 && { padding: 40 }
-                    ]}>
-                      <Award size={windowWidth > 768 ? 60 : 40} color="#333" />
-                      <Text style={[styles.emptyStateTitle, windowWidth > 768 && { fontSize: 24 }]}>No Posts Yet</Text>
-                      <Text style={[
-                        styles.emptyStateText,
-                        windowWidth > 768 && { fontSize: 18, marginBottom: 30 }
-                      ]}>
-                        {isMyProfile 
-                          ? "You haven't shared any posts yet. Your posts will appear here."
-                          : `${userData?.name} hasn't shared any posts yet.`}
-                      </Text>
-                      {isMyProfile && (
-                        <Pressable
-                          style={[
-                            styles.emptyStateButton,
-                            windowWidth > 768 && { 
-                              padding: 20,
-                              borderRadius: 12
-                            }
-                          ]}
-                          onPress={() => router.push('/newsfeed-upload' as any)}
-                        >
-                          <Text style={[styles.emptyStateButtonText, windowWidth > 768 && { fontSize: 18 }]}>Create Post</Text>
-                        </Pressable>
-                      )}
-                    </View>
-                  )}
-                  
-                  {activeTab === 'saved' && (
-                    <View style={[
-                      styles.emptyStateContainer,
-                      windowWidth > 768 && { padding: 40 }
-                    ]}>
-                      <Bookmark size={windowWidth > 768 ? 60 : 40} color="#333" />
-                      <Text style={[styles.emptyStateTitle, windowWidth > 768 && { fontSize: 24 }]}>No Saved Posts</Text>
-                      <Text style={[
-                        styles.emptyStateText,
-                        windowWidth > 768 && { fontSize: 18 }
-                      ]}>
-                        {isMyProfile 
-                          ? "You haven't saved any posts yet. Tap the bookmark icon on posts to save them."
-                          : "Saved posts are only visible to you"}
-                      </Text>
-                    </View>
-                  )}
-                  
-                  {activeTab === 'tagged' && (
-                    <View style={[
-                      styles.emptyStateContainer,
-                      windowWidth > 768 && { padding: 40 }
-                    ]}>
-                      <UserPlus size={windowWidth > 768 ? 60 : 40} color="#333" />
-                      <Text style={[styles.emptyStateTitle, windowWidth > 768 && { fontSize: 24 }]}>No Tagged Posts</Text>
-                      <Text style={[
-                        styles.emptyStateText,
-                        windowWidth > 768 && { fontSize: 18 }
-                      ]}>
-                        {isMyProfile 
-                          ? "You haven't been tagged in any posts yet."
-                          : `${userData?.name} hasn't been tagged in any posts yet.`}
-                      </Text>
-                    </View>
-                  )}
+                  <Text style={[styles.tagText, windowWidth > 768 && { fontSize: 14 }]}>{interest}</Text>
                 </View>
-              )}
+              ))}
             </View>
-          )}
-        </Animated.ScrollView>
-      </View>
-    </SafeAreaView>
+          </View>
+        )}
+        
+        {/* Content tabs */}
+        <View style={styles.tabsContainer}>
+          <View style={styles.tabsRow}>
+            <Pressable
+              style={[
+                styles.tabButton,
+                activeTab === 'posts' && styles.activeTabButton,
+                windowWidth > 768 && { paddingVertical: 16 }
+              ]}
+              onPress={() => setActiveTab('posts')}
+            >
+              <LayoutGrid 
+                size={windowWidth > 768 ? 22 : 18} 
+                color={activeTab === 'posts' ? '#1877F2' : '#888'} 
+              />
+              <Text style={[
+                styles.tabText,
+                activeTab === 'posts' && styles.activeTabText,
+                windowWidth > 768 && { fontSize: 16, marginLeft: 8 }
+              ]}>
+                Posts
+              </Text>
+            </Pressable>
+            
+            <Pressable
+              style={[
+                styles.tabButton,
+                activeTab === 'saved' && styles.activeTabButton,
+                windowWidth > 768 && { paddingVertical: 16 }
+              ]}
+              onPress={() => setActiveTab('saved')}
+            >
+              <Bookmark 
+                size={windowWidth > 768 ? 22 : 18} 
+                color={activeTab === 'saved' ? '#1877F2' : '#888'} 
+              />
+              <Text style={[
+                styles.tabText,
+                activeTab === 'saved' && styles.activeTabText,
+                windowWidth > 768 && { fontSize: 16, marginLeft: 8 }
+              ]}>
+                Saved
+              </Text>
+            </Pressable>
+            
+            <Pressable
+              style={[
+                styles.tabButton,
+                activeTab === 'tagged' && styles.activeTabButton,
+                windowWidth > 768 && { paddingVertical: 16 }
+              ]}
+              onPress={() => setActiveTab('tagged')}
+            >
+              <UserPlus 
+                size={windowWidth > 768 ? 22 : 18} 
+                color={activeTab === 'tagged' ? '#1877F2' : '#888'} 
+              />
+              <Text style={[
+                styles.tabText,
+                activeTab === 'tagged' && styles.activeTabText,
+                windowWidth > 768 && { fontSize: 16, marginLeft: 8 }
+              ]}>
+                Tagged
+              </Text>
+            </Pressable>
+          </View>
+          
+          {/* Tab indicator line */}
+          <View style={styles.tabIndicatorContainer}>
+            <Animated.View 
+              style={[
+                styles.tabIndicator,
+                {
+                  left: activeTab === 'posts' ? '0%' : 
+                        activeTab === 'saved' ? '33.33%' : '66.66%',
+                  height: windowWidth > 768 ? 4 : 3,
+                  width: '33.33%'
+                }
+              ]}
+            />
+          </View>
+          
+          {/* View type toggle */}
+          <View style={[
+            styles.viewToggleContainer,
+            windowWidth > 768 && { top: 10, right: 20 }
+          ]}>
+            <Pressable
+              style={[
+                styles.viewToggleButton,
+                viewType === 'grid' && styles.activeViewToggle,
+                windowWidth > 768 && { paddingVertical: 8, paddingHorizontal: 12 }
+              ]}
+              onPress={() => setViewType('grid')}
+            >
+              <Grid 
+                size={windowWidth > 768 ? 22 : 18} 
+                color={viewType === 'grid' ? '#1877F2' : '#888'} 
+              />
+            </Pressable>
+            
+            <Pressable
+              style={[
+                styles.viewToggleButton,
+                viewType === 'list' && styles.activeViewToggle,
+                windowWidth > 768 && { paddingVertical: 8, paddingHorizontal: 12 }
+              ]}
+              onPress={() => setViewType('list')}
+            >
+              <List 
+                size={windowWidth > 768 ? 22 : 18} 
+                color={viewType === 'list' ? '#1877F2' : '#888'} 
+              />
+            </Pressable>
+          </View>
+        </View>
+        
+        {/* Posts loading indicator */}
+        {postsLoading && (
+          <View style={styles.postsLoadingContainer}>
+            <ActivityIndicator size={windowWidth > 768 ? "large" : "small"} color="#1877F2" />
+            <Text style={[styles.postsLoadingText, windowWidth > 768 && { fontSize: 18 }]}>Loading posts...</Text>
+          </View>
+        )}
+        
+        {/* Content display */}
+        {!postsLoading && (
+          <View style={styles.contentDisplay}>
+            {activeTab === 'posts' && userPosts.length > 0 ? (
+              viewType === 'grid' ? (
+                <FlatList
+                  data={userPosts}
+                  numColumns={fixedNumColumns}
+                  key={columnKey}
+                  renderItem={renderGridItem}
+                  keyExtractor={item => item.id}
+                  scrollEnabled={false}
+                  contentContainerStyle={[
+                    styles.gridContainer,
+                    { paddingHorizontal: itemGap / 2 }
+                  ]}
+                  columnWrapperStyle={{ justifyContent: 'flex-start' }}
+                />
+              ) : (
+                <FlatList
+                  data={userPosts}
+                  renderItem={renderListItem}
+                  keyExtractor={item => item.id}
+                  scrollEnabled={false}
+                  contentContainerStyle={[
+                    styles.listContainer,
+                    { paddingHorizontal: contentPadding }
+                  ]}
+                />
+              )
+            ) : (
+              // Empty state content maintained from before
+              <View style={[
+                styles.contentPlaceholder,
+                { paddingHorizontal: contentPadding }
+              ]}>
+                {activeTab === 'posts' && !postsLoading && userPosts.length === 0 && (
+                  <View style={[
+                    styles.emptyStateContainer,
+                    windowWidth > 768 && { padding: 40 }
+                  ]}>
+                    <Award size={windowWidth > 768 ? 60 : 40} color="#333" />
+                    <Text style={[styles.emptyStateTitle, windowWidth > 768 && { fontSize: 24 }]}>No Posts Yet</Text>
+                    <Text style={[
+                      styles.emptyStateText,
+                      windowWidth > 768 && { fontSize: 18, marginBottom: 30 }
+                    ]}>
+                      {isMyProfile 
+                        ? "You haven't shared any posts yet. Your posts will appear here."
+                        : `${userData?.name} hasn't shared any posts yet.`}
+                    </Text>
+                    {isMyProfile ? (
+                      <Pressable
+                        style={[
+                          styles.emptyStateButton,
+                          windowWidth > 768 && { 
+                            padding: 20,
+                            borderRadius: 12
+                          }
+                        ]}
+                        onPress={() => router.push('/newsfeed-upload' as any)}
+                      >
+                        <Text style={[styles.emptyStateButtonText, windowWidth > 768 && { fontSize: 18 }]}>Create Post</Text>
+                      </Pressable>
+                    ) : null}
+                  </View>
+                )}
+                
+                {activeTab === 'saved' && (
+                  <View style={[
+                    styles.emptyStateContainer,
+                    windowWidth > 768 && { padding: 40 }
+                  ]}>
+                    <Bookmark size={windowWidth > 768 ? 60 : 40} color="#333" />
+                    <Text style={[styles.emptyStateTitle, windowWidth > 768 && { fontSize: 24 }]}>No Saved Posts</Text>
+                    <Text style={[
+                      styles.emptyStateText,
+                      windowWidth > 768 && { fontSize: 18 }
+                    ]}>
+                      {isMyProfile 
+                        ? "You haven't saved any posts yet. Tap the bookmark icon on posts to save them."
+                        : "Saved posts are only visible to you"}
+                    </Text>
+                  </View>
+                )}
+                
+                {activeTab === 'tagged' && (
+                  <View style={[
+                    styles.emptyStateContainer,
+                    windowWidth > 768 && { padding: 40 }
+                  ]}>
+                    <UserPlus size={windowWidth > 768 ? 60 : 40} color="#333" />
+                    <Text style={[styles.emptyStateTitle, windowWidth > 768 && { fontSize: 24 }]}>No Tagged Posts</Text>
+                    <Text style={[
+                      styles.emptyStateText,
+                      windowWidth > 768 && { fontSize: 18 }
+                    ]}>
+                      {isMyProfile 
+                        ? "You haven't been tagged in any posts yet."
+                        : `${userData?.name} hasn't been tagged in any posts yet.`}
+                    </Text>
+                  </View>
+                )}
+              </View>
+            )}
+          </View>
+        )}
+      </Animated.ScrollView>
+
+      {/* Followers Modal */}
+      <Modal
+        visible={showFollowersModal}
+        transparent={true}
+        animationType="slide"
+        onRequestClose={() => setShowFollowersModal(false)}
+      >
+        <View style={styles.modalOverlay}>
+          <BlurView intensity={90} style={StyleSheet.absoluteFill} />
+          <View style={styles.modalContainer}>
+            <View style={styles.modalHeader}>
+              <Text style={styles.modalTitle}>Followers</Text>
+              <Pressable
+                style={styles.modalCloseButton}
+                onPress={() => setShowFollowersModal(false)}
+              >
+                <X size={24} color="#FFF" />
+              </Pressable>
+            </View>
+
+            {followersLoading ? (
+              <View style={styles.loadingContainer}>
+                <ActivityIndicator size="large" color="#1877F2" />
+                <Text style={styles.loadingText}>Loading followers...</Text>
+              </View>
+            ) : followers.length === 0 ? (
+              <View style={styles.emptyContainer}>
+                <Text style={styles.emptyText}>No followers yet</Text>
+              </View>
+            ) : (
+              <FlatList
+                data={followers}
+                keyExtractor={(item, index) => `follower-${item.id}-${index}`}
+                renderItem={({ item }) => (
+                  <Pressable
+                    style={styles.followerItem}
+                    onPress={() => handleFollowerPress(item.id)}
+                  >
+                    <Image source={{ uri: item.avatar }} style={styles.followerAvatar} />
+                    <View style={styles.followerInfo}>
+                      <View style={styles.followerNameRow}>
+                        <Text style={styles.followerName}>{item.name}</Text>
+                        {(item.isVerified || item.isBlueVerified) && (
+                          <View style={styles.verifiedBadgeSmall}>
+                            <TunnelVerifiedMark size={12} />
+                          </View>
+                        )}
+                      </View>
+                      <Text style={styles.followerUsername}>{item.username}</Text>
+                    </View>
+                    <View style={styles.followerActionContainer}>
+                      <ChevronRight size={18} color="#888" />
+                    </View>
+                  </Pressable>
+                )}
+                contentContainerStyle={styles.followersList}
+              />
+            )}
+          </View>
+        </View>
+      </Modal>
+    </View>
   );
 }
 
 const styles = StyleSheet.create({
-  safeArea: {
-    flex: 1,
-    backgroundColor: '#000',
-  },
   container: {
     flex: 1,
     backgroundColor: '#000',
@@ -1262,7 +1397,7 @@ const styles = StyleSheet.create({
     right: 0,
     zIndex: 100,
     overflow: 'hidden',
-    backgroundColor: 'rgba(0,0,0,0.5)', // Add background color for better visibility
+    backgroundColor: 'rgba(0,0,0,0.5)',
   },
   headerContent: {
     flexDirection: 'row',
@@ -1322,7 +1457,7 @@ const styles = StyleSheet.create({
   scrollView: {
     flex: 1,
     zIndex: 1, 
-    marginTop: Platform.OS === 'ios' ? 50 : 40, // Add margin to prevent content from hiding under header
+    marginTop: 0, // Remove margin to allow content to reach top of screen
   },
   scrollContent: {
     paddingBottom: 30, // Increased bottom padding
@@ -1333,9 +1468,14 @@ const styles = StyleSheet.create({
     position: 'relative',
     borderRadius: 0,
     overflow: 'hidden',
+    marginTop: 0, // Ensure no margin at top
+    top: 0,
+    left: 0,
+    right: 0,
   },
   coverGradient: {
     ...StyleSheet.absoluteFillObject,
+    top: 0, // Ensure it starts from the very top
   },
   profileSection: {
     marginTop: 110,
@@ -1992,5 +2132,86 @@ const styles = StyleSheet.create({
     padding: 2,
     alignItems: 'center',
     justifyContent: 'center',
+  },
+  // Follower modal styles
+  modalOverlay: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+    backgroundColor: 'rgba(0,0,0,0.7)',
+  },
+  modalContainer: {
+    width: '90%',
+    maxWidth: 500,
+    maxHeight: '80%',
+    backgroundColor: '#111',
+    borderRadius: 16,
+    overflow: 'hidden',
+  },
+  modalHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    padding: 16,
+    borderBottomWidth: 1,
+    borderBottomColor: 'rgba(255,255,255,0.1)',
+  },
+  modalTitle: {
+    color: 'white',
+    fontSize: 18,
+    fontFamily: 'Inter_600SemiBold',
+  },
+  modalCloseButton: {
+    padding: 8,
+  },
+  followersList: {
+    paddingHorizontal: 16,
+  },
+  followerItem: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingVertical: 12,
+    borderBottomWidth: 1,
+    borderBottomColor: 'rgba(255,255,255,0.05)',
+  },
+  followerAvatar: {
+    width: 48,
+    height: 48,
+    borderRadius: 24,
+    backgroundColor: '#333',
+  },
+  followerInfo: {
+    flex: 1,
+    marginLeft: 12,
+  },
+  followerNameRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+  followerName: {
+    color: 'white',
+    fontSize: 16,
+    fontFamily: 'Inter_600SemiBold',
+  },
+  followerUsername: {
+    color: '#888',
+    fontSize: 14,
+    fontFamily: 'Inter_400Regular',
+    marginTop: 2,
+  },
+  followerActionContainer: {
+    paddingRight: 8,
+  },
+  emptyContainer: {
+    padding: 20,
+    alignItems: 'center',
+  },
+  emptyText: {
+    color: '#888',
+    fontSize: 16,
+    fontFamily: 'Inter_400Regular',
+  },
+  verifiedBadgeSmall: {
+    marginLeft: 6,
   },
 }); 

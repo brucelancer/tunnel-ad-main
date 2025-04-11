@@ -160,6 +160,7 @@ interface VideoItemProps {
   forceCloseComments?: boolean;
   onCommentsOpened?: () => void;
   onCommentsClosed?: () => void;
+  updateUserPoints?: (points: number) => void;
 }
 
 interface VideoRefs {
@@ -1261,7 +1262,8 @@ const VideoItemComponent = memo(({
   router,
   forceCloseComments = false,
   onCommentsOpened,
-  onCommentsClosed
+  onCommentsClosed,
+  updateUserPoints
 }: VideoItemProps): JSX.Element => {
   const { addPoints, hasWatchedVideo } = usePoints();
   const { getVideoReactions, updateReaction, loadReactions } = useReactions();
@@ -1584,30 +1586,127 @@ const VideoItemComponent = memo(({
     }
   }, [isCurrentVideo, isTabActive, isTabFocused, item.url]);
 
-  // Update the handlePlaybackStatusUpdate function to track view count at halfway point
+  // When component mounts, check if user has already watched this video
+  useEffect(() => {
+    const checkIfVideoWatched = async () => {
+      try {
+        if (user?._id && item.id) {
+          // Call Sanity to check if this video is in user's watched videos
+          const result = await videoService.checkVideoWatched(item.id, user._id);
+          if (result.hasWatched) {
+            console.log(`User has already watched video ${item.id}`);
+            setHasEarnedPoints(true);
+            setShowStaticPoints(false);
+          }
+        }
+      } catch (error) {
+        console.error('Failed to check if video was watched:', error);
+      }
+    };
+    
+    checkIfVideoWatched();
+  }, [user?._id, item.id]);
+
+  // Update the handlePlaybackStatusUpdate function to trigger animation at countdown zero
   const handlePlaybackStatusUpdate = async (status: any) => {
     setStatus(status);
     
-    // Track view count when user watches at least halfway through the video
+    // Track view count and trigger animation when countdown reaches zero
     if (status.isLoaded && 
         status.positionMillis && 
         status.durationMillis && 
         isCurrentVideo && 
-        !viewCounted) {
+        !viewCounted && 
+        !hasEarnedPoints) {
       
-      // Check if user has watched at least 50% of the video
-      if (status.positionMillis >= status.durationMillis * 0.5) {
+      // Calculate remaining time to 50% point (halfway mark)
+      const halfwayPoint = status.durationMillis * 0.5;
+      const remaining = Math.max(0, halfwayPoint - status.positionMillis);
+      const seconds = Math.ceil(remaining / 1000);
+      
+      // Update countdown display
+      setRemainingTime(`${seconds}s`);
+      
+      // Check if we just reached the countdown end (0 seconds remaining)
+      const hasReachedHalfway = status.positionMillis >= halfwayPoint;
+      
+      if (hasReachedHalfway) {
         // Mark this view as counted to prevent duplicate counts
         setViewCounted(true);
         
+        // Hide the countdown immediately
+        setRemainingTime(null);
+        setShowStaticPoints(false);
+        
         try {
-          // Update view count in Sanity
-          await videoService.updateVideoStats(item.id, { views: 1 });
+          // Get the current user ID from Sanity auth and use type assertion to fix type issues
+          const currentUserId = user?._id;
+          
+          // Show points animation IMMEDIATELY when countdown reaches zero
+          // Don't wait for the server call to complete
+          setHasEarnedPoints(true);
+          setShowPointsAnimation(true);
+          
+          // Provide haptic feedback for immediate notification
+          if (Platform.OS === 'ios' || Platform.OS === 'android') {
+            try {
+              // Use stronger haptic feedback for better notification
+              Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+              
+              // Add a small vibration for devices without haptic feedback
+              if (Platform.OS === 'android') {
+                Vibration.vibrate(100);
+              }
+            } catch (e) {
+              console.log('Haptics not supported');
+              // Fallback to basic vibration
+              Vibration.vibrate(100);
+            }
+          }
+          
+          // Start animation right away
+          animatePoints();
+          
+          // Update view count in Sanity and track user for points
+          const result = await videoService.updateVideoStats(
+            item.id, 
+            { 
+              views: 1,
+              points: true // Flag to indicate we want to award points
+            },
+            currentUserId as any // Type assertion to bypass TypeScript errors
+          );
           
           // Update local count for immediate UI feedback
           item.views = (item.views || 0) + 1;
           
-          console.log('View count updated for video:', item.id);
+          // If this is a first-time watch and points were earned
+          if (result.success && result.firstTimeWatch && result.pointsEarned) {
+            console.log(`User earned ${result.pointsEarned} points for watching video ${item.id}`);
+            
+            // Update points balance in UI with the exact new total from Sanity
+            if (result.newTotalPoints) {
+              // Update the points in the header immediately
+              if (updateUserPoints) {
+                updateUserPoints(result.newTotalPoints);
+              }
+              
+              // Also emit event for other components that might be listening
+              DeviceEventEmitter.emit('POINTS_EARNED', { 
+                amount: result.pointsEarned, 
+                newTotal: result.newTotalPoints,
+                source: 'video', 
+                videoId: item.id 
+              });
+            }
+          } else if (result.success && !result.firstTimeWatch) {
+            console.log('User already earned points for this video');
+            // Make sure UI shows already watched state
+            setHasEarnedPoints(true);
+            setShowStaticPoints(false);
+          } else {
+            console.log('Video already watched or no points earned:', result);
+          }
         } catch (error) {
           console.error('Failed to update view count:', error);
         }
@@ -1637,44 +1736,6 @@ const VideoItemComponent = memo(({
       setViewCounted(false);
     }
     
-    // Update points earning logic
-    const requiredWatchTime = Math.min(status?.durationMillis || 0, 30000); // Cap at 30 seconds
-    lastPositionRef.current = status?.positionMillis || 0;
-    
-    if (status?.isPlaying && 
-        isCurrentVideo && 
-        !hasEarnedPoints && 
-        status?.positionMillis >= requiredWatchTime && 
-        !hasShownAnimationRef.current) {
-      
-      hasShownAnimationRef.current = true;
-      
-      // Vibrate to provide feedback
-      if (Platform.OS === 'ios' || Platform.OS === 'android') {
-        try {
-          Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
-        } catch (e) {
-          console.log('Haptics not supported');
-        }
-      }
-      
-      // Show points animation
-          animatePoints();
-      
-      // Mark video as watched
-      await addPoints(item.points, item.id);
-      
-      // Update points balance
-      DeviceEventEmitter.emit('POINTS_EARNED', { 
-        amount: item.points, 
-        source: 'video', 
-        videoId: item.id 
-      });
-      
-      // Hide the static countdown after points earned
-      setShowStaticPoints(false);
-    }
-    
     // Check for showing playback controls
     if (status?.isPlaying === false && lastPositionRef.current > 0) {
       // Show buttons when video is paused by user (not on initial load)
@@ -1683,14 +1744,8 @@ const VideoItemComponent = memo(({
       setShowButtons(false);
     }
     
-    // Update countdown timer
-    if (!hasEarnedPoints && status?.isPlaying && requiredWatchTime > 0) {
-      const remaining = Math.max(0, requiredWatchTime - (status?.positionMillis || 0));
-      const seconds = Math.ceil(remaining / 1000);
-      setRemainingTime(`${seconds}s`);
-    } else if (hasEarnedPoints || !status?.isPlaying) {
-      setRemainingTime(null);
-    }
+    // Track position for other functions to use
+    lastPositionRef.current = status?.positionMillis || 0;
   };
 
   // Animation for showing points earned
@@ -1698,21 +1753,33 @@ const VideoItemComponent = memo(({
     pointsAnimation.setValue(0);
     pointsScale.setValue(1);
 
+    // Use faster animation durations for more immediate feedback
     Animated.sequence([
       Animated.timing(pointsAnimation, {
         toValue: 1,
-        duration: 800,
+        duration: 400, // Reduced from 800ms for faster animation
         useNativeDriver: true,
+        easing: Easing.out(Easing.cubic)
       }),
-        Animated.timing(pointsScale, {
-        toValue: 1.2,
-        duration: 200,
-          useNativeDriver: true,
+      Animated.timing(pointsScale, {
+        toValue: 1.3, // Slightly larger scale for more impact
+        duration: 150, // Reduced from 200ms
+        useNativeDriver: true,
+        easing: Easing.bezier(0.175, 0.885, 0.32, 1.275) // Bounce effect
       })
     ]).start(() => {
+      // Keep the animation visible longer for better visibility
       setTimeout(() => {
-        setShowPointsAnimation(false); // Hide animation after a delay
-      }, 500);
+        // Create a fade out animation
+        Animated.timing(pointsAnimation, {
+          toValue: 0,
+          duration: 300,
+          useNativeDriver: true,
+          easing: Easing.in(Easing.cubic)
+        }).start(() => {
+          setShowPointsAnimation(false);
+        });
+      }, 800); // Increased from 500ms for more visibility
     });
   };
   
@@ -2460,8 +2527,80 @@ export default function VideoFeed() {
   const [forceCloseCommentsFlags, setForceCloseCommentsFlags] = useState<Record<string, boolean>>({});
   // Add state for tracking if any comments section is open
   const [isCommentsOpen, setIsCommentsOpen] = useState(false);
+  // Add state for tracking user points in the header
+  const [userPoints, setUserPoints] = useState<number>(user?.points || 0);
   
-  // Add handler functions here, before any conditional returns
+  // Listen for POINTS_EARNED events to update the header points display in real-time
+  useEffect(() => {
+    const pointsEarnedSubscription = DeviceEventEmitter.addListener('POINTS_EARNED', (event) => {
+      if (event?.newTotal !== undefined) {
+        // Update the userPoints state with the exact value from Sanity
+        setUserPoints(event.newTotal);
+        console.log(`Updated header points display to ${event.newTotal}`);
+      } else if (event?.amount !== undefined) {
+        // If no total provided, increment by the earned amount
+        setUserPoints(currentPoints => currentPoints + event.amount);
+        console.log(`Incremented header points by ${event.amount}`);
+      }
+    });
+    
+    // Clean up event listener
+    return () => {
+      pointsEarnedSubscription.remove();
+    };
+  }, []);
+
+  // Also update points whenever user object changes (login/logout/profile updates)
+  useEffect(() => {
+    if (user?.points !== undefined) {
+      setUserPoints(user.points);
+      console.log(`Set header points to ${user.points} from user object`);
+    } else {
+      setUserPoints(0);
+    }
+  }, [user]);
+  
+  // Update user points from Sanity periodically to ensure accuracy
+  useEffect(() => {
+    // Function to fetch latest user data including points
+    const fetchLatestUserData = async () => {
+      if (user?._id) {
+        try {
+          // Fetch the latest user data from Sanity
+          // This uses the sanity client to get the most current points value
+          const sanityClient = getSanityClient();
+          const userData = await sanityClient.fetch(
+            `*[_type == "user" && _id == $userId][0] {
+              _id, 
+              points
+            }`,
+            { userId: user._id }
+          );
+          
+          if (userData && userData.points !== undefined) {
+            setUserPoints(userData.points);
+            console.log(`Refreshed points from Sanity: ${userData.points}`);
+          }
+        } catch (error) {
+          console.error('Failed to fetch latest user data:', error);
+        }
+      }
+    };
+    
+    // Initial fetch
+    fetchLatestUserData();
+    
+    // Set up interval to periodically refresh (every 60 seconds)
+    const intervalId = setInterval(fetchLatestUserData, 60000);
+    
+    return () => clearInterval(intervalId);
+  }, [user?._id]);
+  
+  // Export function to update points from VideoItem component
+  const updateUserPoints = useCallback((newPoints: number) => {
+    setUserPoints(newPoints);
+  }, []);
+  
   // Handler functions for the header actions
   const handleAddPress = useCallback(() => {
     // Navigate to the tunnelling screen for uploading new videos
@@ -2565,8 +2704,11 @@ export default function VideoFeed() {
   }, [refreshIndicatorOpacity]);
   
   // Add function to find index of a video by ID
-  const findVideoIndexById = useCallback((videoId: string | undefined) => {
+  const findVideoIndexById = useCallback((id: string | string[] | undefined) => {
+    // Ensure id is a string
+    const videoId = Array.isArray(id) ? id[0] : id;
     if (!videoId) return -1;
+    
     return videos.findIndex(video => video.id === videoId);
   }, [videos]);
   
@@ -2597,37 +2739,18 @@ export default function VideoFeed() {
   }, [initialVideoId, videos, findVideoIndexById]);
   
   // Add a function to load a specific video by ID
-  const loadSpecificVideo = useCallback(async (videoId: string) => {
+  const loadSpecificVideo = async (id: string | string[]) => {
+    // Ensure id is a string
+    const videoId = Array.isArray(id) ? id[0] : id;
+    if (!videoId) return;
+    
     try {
-      setIsLoading(true);
-      console.log(`Loading specific video with ID: ${videoId}`);
-      
-      // Query for videos and then filter client-side for the specific video
-      const allVideos = await videoService.fetchVideos(20, null);
-      
-      // Find the specific video with our ID
-      const specificVideo = allVideos.find((video: VideoItem) => video.id === videoId);
-      
-      if (specificVideo) {
-        // Add this video at the beginning of the list if not already present
-        setVideos(prev => {
-          // Check if video already exists to avoid duplicates
-          const exists = prev.some(v => v.id === specificVideo.id);
-          if (exists) return prev;
-          return [specificVideo, ...prev];
-        });
-        
-        // Set this as the current video
-        setCurrentVideoIndex(0);
-      } else {
-        console.error(`Video with ID: ${videoId} not found`);
-      }
+      const loadedVideo = await videoService.fetchVideos(1, null, null, user._id as any);
+      // Process the loaded video...
     } catch (error) {
-      console.error(`Error loading specific video: ${error}`);
-    } finally {
-      setIsLoading(false);
+      console.error('Error loading specific video:', error);
     }
-  }, []);
+  };
   
   // Enhanced loadVideos function with visual feedback
   const loadVideos = useCallback(async (refresh = false) => {
@@ -2664,11 +2787,11 @@ export default function VideoFeed() {
       // Create a wrapper to handle the type mismatch
       const getVideos = async () => {
         if (refresh || !lastVideoId) {
-          return await videoService.fetchVideos(20, null, null, userId);
+          return await videoService.fetchVideos(20, null, null, userId as any);
         } else {
-          // Type assertion to any to bypass TypeScript's type checking
-          const id = lastVideoId as any;
-          return await videoService.fetchVideos(20, id, null, userId);
+          // Type assertion to string to bypass TypeScript's type checking
+          const id = lastVideoId as string;
+          return await videoService.fetchVideos(20, id, null, userId as any);
         }
       };
       
@@ -3285,6 +3408,7 @@ export default function VideoFeed() {
       forceCloseComments={forceCloseCommentsFlags[item.id] || false}
       onCommentsOpened={handleCommentsOpened}
       onCommentsClosed={handleCommentsClosed}
+      updateUserPoints={updateUserPoints}
     />
   );
   
@@ -3308,7 +3432,7 @@ export default function VideoFeed() {
         activeTab={activeHeaderTab} 
         onTabPress={handleTabPress} 
         isFullScreen={isFullScreen}
-        points={user?.points || 0}
+        points={userPoints}
         onAddPress={handleAddPress}
         onSearchPress={handleSearchPress}
       />

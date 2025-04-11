@@ -337,9 +337,9 @@ export const fetchVideos = async (limit = 20, lastId = null, contentType = null,
 };
 
 // Update video statistics (views, likes, dislikes)
-export const updateVideoStats = async (videoId, stats) => {
+export const updateVideoStats = async (videoId, stats, userId = null) => {
   try {
-    console.log('Updating stats for video:', videoId, stats);
+    console.log('Updating stats for video:', videoId, stats, 'User:', userId);
     
     // First check if this is a mock video id
     const mockIndex = MOCK_VIDEOS.findIndex(v => v._id === videoId);
@@ -355,19 +355,26 @@ export const updateVideoStats = async (videoId, stats) => {
         MOCK_VIDEOS[mockIndex].dislikes = (MOCK_VIDEOS[mockIndex].dislikes || 0) + stats.dislikes;
       }
       console.log('Mock video stats updated:', videoId);
-      return true;
+      return { success: true };
     }
     
     // If not a mock video, proceed with Sanity update
     // First check if video exists
     const video = await client.fetch(
-      `*[_type == "video" && _id == $videoId][0]`,
+      `*[_type == "video" && _id == $videoId][0] {
+        _id,
+        views,
+        likes,
+        dislikes,
+        points,
+        "watchedBy": watchedBy[]._ref
+      }`,
       { videoId }
     );
     
     if (!video) {
       console.error('Video not found:', videoId);
-      return false;
+      return { success: false, error: 'Video not found' };
     }
     
     // Create patch object with only the provided stats
@@ -382,13 +389,74 @@ export const updateVideoStats = async (videoId, stats) => {
       patch.dislikes = (video.dislikes || 0) + stats.dislikes;
     }
     
-    // Update the video document using set instead of inc to handle undefined fields
+    // Update the video document
     await client.patch(videoId).set(patch).commit();
     console.log('Video stats updated:', videoId);
-    return true;
+    
+    // Handle user points if userId provided and it's a view increment
+    if (userId && stats.views && stats.points) {
+      // Check if user has already watched this video
+      const hasWatched = video.watchedBy && video.watchedBy.includes(userId);
+      
+      if (!hasWatched) {
+        console.log(`User ${userId} earning ${video.points || 10} points for watching video ${videoId}`);
+        
+        // Add user to video's watchedBy array
+        await client
+          .patch(videoId)
+          .setIfMissing({ watchedBy: [] })
+          .append('watchedBy', [{ 
+            _type: 'reference', 
+            _ref: userId,
+            _key: `${userId}-${Date.now()}` // Add a unique key combining userId and timestamp
+          }])
+          .commit();
+        
+        // Update user's points in Sanity
+        try {
+          // Fetch current user data
+          const userData = await client.fetch(
+            `*[_type == "user" && _id == $userId][0] {
+              _id,
+              points
+            }`,
+            { userId }
+          );
+          
+          if (userData) {
+            const currentPoints = userData.points || 0;
+            const pointsToAdd = video.points || 10; // Default to 10 if points not specified
+            const newPoints = currentPoints + pointsToAdd;
+            
+            // Update user's points
+            await client
+              .patch(userId)
+              .set({ points: newPoints })
+              .commit();
+              
+            console.log(`Updated user ${userId} points from ${currentPoints} to ${newPoints}`);
+            
+            return { 
+              success: true, 
+              pointsEarned: pointsToAdd,
+              newTotalPoints: newPoints,
+              firstTimeWatch: true
+            };
+          }
+        } catch (userError) {
+          console.error(`Error updating user points: ${userError.message}`);
+          // Continue execution - stats were updated even if points weren't
+        }
+      } else {
+        console.log(`User ${userId} has already watched video ${videoId}, no points earned`);
+        return { success: true, firstTimeWatch: false };
+      }
+    }
+    
+    return { success: true };
   } catch (error) {
     console.error('Error updating video stats:', error);
-    return false; // Return false instead of throwing to prevent app crashes
+    return { success: false, error: error.message }; 
   }
 };
 
@@ -512,6 +580,49 @@ export const deleteVideo = async (videoId, userId) => {
   }
 };
 
+// Check if a user has already watched a video
+export const checkVideoWatched = async (videoId, userId) => {
+  try {
+    console.log(`Checking if user ${userId} has watched video ${videoId}`);
+    
+    if (!userId) {
+      return { hasWatched: false };
+    }
+    
+    // First check if this is a mock video id
+    const mockIndex = MOCK_VIDEOS.findIndex(v => v._id === videoId);
+    if (mockIndex >= 0) {
+      // For mock data, we'll assume not watched
+      return { hasWatched: false };
+    }
+    
+    // For real videos, check the watchedBy array in Sanity
+    const video = await client.fetch(
+      `*[_type == "video" && _id == $videoId][0] {
+        _id,
+        "watchedBy": watchedBy[]._ref
+      }`,
+      { videoId }
+    );
+    
+    if (!video) {
+      console.error('Video not found:', videoId);
+      return { hasWatched: false };
+    }
+    
+    // Check if user is in the watchedBy array
+    const hasWatched = video.watchedBy && video.watchedBy.includes(userId);
+    
+    return { 
+      hasWatched,
+      videoId
+    };
+  } catch (error) {
+    console.error('Error checking if video was watched:', error);
+    return { hasWatched: false, error: error.message };
+  }
+};
+
 // Export all functions
 export default {
   createVideo,
@@ -520,5 +631,6 @@ export default {
   deleteVideo,
   uploadVideoToSanity,
   toggleLikeVideo,
+  checkVideoWatched,
   urlFor
 }; 
