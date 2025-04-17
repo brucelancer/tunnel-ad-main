@@ -226,7 +226,7 @@ export const toggleLikePost = async (postId, userId) => {
 }
 
 // Comment on a post
-export const addComment = async (postId, text, userId = '') => {
+export const addComment = async (postId, text, userId = '', parentCommentId = null) => {
   try {
     if (!postId) {
       console.error('Missing postId in addComment');
@@ -234,6 +234,9 @@ export const addComment = async (postId, text, userId = '') => {
     }
 
     console.log(`Adding comment to post ${postId} by user ${userId || 'anonymous'}: "${text.substring(0, 30)}..."`);
+    if (parentCommentId) {
+      console.log(`This is a reply to comment: ${parentCommentId}`);
+    }
     
     // Create a unique key for the comment
     const commentKey = `comment-${Date.now()}-${Math.floor(Math.random() * 1000)}`;
@@ -246,6 +249,12 @@ export const addComment = async (postId, text, userId = '') => {
       _createdAt: new Date().toISOString(),
       likes: []
     };
+    
+    // Add parent comment reference if this is a reply
+    if (parentCommentId) {
+      // Store the parent comment key as a string
+      comment.parentComment = String(parentCommentId);
+    }
     
     // Only proceed with author reference if we have a valid user ID
     if (userId && userId.trim() !== '' && userId !== 'guest-user' && userId !== 'anonymous') {
@@ -482,6 +491,7 @@ export const getPostById = async (postId, userId = '') => {
           _createdAt,
           authorName,
           likes,
+          parentComment,
           author->{
             _id,
             username,

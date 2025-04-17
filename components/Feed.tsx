@@ -47,7 +47,8 @@ import {
   X,
   Clock,
   AlertTriangle,
-  Play // Add Play icon for videos
+  Play, // Add Play icon for videos
+  BarChart2 // Add BarChart2 icon for insights
 } from 'lucide-react-native';
 import { usePostFeed } from '@/app/hooks/usePostFeed';
 import { PinchGestureHandler, State, GestureHandlerRootView } from 'react-native-gesture-handler';
@@ -1798,6 +1799,22 @@ export default function Feed() {
                 fill={isSaved ? '#0070F3' : 'transparent'} 
               />
             </Pressable>
+            
+            {/* Add insights button for user's own posts */}
+            {isOwnPost && (
+              <Pressable 
+                style={styles.actionButton} 
+                onPress={() => {
+                  router.push({
+                    pathname: "/feed-insights",
+                    params: { postId: item.id }
+                  } as any);
+                }}
+                hitSlop={{top: 10, bottom: 10, left: 10, right: 10}}
+              >
+                <BarChart2 size={20} color="#1877F2" />
+              </Pressable>
+            )}
           </View>
         </View>
       </View>
@@ -2087,9 +2104,13 @@ export default function Feed() {
     const post = combinedFeed.find(item => item.id === postId);
     const hasImages = post && post.images && post.images.length > 0;
     
-    // Set different word count thresholds based on post type
-    // 10 words for posts with images, 20 words for text-only posts
-    const wordCountThreshold = hasImages ? 10 : 70;
+    // Check if text contains non-Latin characters (like Myanmar script)
+    const hasNonLatinChars = /[^\u0000-\u007F]/.test(text);
+    
+    // Set different word count thresholds based on post type and character set
+    // Reduce threshold for non-Latin scripts as they may need more space
+    const baseWordThreshold = hasImages ? 10 : 70;
+    const wordCountThreshold = hasNonLatinChars ? Math.floor(baseWordThreshold * 0.7) : baseWordThreshold;
     
     // If text is short or post is expanded, show full text
     if (wordCount <= wordCountThreshold || isExpanded) {
@@ -2584,9 +2605,12 @@ const styles = StyleSheet.create({
     color: 'white',
     fontSize: 16,
     fontFamily: 'Inter_400Regular',
-    lineHeight: 22,
+    lineHeight: 30, // Increased from 22 to provide more vertical space
     paddingHorizontal: 16,
     paddingBottom: 12,
+    marginTop: 2, // Small top margin to ensure first line isn't cut off
+    includeFontPadding: true, // Include font padding to prevent clipping
+    textAlignVertical: 'center', // Better vertical alignment for Android
   },
   locationContainer: {
     flexDirection: 'row',

@@ -181,50 +181,19 @@ export default function VideoTunnelling({ onSubmit }: VideoTunnellingProps) {
       const videoSource = contentType === 'personal' ? personalVideoUri : videoLink;
       
       if (!videoSource) {
-        Alert.alert('Error', 'No video source available. Please upload a video first.');
+        Alert.alert('Error', 'No video source available');
         return;
       }
       
-      console.log('Attempting to generate thumbnail from:', videoSource);
+      // Generate thumbnail at the 1-second mark
+      const thumbnail = await VideoThumbnails.getThumbnailAsync(videoSource, {
+        time: 1000,
+      });
       
-      // Show loading indicator while processing
-      Alert.alert('Processing', 'Generating thumbnail from video...');
-      
-      try {
-        // Generate thumbnail at the 1-second mark
-        const thumbnail = await VideoThumbnails.getThumbnailAsync(videoSource, {
-          time: 1000,
-        });
-        
-        console.log('Thumbnail generated successfully:', thumbnail.uri);
-        setThumbnailUri(thumbnail.uri);
-      } catch (thumbnailError) {
-        console.error('Error generating thumbnail:', thumbnailError);
-        
-        // Special handling for video links (which may not be directly accessible)
-        if (contentType === 'ad') {
-          Alert.alert(
-            'Thumbnail Generation Failed',
-            'Could not generate thumbnail from video link. Please upload a thumbnail image manually.',
-            [
-              { text: 'Upload Image', onPress: pickThumbnailImage },
-              { text: 'Try Again', onPress: generateThumbnailFromFrame }
-            ]
-          );
-        } else {
-          Alert.alert(
-            'Error',
-            'Failed to generate thumbnail from video. Please select an image instead.',
-            [
-              { text: 'Select Image', onPress: pickThumbnailImage },
-              { text: 'Try Again', onPress: generateThumbnailFromFrame }
-            ]
-          );
-        }
-      }
+      setThumbnailUri(thumbnail.uri);
     } catch (error) {
-      console.error('Error in thumbnail generation process:', error);
-      Alert.alert('Error', 'Failed to process video for thumbnail generation');
+      console.error('Error generating thumbnail:', error);
+      Alert.alert('Error', 'Failed to generate thumbnail from video');
     }
   };
   
@@ -246,8 +215,8 @@ export default function VideoTunnelling({ onSubmit }: VideoTunnellingProps) {
             ? !!personalDescription 
             : !!adDescription);
       case 'ADD_THUMBNAIL':
-        // Thumbnail is required
-        return !!thumbnailUri;
+        // Thumbnail is optional
+        return true;
       case 'PREVIEW':
         // Can always proceed from preview to upload
         return true;
@@ -271,9 +240,6 @@ export default function VideoTunnelling({ onSubmit }: VideoTunnellingProps) {
           break;
         case 'ADD_DETAILS':
           errorMessage = 'Please add both a title and description for your video.';
-          break;
-        case 'ADD_THUMBNAIL':
-          errorMessage = 'Please add a thumbnail for your video before continuing.';
           break;
       }
       
@@ -1513,7 +1479,7 @@ export default function VideoTunnelling({ onSubmit }: VideoTunnellingProps) {
             <View style={styles.stepContainer}>
               <Text style={styles.stepTitle}>Add a thumbnail</Text>
               <Text style={styles.stepDescription}>
-                Choose a thumbnail that represents your video. A thumbnail is required to continue.
+                Choose a thumbnail that represents your video. This is optional.
               </Text>
               
               <View style={styles.thumbnailContainer}>
@@ -1599,8 +1565,8 @@ export default function VideoTunnelling({ onSubmit }: VideoTunnellingProps) {
                 
                 <Text style={styles.thumbnailHelpText}>
                   The thumbnail will be displayed in feeds and video listings.
-                  {!thumbnailUri && ' You must add a thumbnail before continuing.'}
-                </Text>
+                  {!thumbnailUri && ' If you skip this step, a default thumbnail will be generated.'}
+              </Text>
                 
                 {/* Add extra buttons for clarity */}
                 {!thumbnailUri && (

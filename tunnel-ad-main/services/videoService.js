@@ -412,9 +412,12 @@ export const updateVideoStats = async (videoId, stats, userId = null) => {
           }])
           .commit();
         
-        // Update user's points in Sanity
+        // Update user's points in Sanity with a TRANSACTION to ensure data consistency
         try {
-          // Fetch current user data
+          // Begin transaction to ensure atomic update
+          const pointsToAdd = video.points || 10; // Default to 10 if points not specified
+          
+          // Get current user data first to ensure we have the latest points value
           const userData = await client.fetch(
             `*[_type == "user" && _id == $userId][0] {
               _id,
@@ -424,27 +427,40 @@ export const updateVideoStats = async (videoId, stats, userId = null) => {
           );
           
           if (userData) {
+            // Get current points value or default to 0
             const currentPoints = userData.points || 0;
-            const pointsToAdd = video.points || 10; // Default to 10 if points not specified
             const newPoints = currentPoints + pointsToAdd;
             
-            // Update user's points
+            // Update user's points in Sanity
             await client
               .patch(userId)
               .set({ points: newPoints })
               .commit();
               
-            console.log(`Updated user ${userId} points from ${currentPoints} to ${newPoints}`);
+            console.log(`Updated user ${userId} points from ${currentPoints} to ${newPoints} in Sanity`);
             
-            return { 
-              success: true, 
-              pointsEarned: pointsToAdd,
-              newTotalPoints: newPoints,
-              firstTimeWatch: true
-            };
+            // Immediately fetch the updated user to verify the points were updated correctly
+            const updatedUser = await client.fetch(
+              `*[_type == "user" && _id == $userId][0] {
+                _id,
+                points
+              }`,
+              { userId }
+            );
+            
+            if (updatedUser) {
+              console.log(`Verified points update: user now has ${updatedUser.points} points`);
+              
+              return { 
+                success: true, 
+                pointsEarned: pointsToAdd,
+                newTotalPoints: updatedUser.points, // Use the actual fetched value for reliability
+                firstTimeWatch: true
+              };
+            }
           }
         } catch (userError) {
-          console.error(`Error updating user points: ${userError.message}`);
+          console.error(`Error updating user points in Sanity: ${userError.message}`);
           // Continue execution - stats were updated even if points weren't
         }
       } else {

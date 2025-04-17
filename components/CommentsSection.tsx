@@ -497,6 +497,9 @@ const CommentsSection: React.FC<CommentsSectionProps> = ({
                 )}
               </ScrollView>
             )}
+            
+            {/* Add padding at the bottom to ensure space for the input */}
+            <View style={{ height: 100 }} />
           </View>
           
           {/* Input bar - TikTok style keyboard tracking */}

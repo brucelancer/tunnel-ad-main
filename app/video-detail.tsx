@@ -669,10 +669,16 @@ export default function VideoDetailScreen() {
               >
                 <RefreshCw color="white" size={40} />
                 <Text style={styles.restartText}>Restart Video</Text>
-        </Pressable>
+              </Pressable>
             </View>
           )}
-      </View>
+          
+          {/* Scroll indicator */}
+          <View style={styles.scrollIndicatorContainer}>
+            <Text style={styles.scrollIndicatorText}>Scroll for more information</Text>
+            <ChevronRight size={20} color="white" style={styles.scrollIndicatorIcon} />
+          </View>
+        </View>
 
         <Animated.View style={[
           styles.info,
@@ -1363,5 +1369,26 @@ const styles = StyleSheet.create({
     fontSize: 16,
     fontFamily: 'Inter_600SemiBold',
     marginTop: 10,
+  },
+  scrollIndicatorContainer: {
+    position: 'absolute',
+    bottom: 20,
+    right: 16,
+    backgroundColor: 'rgba(0, 0, 0, 0.6)',
+    borderRadius: 20,
+    paddingVertical: 8,
+    paddingHorizontal: 12,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  scrollIndicatorText: {
+    color: 'white',
+    fontSize: 14,
+    fontFamily: 'Inter_500Medium',
+    marginRight: 4,
+  },
+  scrollIndicatorIcon: {
+    transform: [{ rotate: '90deg' }],
   },
 });

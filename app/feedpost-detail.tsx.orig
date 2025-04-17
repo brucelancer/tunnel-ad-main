@@ -19,8 +19,6 @@ import {
   StatusBar as RNStatusBar,
   PanResponder,
   Keyboard,
-  Easing,
-  DeviceEventEmitter,
 } from 'react-native';
 import { Stack, useLocalSearchParams, useRouter } from 'expo-router';
 import { 
@@ -42,7 +40,6 @@ import {
   ZoomIn,
   ZoomOut,
   Smile,
-  ChevronDown,
 } from 'lucide-react-native';
 import Svg, { Path } from 'react-native-svg';
 import { LinearGradient } from 'expo-linear-gradient';
@@ -89,7 +86,7 @@ const TunnelVerifiedMark = ({ size = 10 }) => {
 };
 
 // Mock data for the post details
-const POST_DETAILS: PostWithRestrictions = {
+const POST_DETAILS = {
   id: '1',
   user: {
     id: 'user1',
@@ -107,11 +104,7 @@ const POST_DETAILS: PostWithRestrictions = {
   comments: 42,
   points: 28,
   hasLiked: false,
-  hasSaved: false,
-  commentRestrictions: {
-    restricted: false,
-    allowedUsers: []
-  }
+  hasSaved: false
 };
 
 // Define a type for the comment
@@ -123,8 +116,9 @@ interface Comment {
   createdAt?: string;
   _key?: string;
   _createdAt?: string;
-  parentComment?: string | null;
-  parentCommentId?: string | null;
+  parentId?: string; // Reference to parent comment for replies
+  parentCommentId?: string; // Alternative field name that might be used in Sanity
+  replies?: Comment[]; // Array of reply comments
   user?: {
     id: string;
     name: string;
@@ -142,35 +136,6 @@ interface Comment {
     avatar?: string;
     isVerified?: boolean;
     isBlueVerified?: boolean;
-  };
-}
-
-// Add this after the imports but before the component declaration
-interface PostWithRestrictions {
-  id: any;
-  _id?: any;
-  content: any;
-  location: any;
-  timeAgo: any;
-  likes: any;
-  comments: any;
-  points: any;
-  hasLiked: any;
-  hasSaved: any;
-  user: {
-    id: any;
-    _id?: any;
-    name: any;
-    username: string;
-    avatar: string;
-    isVerified: any;
-    isBlueVerified: any;
-  };
-  images: string[];
-  rawComments?: any; // Make optional
-  commentRestrictions?: {
-    restricted: boolean;
-    allowedUsers: string[];
   };
 }
 
@@ -226,7 +191,7 @@ export default function PostDetailScreen() {
   }, [user, loading, updateUserData]);
   
   // State
-  const [post, setPost] = useState<PostWithRestrictions>(POST_DETAILS);
+  const [post, setPost] = useState(POST_DETAILS);
   const [comments, setComments] = useState<Comment[]>([]);
   const [isLiked, setIsLiked] = useState(post.hasLiked);
   const [isSaved, setIsSaved] = useState(post.hasSaved);
@@ -239,12 +204,9 @@ export default function PostDetailScreen() {
   const [isSubscribed, setIsSubscribed] = useState(false);
   const subscriptionRef = useRef<any>(null);
   
-  // Add states for comment restrictions and post deletion
-  const [isPostAuthor, setIsPostAuthor] = useState(false);
-  const [commentsRestricted, setCommentsRestricted] = useState(false);
-  const [allowedCommentUsers, setAllowedCommentUsers] = useState<string[]>([]);
-  const [isDeletePostModalVisible, setIsDeletePostModalVisible] = useState(false);
-  const [isDeletingPost, setIsDeletingPost] = useState(false);
+  // Reply functionality
+  const [activeReplyTo, setActiveReplyTo] = useState<Comment | null>(null);
+  const [replyText, setReplyText] = useState('');
   
   // Animations
   const scrollY = useRef(new Animated.Value(0)).current;
@@ -326,59 +288,6 @@ export default function PostDetailScreen() {
     };
   }, []);
   
-  // Add to the state variables section
-  const [replyingTo, setReplyingTo] = useState<{
-    id: string,
-    username: string,
-    _key?: string
-  } | null>(null);
-  
-  // Add this state to track which comment threads are expanded
-  const [expandedComments, setExpandedComments] = useState<Record<string, boolean>>({});
-  
-  // Add at the top with other refs
-  const replyAnimations = useRef<Record<string, Animated.Value>>({});
-  
-  // Get or create animation value for a comment
-  const getReplyAnimation = (commentId: string) => {
-    const id = commentId || 'default';
-    if (!replyAnimations.current[id]) {
-      replyAnimations.current[id] = new Animated.Value(0);
-    }
-    return replyAnimations.current[id];
-  };
-  
-  // Update toggleRepliesVisibility to animate
-  const toggleRepliesVisibility = (commentId: string) => {
-    const isExpanded = expandedComments[commentId];
-    
-    // Update state
-    setExpandedComments(prev => ({
-      ...prev,
-      [commentId]: !isExpanded
-    }));
-    
-    // Run animation
-    const animation = getReplyAnimation(commentId);
-    Animated.timing(animation, {
-      toValue: isExpanded ? 0 : 1,
-      duration: 300,
-      useNativeDriver: true,
-      easing: Easing.bezier(0.25, 0.1, 0.25, 1),
-    }).start();
-    
-    // Add haptic feedback for a polished feel
-    if (Platform.OS !== 'web') {
-      try {
-        const impactAsync = require('expo-haptics').impactAsync;
-        const ImpactFeedbackStyle = require('expo-haptics').ImpactFeedbackStyle;
-        impactAsync(ImpactFeedbackStyle.Light);
-      } catch (e) {
-        // Ignore errors if haptics not available
-      }
-    }
-  };
-  
   // Fetch post data from Sanity using the usePostFeed hook
   const fetchPostData = async () => {
     if (!params.id) return;
@@ -394,70 +303,7 @@ export default function PostDetailScreen() {
       if (postData) {
         console.log(`Post data successfully retrieved: ${postData.id}`);
         console.log("Post data structure:", JSON.stringify(postData, null, 2));
-        
-        // Fetch full post data including comment restrictions directly from Sanity
-        try {
-          const client = getSanityClient();
-          const fullPostData = await client.fetch(
-            `*[_type == "post" && _id == $postId][0] {
-              _id,
-              commentRestrictions
-            }`,
-            { postId: postData._id || postData.id }
-          );
-          
-          console.log("Full post data with restrictions:", fullPostData);
-          
-          // Merge post data with comment restrictions
-          if (fullPostData) {
-            setPost({
-              ...postData,
-              commentRestrictions: fullPostData.commentRestrictions || { restricted: false, allowedUsers: [] }
-            });
-            
-            // Check if current user is the post author
-            if (user && user._id && postData.user && postData.user.id) {
-              setIsPostAuthor(user._id === postData.user.id);
-            }
-            
-            // Set restriction states
-            if (fullPostData.commentRestrictions) {
-              setCommentsRestricted(fullPostData.commentRestrictions.restricted || false);
-              setAllowedCommentUsers(fullPostData.commentRestrictions.allowedUsers || []);
-              console.log("Comment restrictions loaded:", {
-                restricted: fullPostData.commentRestrictions.restricted || false,
-                allowedUsers: fullPostData.commentRestrictions.allowedUsers || []
-              });
-            } else {
-              setCommentsRestricted(false);
-              setAllowedCommentUsers([]);
-              console.log("No comment restrictions found");
-            }
-          } else {
-            // If no extended data found, use original post data
-            setPost(postData);
-            setCommentsRestricted(false);
-            setAllowedCommentUsers([]);
-          }
-        } catch (err) {
-          console.error("Error fetching full post data:", err);
-          // Fall back to basic post data
-          setPost(postData);
-          
-          // Check if current user is the post author
-          if (user && user._id && postData.user && postData.user.id) {
-            setIsPostAuthor(user._id === postData.user.id);
-          }
-          
-          // Check for comment restrictions
-          if ((postData as PostWithRestrictions).commentRestrictions) {
-            setCommentsRestricted((postData as PostWithRestrictions).commentRestrictions?.restricted || false);
-            setAllowedCommentUsers((postData as PostWithRestrictions).commentRestrictions?.allowedUsers || []);
-          } else {
-            setCommentsRestricted(false);
-            setAllowedCommentUsers([]);
-          }
-        }
+        setPost(postData);
         
         // Safely handle comments
         try {
@@ -524,12 +370,10 @@ export default function PostDetailScreen() {
                 likes: likesCount,
                 createdAt: createdAt,
                 _createdAt: createdAt, // Add this for consistency
-                parentComment: comment.parentComment || null, // Store the parent comment reference
-                parentCommentId: comment.parentComment || null, // Also store as parentCommentId for consistency
                 user: {
                   id: commentAuthor._id || 'unknown',
                   name: authorName,
-                  username: commentAuthor.username || 'user',
+                  username: commentAuthor.username ? `@${commentAuthor.username}` : '@user',
                   avatar: commentAuthor.avatar || 
                          (commentAuthor.profile?.avatar ? urlFor(commentAuthor.profile.avatar).url() : 'https://via.placeholder.com/150'),
                   isVerified: commentAuthor.isVerified || false,
@@ -580,21 +424,6 @@ export default function PostDetailScreen() {
       if (params.showComments === 'true') {
         setShowCommentsInput(true);
       }
-      
-      // Add handling for reply parameters
-      if (params.replyToUser && params.replyToCommentId) {
-        // Set up the reply with the username and comment ID
-        setReplyingTo({
-          id: params.replyToCommentId as string,
-          username: params.replyToUser as string
-        });
-        
-        // Pre-populate the comment field with the @username mention
-        setCommentText(`@${params.replyToUser as string} `);
-        
-        // Show the comment input section
-        setShowCommentsInput(true);
-      }
     }
   };
   
@@ -615,7 +444,6 @@ export default function PostDetailScreen() {
           _createdAt,
           authorName,
           likes,
-          parentComment,
           author-> {
             _id,
             username,
@@ -629,8 +457,7 @@ export default function PostDetailScreen() {
         },
         likesCount,
         commentsCount,
-        points,
-        commentRestrictions
+        points
       }`;
       
       // Subscribe to changes
@@ -643,27 +470,6 @@ export default function PostDetailScreen() {
             
             if (update.result && update.result.length > 0) {
               const updatedPost = update.result[0];
-              
-              // Update comment restrictions if changed
-              if (updatedPost.commentRestrictions) {
-                setCommentsRestricted(updatedPost.commentRestrictions.restricted || false);
-                setAllowedCommentUsers(updatedPost.commentRestrictions.allowedUsers || []);
-                
-                // Update the post state to include comment restrictions
-                setPost(prev => ({
-                  ...prev,
-                  commentRestrictions: updatedPost.commentRestrictions
-                }));
-              } else {
-                setCommentsRestricted(false);
-                setAllowedCommentUsers([]);
-                
-                // Update the post state to remove comment restrictions
-                setPost(prev => ({
-                  ...prev,
-                  commentRestrictions: { restricted: false, allowedUsers: [] }
-                }));
-              }
               
               // Process comment data to match our format
               if (updatedPost.comments && updatedPost.comments.length > 0) {
@@ -718,12 +524,10 @@ export default function PostDetailScreen() {
                       likes: likesCount,
                       createdAt: createdAt,
                       _createdAt: createdAt, // Add this for consistency
-                      parentComment: comment.parentComment || null, // Store the parent comment reference
-                      parentCommentId: comment.parentComment || null, // Also store as parentCommentId for consistency
                       user: {
                         id: commentAuthor._id || 'unknown',
                         name: authorName,
-                        username: commentAuthor.username || 'user',
+                        username: commentAuthor.username ? `@${commentAuthor.username}` : '@user',
                         avatar: commentAuthor.avatar || 
                                (commentAuthor.profile?.avatar ? urlFor(commentAuthor.profile.avatar).url() : 'https://via.placeholder.com/150'),
                         isVerified: commentAuthor.isVerified || false,
@@ -824,7 +628,7 @@ export default function PostDetailScreen() {
   // Effects
   useEffect(() => {
     fetchPostData();
-  }, [params.id, user, params.showComments, params.replyToUser, params.replyToCommentId]); // Include user as dependency
+  }, [params.id, user]); // Add user as dependency to refetch when user changes
   
   // Handlers
   const handleLike = async () => {
@@ -948,85 +752,12 @@ export default function PostDetailScreen() {
     }
   };
   
-  // Helper function to add a comment or reply
-  const addCommentOrReply = async (text: string, parentKey?: string) => {
-    if (!user || !user._id) return;
-    
-    try {
-      // Get post ID
-      const postId = (post as any)._id || post.id;
-      
-      console.log(`Adding ${parentKey ? 'reply' : 'comment'} to post ${postId}`);
-      
-      // Log parent info if this is a reply
-      if (parentKey) {
-        console.log(`This is a reply to comment with key: ${parentKey}`);
-      }
-      
-      // Create a comment object for the Sanity patch operation
-      const commentKey = `comment-${Date.now()}-${Math.floor(Math.random() * 1000)}`;
-      
-      // Create comment object
-      const comment = {
-        _key: commentKey,
-        _type: 'object',
-        text: text,
-        _createdAt: new Date().toISOString(),
-        likes: [],
-        author: {
-          _type: 'reference',
-          _ref: user._id
-        }
-      };
-      
-      // Add parent comment reference if this is a reply
-      if (parentKey) {
-        // @ts-ignore - Add parentComment field
-        comment.parentComment = parentKey;
-      }
-      
-      // Get the Sanity client
-      const client = getSanityClient();
-      
-      // Add comment directly using the client
-      await client
-        .patch(postId)
-        .setIfMissing({ comments: [] })
-        .append('comments', [comment])
-        .inc({ commentsCount: 1 })
-        .commit();
-      
-      console.log('Comment/reply added successfully');
-      
-      // Clear UI state - the real-time subscription will handle updating the UI
-      setCommentText('');
-      setReplyingTo(null);
-      
-      // Award points for commenting
-      addPoints(2);
-      
-      return true;
-    } catch (error) {
-      console.error('Error adding comment/reply:', error);
-      Alert.alert('Error', 'Failed to add comment. Please try again.');
-      return false;
-    }
-  };
-  
-  // Update the handleCommentSubmit function to use our new helper
   const handleCommentSubmit = async () => {
     if (!commentText.trim()) return;
     
     // Require authentication
     if (!user || !user._id) {
       Alert.alert("Authentication Required", "Please log in to comment on posts.");
-      setCommentText('');
-      return;
-    }
-    
-    // Check if comments are restricted
-    if (commentsRestricted && !canUserComment()) {
-      Alert.alert("Comments Closed", "The post owner has closed comments on this post.");
       setCommentText('');
       return;
     }
@@ -1043,56 +774,162 @@ export default function PostDetailScreen() {
       isVerified: false,
       isBlueVerified: false
     };
-
-    // Create new comment with proper type for optimistic UI update
-    const newComment = {
+    
+    // Check if this is a reply to another comment
+    const isReply = activeReplyTo !== null;
+    
+    // Create new comment with proper type
+    const newComment: Comment = {
       id: tempId,
       _key: tempId, // Add _key for Sanity compatibility
       user: author,
       text: commentText,
       timeAgo: 'Just now',
       likes: 0,
-      createdAt: new Date().toISOString(),
-      _createdAt: new Date().toISOString(),
-      parentComment: replyingTo?._key || null,
-      parentCommentId: replyingTo?.id || null,
+      createdAt: new Date().toISOString(), // Add this for consistency with other comments
+      _createdAt: new Date().toISOString() // Add this as well for Sanity format consistency
     };
+    
+    // If it's a reply, add the parent ID
+    if (isReply && activeReplyTo) {
+      newComment.parentId = activeReplyTo.id;
+      // Also store the Sanity _key for API compatibility
+      if (activeReplyTo._key) {
+        newComment.parentCommentId = activeReplyTo._key;
+      }
+    }
     
     // Optimistic UI update - use try/catch to avoid any iteration issues
     try {
-      setComments(prevComments => {
-        const updatedComments = Array.isArray(prevComments) ? [newComment, ...prevComments] : [newComment];
-        return updatedComments;
-      });
+      if (isReply && activeReplyTo) {
+        // For replies, update the parent comment to include this reply
+        setComments(prevComments => {
+          return prevComments.map(comment => {
+            if (comment.id === activeReplyTo.id || comment._key === activeReplyTo._key) {
+              // Add this reply to the parent comment's replies array
+              const updatedReplies = Array.isArray(comment.replies) 
+                ? [newComment, ...comment.replies] 
+                : [newComment];
+              
+              return {
+                ...comment,
+                replies: updatedReplies
+              };
+            }
+            return comment;
+          });
+        });
+      } else {
+        // For top-level comments, add to the main comments array
+        setComments(prevComments => {
+          // Safe array creation to avoid iterator issues
+          const updatedComments = Array.isArray(prevComments) ? [newComment, ...prevComments] : [newComment];
+          return updatedComments;
+        });
+      }
       
       setPost(prev => ({
         ...prev,
         comments: prev.comments + 1
       }));
       
-      // Call our helper function to add the comment/reply to Sanity
-      const success = await addCommentOrReply(
-        commentText, 
-        replyingTo?._key // Pass parent key if replying
-      );
+      // Reset input and reply state
+      setCommentText('');
+      setActiveReplyTo(null);
       
-      if (!success) {
-        // Remove the temporary comment if it fails
-        setComments(prevComments => 
-          prevComments.filter(c => c.id !== tempId && c._key !== tempId)
+      // Award points for commenting
+      addPoints(2);
+    } catch (uiError) {
+      console.error("Error updating UI optimistically:", uiError);
+    }
+    
+    try {
+      console.log(`User ${user._id} adding comment to post ${(post as any)._id || post.id}`);
+      
+      // Different call based on whether it's a reply or not
+      let result;
+      if (isReply && activeReplyTo) {
+        // Add logic to handle replies in Sanity
+        const client = getSanityClient();
+        
+        // Create a comment object for Sanity
+        const commentObject = {
+          _key: tempId,
+          _type: 'comment',
+          text: commentText,
+          _createdAt: new Date().toISOString(),
+          parentCommentId: activeReplyTo._key || activeReplyTo.id,
+          author: {
+            _type: 'reference',
+            _ref: user._id
+          }
+        };
+        
+        // Add the comment as a reply to the parent in Sanity
+        result = await client
+          .patch((post as any)._id || post.id)
+          .setIfMissing({ comments: [] })
+          .append('comments', [commentObject])
+          .inc({ commentsCount: 1 })
+          .commit();
+          
+        console.log("Reply added successfully:", result);
+      } else {
+        // Regular comment
+        result = await addComment(
+          (post as any)._id || post.id, 
+          commentText,
+          user._id
         );
+        console.log("Comment added successfully:", result);
+      }
+      
+      // The real-time subscription will handle updating the comment list
+      // No need to manually update it here
+    } catch (err) {
+      console.error('Error adding comment:', err);
+      
+      // Remove the temporary comment if it fails - use try/catch for safety
+      try {
+        if (isReply && activeReplyTo) {
+          // Remove from replies
+          setComments(prevComments => {
+            return prevComments.map(comment => {
+              if (comment.id === activeReplyTo.id || comment._key === activeReplyTo._key) {
+                // Filter out the failed reply
+                const updatedReplies = Array.isArray(comment.replies) 
+                  ? comment.replies.filter(reply => reply.id !== tempId)
+                  : [];
+                
+                return {
+                  ...comment,
+                  replies: updatedReplies
+                };
+              }
+              return comment;
+            });
+          });
+        } else {
+          // Remove from main comments
+          setComments(prevComments => {
+            // Safely filter without relying on iterator methods
+            if (!Array.isArray(prevComments)) return [];
+            return prevComments.filter(c => c && c.id !== tempId);
+          });
+        }
         
         setPost(prev => ({
           ...prev,
-          comments: Math.max(0, prev.comments - 1)
+          comments: Math.max(0, prev.comments - 1) // Ensure we don't go below 0
         }));
         
         // Refund the points
         addPoints(-2);
+      } catch (revertError) {
+        console.error("Error reverting UI update:", revertError);
       }
-    } catch (error) {
-      console.error('Error in comment submission:', error);
-      Alert.alert('Error', 'Failed to add comment. Please try again.');
+      
+      Alert.alert("Error", "Failed to add comment. Please try again.");
     }
   };
   
@@ -1211,12 +1048,25 @@ export default function PostDetailScreen() {
     setImageScale(1);
   };
   
-  const renderComment = ({ item: comment }: { item: Comment }) => {
-    // Add debug output
-    console.log('Rendering comment with ID:', comment?.id);
-    console.log('Comment timeAgo:', comment?.timeAgo);
-    console.log('Comment createdAt:', comment?.createdAt);
+  const handleReply = (comment: Comment) => {
+    // Set the active reply comment
+    setActiveReplyTo(comment);
     
+    // Auto-populate the comment field with @username
+    const username = comment.user?.username || comment.user?.name || 'user';
+    setCommentText(`@${username} `);
+    
+    // Focus the input
+    setShowCommentsInput(true);
+  };
+  
+  // Add this function to reset the reply state
+  const cancelReply = () => {
+    setActiveReplyTo(null);
+    setCommentText('');
+  };
+  
+  const renderComment = ({ item: comment }: { item: Comment }) => {
     // Skip if comment is invalid
     if (!comment || !comment.id) {
       console.log('Invalid comment detected, skipping render:', comment);
@@ -1228,6 +1078,9 @@ export default function PostDetailScreen() {
         </View>
       );
     }
+    
+    // Local state for toggling replies visibility within the component
+    const [showReplies, setShowReplies] = useState(false);
     
     try {
       // Handle both new (user) and legacy (author) formats
@@ -1247,24 +1100,11 @@ export default function PostDetailScreen() {
         isBlueVerified: false
       });
 
-      console.log('Comment user data:', commentUser);
-
       // Determine if the current user can delete this comment
       const userCanDelete = canDeleteComment(commentUser.id);
       
-      // Check if this is a reply to a parent comment
-      const isReply = comment.parentCommentId || comment.parentComment;
-      
-      // Only render top-level comments here (replies will be rendered as children)
-      if (isReply) {
-        return null;
-      }
-      
-      // Find replies to this comment
-      const replies = comments.filter(reply => 
-        (reply.parentCommentId === comment.id || reply.parentComment === comment.id || 
-         reply.parentCommentId === comment._key || reply.parentComment === comment._key)
-      );
+      // Check if there are replies to this comment
+      const hasReplies = comment.replies && comment.replies.length > 0;
 
       return (
         <View style={styles.commentItem}>
@@ -1296,15 +1136,11 @@ export default function PostDetailScreen() {
             <View style={styles.commentHeader}>
               <View style={styles.commentUserInfo}>
                 <Text style={styles.commentUserName}>
-                  {(commentUser.username && commentUser.username.startsWith('@') 
-                    ? commentUser.username.substring(1) 
-                    : commentUser.username) || commentUser.name || 'Unknown User'}
+                  {commentUser.username || commentUser.name || 'Unknown User'}
+                  {(commentUser.isVerified || commentUser.isBlueVerified) && (
+                    <TunnelVerifiedMark size={14} />
+                  )}
                 </Text>
-                {(commentUser.isVerified || commentUser.isBlueVerified) && (
-                  <View style={styles.verifiedBadgeContainer}>
-                    <TunnelVerifiedMark size={16} />
-                  </View>
-                )}
                 {commentUser.id === post.user.id && (
                   <View style={styles.authorBadge}>
                     <Text style={styles.authorBadgeText}>Author</Text>
@@ -1318,6 +1154,7 @@ export default function PostDetailScreen() {
               </Text>
             </View>
             <Text style={styles.commentText}>{comment.text}</Text>
+            
             <View style={styles.commentActions}>
               <Pressable 
                 style={styles.commentActionButton}
@@ -1329,17 +1166,7 @@ export default function PostDetailScreen() {
               
               <Pressable 
                 style={styles.commentActionButton}
-                onPress={() => {
-                  setReplyingTo({
-                    id: comment.id,
-                    username: commentUser.username || 'user',
-                    _key: comment._key
-                  });
-                  setCommentText(`@${(commentUser.username && commentUser.username.startsWith('@') 
-                    ? commentUser.username.substring(1) 
-                    : commentUser.username) || 'user'} `);
-                  setShowCommentsInput(true);
-                }}
+                onPress={() => handleReply(comment)}
               >
                 <MessageCircle size={14} color="#888" />
                 <Text style={styles.commentActionText}>Reply</Text>
@@ -1362,161 +1189,98 @@ export default function PostDetailScreen() {
               )}
             </View>
             
-            {/* Render replies for this comment */}
-            {replies.length > 0 && (
-              <View>
-                {/* Show/Hide Replies Button with count */}
-                <Pressable 
-                  style={styles.showRepliesButton}
-                  onPress={() => toggleRepliesVisibility(comment.id || comment._key || '')}
-                >
-                  <View style={styles.repliesCountBadge}>
-                    <Text style={styles.repliesCountText}>{replies.length}</Text>
-                  </View>
-                  <Text style={[
-                    styles.showRepliesText,
-                    expandedComments[comment.id || comment._key || ''] && styles.showRepliesTextActive
-                  ]}>
-                    {expandedComments[comment.id || comment._key || ''] 
-                      ? 'Hide replies' 
-                      : `Show ${replies.length} ${replies.length === 1 ? 'reply' : 'replies'}`}
-                  </Text>
-                  <Animated.View style={[
-                    styles.chevronIcon,
-                    {
-                      transform: [{ 
-                        rotate: getReplyAnimation(comment.id || comment._key || '').interpolate({
-                          inputRange: [0, 1],
-                          outputRange: ['0deg', '180deg']
-                        })
-                      }]
-                    }
-                  ]}>
-                    <ChevronDown size={16} color="#0070F3" />
-                  </Animated.View>
-                </Pressable>
-                
-                {/* Animated replies container */}
-                <Animated.View style={[
-                  styles.repliesWrapper,
-                  {
-                    opacity: getReplyAnimation(comment.id || comment._key || ''),
-                    transform: [{
-                      translateY: getReplyAnimation(comment.id || comment._key || '').interpolate({
-                        inputRange: [0, 1],
-                        outputRange: [-20, 0]
-                      })
-                    }, {
-                      // Use scaleY instead of height
-                      scaleY: getReplyAnimation(comment.id || comment._key || '')
-                    }],
-                    // Set a fixed height when closed to avoid layout issues
-                    display: expandedComments[comment.id || comment._key || ''] ? 'flex' : 'none'
-                  }
-                ]}>
-                  {replies.length > 0 && (
-                    <View style={styles.repliesContainer}>
-                      {replies.map(reply => (
-                        <View key={reply.id || reply._key} style={styles.replyItem}>
-                          <Pressable 
-                            style={{ marginRight: 8 }}
-                            onPress={() => handleUserProfile(reply.user?.id || 'unknown')}
-                            hitSlop={5}
-                          >
-                            {reply.user?.avatar ? (
-                              <Image 
-                                source={{ uri: reply.user.avatar }} 
-                                style={{ width: 28, height: 28, borderRadius: 14 }} 
-                              />
-                            ) : (
-                              <View style={{ 
-                                width: 28, 
-                                height: 28, 
-                                borderRadius: 14, 
-                                backgroundColor: '#333',
-                                alignItems: 'center', 
-                                justifyContent: 'center'
-                              }}>
-                                <UserCircle size={14} color="#666" />
-                              </View>
-                            )}
-                          </Pressable>
-                          
-                          <View style={styles.replyContent}>
-                            <View style={styles.commentHeader}>
-                              <View style={styles.commentUserInfo}>
-                                <Text style={styles.replyUserName}>
-                                  {(reply.user?.username && reply.user.username.startsWith('@') 
-                                    ? reply.user.username.substring(1) 
-                                    : reply.user?.username) || reply.user?.name || 'Unknown User'}
-                                </Text>
-                                {(reply.user?.isVerified || reply.user?.isBlueVerified) && (
-                                  <View style={styles.verifiedBadgeContainer}>
-                                    <TunnelVerifiedMark size={16} />
-                                  </View>
-                                )}
-                                {reply.user?.id === post.user.id && (
-                                  <View style={styles.authorBadge}>
-                                    <Text style={[styles.authorBadgeText, { fontSize: 8 }]}>Author</Text>
-                                  </View>
-                                )}
-                              </View>
-                              <Text style={styles.replyTimeAgo}>
-                                {typeof reply.timeAgo === 'string' && !reply.timeAgo.includes('NaN') 
-                                  ? reply.timeAgo 
-                                  : (reply.createdAt ? calculateTimeAgo(reply.createdAt) : 'Recently')}
-                              </Text>
-                            </View>
-                            <Text style={styles.replyText}>{reply.text}</Text>
-                            <View style={styles.replyActions}>
-                              <Pressable 
-                                style={styles.commentActionButton}
-                                onPress={() => handleLikeComment(reply.id)}
-                              >
-                                <Heart size={12} color="#888" />
-                                <Text style={styles.replyActionText}>{reply.likes || 0}</Text>
-                              </Pressable>
-                              
-                              <Pressable 
-                                style={styles.commentActionButton}
-                                onPress={() => {
-                                  setReplyingTo({
-                                    id: comment.id, // Always reply to the parent comment
-                                    username: reply.user?.username || 'user',
-                                    _key: comment._key
-                                  });
-                                  setCommentText(`@${(reply.user?.username && reply.user.username.startsWith('@') 
-                                    ? reply.user.username.substring(1) 
-                                    : reply.user?.username) || 'user'} `);
-                                  setShowCommentsInput(true);
-                                }}
-                              >
-                                <MessageCircle size={12} color="#888" />
-                                <Text style={styles.replyActionText}>Reply</Text>
-                              </Pressable>
-                              
-                              {canDeleteComment(reply.user?.id || '') && (
-                                <Pressable 
-                                  style={styles.commentActionButton}
-                                  onPress={() => {
-                                    if (reply.id) {
-                                      handleDeleteComment(reply.id);
-                                    } else if (reply._key) {
-                                      handleDeleteComment(reply._key);
-                                    }
-                                  }}
-                                >
-                                  <Trash2 size={12} color="#888" />
-                                  <Text style={styles.replyActionText}>Delete</Text>
-                                </Pressable>
-                              )}
-                            </View>
-                          </View>
+            {/* Display toggle for replies if this comment has replies */}
+            {hasReplies && (
+              <Pressable 
+                style={styles.repliesToggle}
+                onPress={() => setShowReplies(!showReplies)}
+              >
+                <Text style={styles.repliesToggleText}>
+                  {showReplies 
+                    ? 'Hide replies' 
+                    : `View ${comment.replies?.length} ${comment.replies?.length === 1 ? 'reply' : 'replies'}`}
+                </Text>
+              </Pressable>
+            )}
+            
+            {/* Show replies if toggled on */}
+            {showReplies && hasReplies && (
+              <View style={styles.repliesContainer}>
+                {comment.replies?.map((reply) => (
+                  <View key={reply.id} style={styles.replyItem}>
+                    <Pressable
+                      style={{ marginRight: 8 }}
+                      onPress={() => handleUserProfile(reply.user?.id || '')}
+                    >
+                      {reply.user?.avatar ? (
+                        <Image
+                          source={{ uri: reply.user.avatar }}
+                          style={styles.replyAvatar}
+                        />
+                      ) : (
+                        <View style={[styles.replyAvatar, styles.placeholderAvatar]}>
+                          <UserCircle size={12} color="#666" />
                         </View>
-                      ))}
+                      )}
+                    </Pressable>
+                    
+                    <View style={styles.replyContent}>
+                      <View style={styles.replyHeader}>
+                        <Text style={styles.replyUserName}>
+                          {reply.user?.username || reply.user?.name || 'Unknown User'}
+                          {(reply.user?.isVerified || reply.user?.isBlueVerified) && (
+                            <TunnelVerifiedMark size={12} />
+                          )}
+                        </Text>
+                        <Text style={styles.replyTimeAgo}>
+                          {reply.timeAgo || (reply.createdAt ? calculateTimeAgo(reply.createdAt) : 'Recently')}
+                        </Text>
+                      </View>
+                      
+                      <Text style={styles.replyText}>{reply.text}</Text>
+                      
+                      <View style={styles.replyActions}>
+                        <Pressable
+                          style={styles.replyActionButton}
+                          onPress={() => handleLikeComment(reply.id)}
+                        >
+                          <Heart size={12} color="#888" />
+                          <Text style={styles.replyActionText}>{reply.likes || 0}</Text>
+                        </Pressable>
+                        
+                        <Pressable
+                          style={styles.replyActionButton}
+                          onPress={() => handleReply(comment)} // Reply to the parent
+                        >
+                          <MessageCircle size={12} color="#888" />
+                          <Text style={styles.replyActionText}>Reply</Text>
+                        </Pressable>
+                        
+                        {canDeleteComment(reply.user?.id || '') && (
+                          <Pressable
+                            style={styles.replyActionButton}
+                            onPress={() => handleDeleteComment(reply.id)}
+                          >
+                            <Trash2 size={12} color="#888" />
+                            <Text style={styles.replyActionText}>Delete</Text>
+                          </Pressable>
+                        )}
+                      </View>
                     </View>
-                  )}
-                </Animated.View>
+                  </View>
+                ))}
+              </View>
+            )}
+            
+            {/* Show "Replying to..." message when actively replying to this comment */}
+            {activeReplyTo && activeReplyTo.id === comment.id && (
+              <View style={styles.replyingToContainer}>
+                <Text style={styles.replyingToText}>
+                  Replying to {commentUser.username || commentUser.name}
+                </Text>
+                <Pressable onPress={cancelReply}>
+                  <X size={14} color="#888" />
+                </Pressable>
               </View>
             )}
           </View>
@@ -1533,193 +1297,6 @@ export default function PostDetailScreen() {
       );
     }
   };
-  
-  // Add these functions after canDeleteComment but before handleDeleteComment
-
-  // Check if the user can comment based on restrictions
-  const canUserComment = (): boolean => {
-    console.log("Checking if user can comment:", {
-      isLoggedIn: !!user && !!user._id,
-      userId: user?._id,
-      commentsRestricted,
-      isPostAuthor,
-      allowedUsers: allowedCommentUsers,
-      userInAllowedList: user && user._id ? allowedCommentUsers.includes(user._id) : false
-    });
-
-    // User must be logged in
-    if (!user || !user._id) {
-      console.log("User cannot comment: not logged in");
-      return false;
-    }
-    
-    // If comments are not restricted, anyone can comment
-    if (!commentsRestricted) {
-      console.log("User can comment: comments are not restricted");
-      return true;
-    }
-    
-    // Post author can always comment
-    if (isPostAuthor) {
-      console.log("User can comment: is post author");
-      return true;
-    }
-    
-    // If comments are restricted, check if user is in allowed list
-    const isAllowed = allowedCommentUsers.includes(user._id);
-    console.log(`User ${isAllowed ? 'can' : 'cannot'} comment: ${isAllowed ? 'in allowed list' : 'not in allowed list'}`);
-    return isAllowed;
-  };
-  
-  // Handle post deletion
-  const handleDeletePost = () => {
-    // Only post author can delete
-    if (!isPostAuthor) return;
-    
-    setIsDeletePostModalVisible(true);
-  };
-  
-  // Confirm and execute post deletion
-  const confirmDeletePost = async () => {
-    if (!isPostAuthor || !user || !user._id) return;
-    
-    setIsDeletingPost(true);
-    try {
-      // Get the Sanity client
-      const client = getSanityClient();
-      
-      // Delete the post
-      await client.delete((post as any)._id || post.id);
-      
-      Alert.alert('Success', 'Post deleted successfully');
-      router.back();
-    } catch (err) {
-      console.error('Error deleting post:', err);
-      Alert.alert('Error', 'Failed to delete post. Please try again.');
-    } finally {
-      setIsDeletingPost(false);
-      setIsDeletePostModalVisible(false);
-    }
-  };
-  
-  // Toggle comment restrictions
-  const toggleCommentRestrictions = async (restricted: boolean) => {
-    if (!isPostAuthor || !user || !user._id) {
-      Alert.alert("Unauthorized", "Only the post author can change comment restrictions.");
-      return;
-    }
-    
-    // Optimistic UI update first
-    setCommentsRestricted(restricted);
-    if (restricted && allowedCommentUsers.length === 0) {
-      // If restricting comments and no users are allowed, at least allow the author
-      setAllowedCommentUsers([user._id]);
-    }
-    
-    setPost(prev => ({
-      ...prev,
-      commentRestrictions: {
-        _type: 'object',  // Explicitly set the type for the object
-        restricted: restricted,
-        allowedUsers: restricted ? 
-          (allowedCommentUsers.length > 0 ? allowedCommentUsers : [user._id]) : 
-          []
-      }
-    }));
-    
-    try {
-      // Get the Sanity client
-      const client = getSanityClient();
-      
-      console.log(`Setting comment restrictions for post ${(post as any)._id || post.id} to: ${restricted}`);
-      console.log("Allowed users:", restricted ? 
-        (allowedCommentUsers.length > 0 ? allowedCommentUsers : [user._id]) : 
-        []);
-      
-      // Update the post with comment restrictions
-      await client
-        .patch((post as any)._id || post.id)
-        .set({ 
-          commentRestrictions: {
-            _type: 'object',  // Explicitly set the type for the object
-            restricted: restricted,
-            allowedUsers: restricted ? 
-              (allowedCommentUsers.length > 0 ? allowedCommentUsers : [user._id]) : 
-              []
-          }
-        })
-        .commit();
-      
-      // Emit an event that other screens can listen for
-      DeviceEventEmitter.emit('COMMENT_RESTRICTIONS_CHANGED', {
-        postId: (post as any)._id || post.id,
-        restricted: restricted,
-        allowedUsers: restricted ? 
-          (allowedCommentUsers.length > 0 ? allowedCommentUsers : [user._id]) : 
-          []
-      });
-      
-      console.log('Comment restrictions updated successfully');
-      Alert.alert('Success', `Comments are now ${restricted ? 'closed' : 'open to everyone'}`);
-    } catch (err) {
-      console.error('Error updating comment restrictions:', err);
-      
-      // Revert optimistic update if failed
-      setCommentsRestricted(!restricted);
-      
-      // Reset post state
-      setPost(prev => ({
-        ...prev,
-        commentRestrictions: {
-          restricted: !restricted,
-          allowedUsers: !restricted ? [] : (allowedCommentUsers.length > 0 ? allowedCommentUsers : [user._id])
-        }
-      }));
-      
-      Alert.alert('Error', 'Failed to update comment settings. Please try again.');
-    }
-  };
-  
-  // Add this function with the other action handlers
-  const handleReportPost = () => {
-    // Navigate to the report screen with the post ID
-    router.push({
-      pathname: "/report" as any,
-      params: { postId: (post as any)._id || post.id }
-    });
-  };
-  
-  // Add a listener for comment restriction changes from other screens
-  useEffect(() => {
-    // Listen for comment restriction changes from other screens
-    const restrictionChangeListener = DeviceEventEmitter.addListener(
-      'COMMENT_RESTRICTIONS_CHANGED',
-      (data) => {
-        // Check if this update is for the current post
-        if (data.postId === ((post as any)?._id || post?.id)) {
-          console.log('Received comment restriction update from another screen:', data);
-          
-          // Update the UI with the new restrictions
-          setCommentsRestricted(data.restricted);
-          setAllowedCommentUsers(data.allowedUsers || []);
-          
-          // Update the post state
-          setPost(prev => ({
-            ...prev,
-            commentRestrictions: {
-              restricted: data.restricted,
-              allowedUsers: data.allowedUsers || []
-            }
-          }));
-        }
-      }
-    );
-    
-    // Clean up the listener on unmount
-    return () => {
-      restrictionChangeListener.remove();
-    };
-  }, [post]);  // Depend on the full post object
   
   if (isLoading) {
     return (
@@ -1780,59 +1357,11 @@ export default function PostDetailScreen() {
                     )}
                   </View>
                   <View style={styles.userHandleContainer}>
-                    <Text style={styles.userHandle}>
-                      {post.user?.username && post.user.username.startsWith('@') 
-                        ? post.user.username 
-                        : `@${post.user?.username || 'unknown'}`}
-                    </Text>
+                    <Text style={styles.userHandle}>{post.user?.username || '@unknown'}</Text>
                     <Text style={styles.timeAgo}> • {post.timeAgo}</Text>
                   </View>
                 </View>
-                <Pressable 
-                  style={styles.moreButton} 
-                  hitSlop={10}
-                  onPress={() => {
-                    if (isPostAuthor) {
-                      // Show options for post author
-                      Alert.alert(
-                        "Post Options",
-                        "Choose an action for this post",
-                        [
-                          {
-                            text: "Delete Post",
-                            onPress: handleDeletePost,
-                            style: "destructive"
-                          },
-                          {
-                            text: commentsRestricted ? "Open Comments" : "Close Comments",
-                            onPress: () => toggleCommentRestrictions(!commentsRestricted)
-                          },
-                          {
-                            text: "Cancel",
-                            style: "cancel"
-                          }
-                        ]
-                      );
-                    } else {
-                      // Show options for non-author users
-                      Alert.alert(
-                        "Post Options",
-                        "Choose an action for this post",
-                        [
-                          {
-                            text: "Report Post",
-                            onPress: handleReportPost,
-                            style: "destructive"
-                          },
-                          {
-                            text: "Cancel",
-                            style: "cancel"
-                          }
-                        ]
-                      );
-                    }
-                  }}
-                >
+                <Pressable style={styles.moreButton} hitSlop={10}>
                   <MoreHorizontal size={18} color="#888" />
                 </Pressable>
               </Pressable>
@@ -1966,18 +1495,6 @@ export default function PostDetailScreen() {
               <View style={styles.commentsContainer}>
                 <View style={styles.commentsHeader}>
                   <Text style={styles.commentsHeaderText}>Comments ({post.comments})</Text>
-                  
-                  {/* Add comments restriction notice right after the header */}
-                  {commentsRestricted && (
-                    <View style={styles.commentsRestrictionContainer}>
-                      <AlertCircle size={18} color="#FF3B30" />
-                      <Text style={styles.commentsRestrictionText}>
-                        {canUserComment() 
-                          ? "Comments are limited to specific users" 
-                          : "Comments are closed by post owner"}
-                      </Text>
-                    </View>
-                  )}
                 </View>
                 
                 {/* Comments List */}
@@ -2018,10 +1535,10 @@ export default function PostDetailScreen() {
                   </View>
                 )}
                 
-                {/* Bottom padding view */}
+                {/* Bottom padding view to ensure all content is visible above the comment input */}
                 <View
                   style={{
-                    height: Platform.OS === 'ios' ? 220 : 250,
+                    height: Platform.OS === 'ios' ? 220 : 250, // Increase from 180/200
                     width: '100%',
                   }}
                 />
@@ -2103,20 +1620,18 @@ export default function PostDetailScreen() {
           keyboardVisible && Platform.OS === 'android' && { position: 'relative' }
         ]}
       >
-        {replyingTo && (
-          <View style={styles.replyingToContainer}>
-            <Text style={styles.replyingToText}>
-              Replying to <Text style={styles.replyingToUsername}>
-                {replyingTo.username.startsWith('@') 
-                  ? replyingTo.username 
-                  : `@${replyingTo.username}`}
-              </Text>
+        {/* Show who we're replying to if in reply mode */}
+        {activeReplyTo && (
+          <View style={styles.replyingToBar}>
+            <Text style={styles.replyingToLabel}>
+              Replying to {activeReplyTo.user?.username || activeReplyTo.user?.name || 'user'}
             </Text>
-            <Pressable onPress={() => setReplyingTo(null)} style={styles.cancelReplyButton}>
-              <X size={16} color="#888" />
+            <Pressable onPress={cancelReply} style={styles.cancelReplyButton}>
+              <X size={16} color="#FFF" />
             </Pressable>
           </View>
         )}
+        
         <View style={styles.commentInput}>
           {user && user.profile?.avatar ? (
             <Image 
@@ -2128,61 +1643,28 @@ export default function PostDetailScreen() {
               <UserCircle size={18} color="#666" />
             </View>
           )}
-          
-          {/* Show restriction badge if comments are restricted */}
-          {commentsRestricted && (
-            <View style={styles.restrictionBadge}>
-              <AlertCircle size={12} color="#FF3B30" />
-              <Text style={styles.restrictionText}>
-                {canUserComment() ? "Limited" : "Closed"}
-              </Text>
-            </View>
-          )}
-          
           <TextInput
             style={styles.commentInputField}
-            placeholder={
-              user 
-                ? commentsRestricted && !canUserComment()
-                  ? "Comments are closed" 
-                  : "Add a comment..." 
-                : "Login to comment..."
-            }
+            placeholder={user ? "Add a comment..." : "Login to comment..."}
             placeholderTextColor="#777"
             value={commentText}
             onChangeText={setCommentText}
             multiline
             autoFocus={showCommentsInput}
-            editable={user ? (!commentsRestricted || canUserComment()) : false}
+            editable={!!user}
             maxLength={500}
             returnKeyType="default"
-            onFocus={() => {
-              // Check comment restrictions on focus to catch any changes
-              console.log("Comment input focused, restrictions status:", {
-                commentsRestricted,
-                canUserComment: user ? canUserComment() : false,
-                allowedUsers: allowedCommentUsers
-              });
-            }}
           />
           {user ? (
             <Pressable 
               style={[
                 styles.commentSendButton, 
-                (!commentText.trim() || (commentsRestricted && !canUserComment())) && styles.commentSendButtonDisabled
+                !commentText.trim() && styles.commentSendButtonDisabled
               ]} 
-              onPress={() => {
-                // Double-check restrictions before submitting
-                if (commentsRestricted && !canUserComment()) {
-                  console.log("Blocked comment submission due to restrictions");
-                  Alert.alert("Comments Closed", "The post owner has closed comments on this post.");
-                  return;
-                }
-                handleCommentSubmit();
-              }}
-              disabled={!commentText.trim() || (commentsRestricted && !canUserComment())}
+              onPress={handleCommentSubmit}
+              disabled={!commentText.trim()}
             >
-              <Send size={24} color={commentText.trim() && (!commentsRestricted || canUserComment()) ? "#1877F2" : "#555"} />
+              <Send size={24} color={commentText.trim() ? "#1877F2" : "#555"} />
             </Pressable>
           ) : (
             <Pressable 
@@ -2279,50 +1761,6 @@ export default function PostDetailScreen() {
             </View>
           )}
         </Animated.View>
-      </Modal>
-      
-      {/* Delete Post Confirmation Modal */}
-      <Modal
-        animationType="fade"
-        transparent={true}
-        visible={isDeletePostModalVisible}
-        onRequestClose={() => setIsDeletePostModalVisible(false)}
-      >
-        <View style={styles.modalOverlay}>
-          <View style={styles.modalContainer}>
-            <View style={styles.modalHeader}>
-              <AlertCircle size={24} color="#FF3B30" />
-              <Text style={styles.modalTitle}>Delete Post</Text>
-            </View>
-            
-            <Text style={styles.modalText}>
-              Are you sure you want to delete this post? This action cannot be undone and will remove the post permanently.
-            </Text>
-            
-            <View style={styles.modalButtons}>
-              <Pressable
-                style={[styles.modalButton, styles.cancelButton]}
-                onPress={() => {
-                  setIsDeletePostModalVisible(false);
-                }}
-              >
-                <Text style={styles.cancelButtonText}>Cancel</Text>
-              </Pressable>
-              
-              <Pressable
-                style={[styles.modalButton, styles.deleteButton]}
-                onPress={confirmDeletePost}
-                disabled={isDeletingPost}
-              >
-                {isDeletingPost ? (
-                  <ActivityIndicator size="small" color="#FFF" />
-                ) : (
-                  <Text style={styles.deleteButtonText}>Delete</Text>
-                )}
-              </Pressable>
-            </View>
-          </View>
-        </View>
       </Modal>
     </>
   );
@@ -2459,7 +1897,7 @@ const styles = StyleSheet.create({
     color: 'white',
     fontSize: 17,
     fontFamily: 'Inter_400Regular',
-    lineHeight: 35, // Increased from 25 for better readability
+    lineHeight: 25,
     paddingHorizontal: 16,
     paddingBottom: 16,
   },
@@ -2587,6 +2025,11 @@ const styles = StyleSheet.create({
   commentAvatarContainer: {
     marginRight: 12,
   },
+  placeholderAvatar: {
+    backgroundColor: '#333',
+    alignItems: 'center', 
+    justifyContent: 'center',
+  },
   commentAvatar: {
     width: 36,
     height: 36,
@@ -2613,9 +2056,8 @@ const styles = StyleSheet.create({
   },
   commentUserName: {
     color: 'white',
-    fontSize: 15,
+    fontSize: 14,
     fontFamily: 'Inter_600SemiBold',
-    marginRight: 4,
   },
   commentTimeAgo: {
     color: '#666',
@@ -2626,7 +2068,7 @@ const styles = StyleSheet.create({
     color: 'white',
     fontSize: 15,
     fontFamily: 'Inter_400Regular',
-    lineHeight: 30,
+    lineHeight: 22,
   },
   commentActions: {
     flexDirection: 'row',
@@ -2651,12 +2093,6 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
     marginLeft: 6,
-  },
-  placeholderAvatar: {
-    backgroundColor: '#333',
-    alignItems: 'center',
-    justifyContent: 'center',
-    
   },
   noCommentsContainer: {
     alignItems: 'center',
@@ -2880,12 +2316,12 @@ const styles = StyleSheet.create({
     backgroundColor: 'rgba(255,255,255,0.5)',
     marginBottom: 8,
   },
-
+  
+  // TikTok style comment input
   commentInputContainer: {
     position: 'absolute',
     bottom: 0,
     left: 0,
- 
     right: 0,
     backgroundColor: '#1A1A1A',
     borderTopWidth: 1,
@@ -2902,7 +2338,6 @@ const styles = StyleSheet.create({
   commentInput: {
     flexDirection: 'row',
     alignItems: 'center',
-    
   },
   commentEmojiButton: {
     padding: 8,
@@ -2915,11 +2350,9 @@ const styles = StyleSheet.create({
     paddingHorizontal: 16,
     paddingVertical: 10,
     color: 'white',
-    fontSize: 15,
-    lineHeight: 22,
+    fontSize: 14,
     maxHeight: 100,
     marginHorizontal: 8,
-    fontFamily: 'Inter_400Regular',
   },
   commentSendButton: {
     padding: 8,
@@ -2927,6 +2360,13 @@ const styles = StyleSheet.create({
   },
   commentSendButtonDisabled: {
     opacity: 0.5
+  },
+  commentAvatar: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    marginRight: 12,
+    bottom: 20,
   },
   loginButton: {
     backgroundColor: '#0070F3',
@@ -2940,177 +2380,104 @@ const styles = StyleSheet.create({
     fontSize: 14,
     fontFamily: 'Inter_600SemiBold',
   },
-  // Add these reply-related styles
+  replyingToBar: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    padding: 8,
+    backgroundColor: 'rgba(0, 0, 0, 0.5)',
+    borderRadius: 4,
+    marginBottom: 16,
+  },
+  replyingToLabel: {
+    color: '#FFF',
+    fontSize: 14,
+    fontFamily: 'Inter_600SemiBold',
+  },
+  cancelReplyButton: {
+    padding: 8,
+    borderRadius: 4,
+    backgroundColor: 'rgba(255, 255, 255, 0.1)',
+  },
+  
+  // Reply styling
+  repliesToggle: {
+    backgroundColor: 'rgba(255,255,255,0.1)',
+    padding: 8,
+    borderRadius: 4,
+    marginTop: 8,
+    marginBottom: 8,
+  },
+  repliesToggleText: {
+    color: '#FFF',
+    fontSize: 14,
+    fontFamily: 'Inter_600SemiBold',
+  },
   repliesContainer: {
-    marginTop: 12,
-    paddingLeft: 16,
-    borderLeftWidth: 2,
-    borderLeftColor: 'rgba(0, 112, 243, 0.3)',
-    paddingBottom: 8,
+    padding: 16,
   },
   replyItem: {
     flexDirection: 'row',
-    marginBottom: 12,
-    opacity: 0.95,
+    marginBottom: 16,
+  },
+  replyAvatar: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    marginRight: 8,
   },
   replyContent: {
     flex: 1,
-    backgroundColor: 'rgba(0, 112, 243, 0.08)',
+    backgroundColor: 'rgba(255,255,255,0.05)',
     borderRadius: 16,
     padding: 12,
-    borderWidth: 1,
-    borderColor: 'rgba(0, 112, 243, 0.15)',
+  },
+  replyHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 6,
   },
   replyUserName: {
     color: 'white',
-    fontSize: 13,
+    fontSize: 14,
     fontFamily: 'Inter_600SemiBold',
-    flexShrink: 1,
-    marginRight: 4,
   },
   replyTimeAgo: {
     color: '#666',
-    fontSize: 11,
+    fontSize: 12,
     fontFamily: 'Inter_400Regular',
   },
   replyText: {
     color: 'white',
     fontSize: 15,
     fontFamily: 'Inter_400Regular',
-    lineHeight: 30,
+    lineHeight: 22,
   },
   replyActions: {
     flexDirection: 'row',
-    marginTop: 6,
+    marginTop: 8,
+  },
+  replyActionButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginRight: 16,
   },
   replyActionText: {
     color: '#888',
-    fontSize: 12,
+    fontSize: 13,
     fontFamily: 'Inter_400Regular',
     marginLeft: 4,
   },
   replyingToContainer: {
     flexDirection: 'row',
     alignItems: 'center',
-    justifyContent: 'space-between',
-    paddingHorizontal: 16,
-    paddingVertical: 8,
-    backgroundColor: 'rgba(255,255,255,0.05)',
-    borderBottomWidth: 1,
-    borderBottomColor: 'rgba(255,255,255,0.1)',
+    marginTop: 8,
+    marginBottom: 8,
   },
   replyingToText: {
-    color: '#888',
-    fontSize: 14,
-    fontFamily: 'Inter_400Regular',
-  },
-  replyingToUsername: {
-    color: '#0070F3',
-    fontSize: 14,
-    fontFamily: 'Inter_600SemiBold',
-  },
-  cancelReplyButton: {
-    padding: 8,
-    borderRadius: 16,
-    backgroundColor: 'rgba(255,255,255,0.1)',
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  showRepliesButton: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    marginTop: 8,
-    marginBottom: 6,
-    padding: 8,
-    backgroundColor: 'rgba(255, 255, 255, 0.05)',
-    borderRadius: 16,
-    alignSelf: 'flex-start',
-  },
-  repliesCountBadge: {
-    backgroundColor: 'rgba(0, 112, 243, 0.8)',
-    borderRadius: 12,
-    minWidth: 22,
-    height: 22,
-    paddingHorizontal: 6,
-    marginRight: 8,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  repliesCountText: {
     color: 'white',
-    fontSize: 12,
+    fontSize: 14,
     fontFamily: 'Inter_600SemiBold',
-  },
-  showRepliesText: {
-    fontSize: 13,
-    color: '#0070F3',
-    fontWeight: '500',
-    marginLeft: 6,
-    fontFamily: 'Inter_500Medium',
-  },
-  showRepliesTextActive: {
-    color: '#FF3B30',
-  },
-  chevronIcon: {
-    marginLeft: 6,
-  },
-  repliesWrapper: {
-    overflow: 'hidden',
-    transformOrigin: 'top',
-  },
-  restrictionBadge: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    backgroundColor: 'rgba(255, 59, 48, 0.1)',
-    borderRadius: 4,
-    paddingHorizontal: 6,
-    paddingVertical: 2,
-    marginLeft: 8,
-    position: 'absolute',
-    top: -20,
-    left: 48,
-    borderWidth: 1,
-    borderColor: 'rgba(255, 59, 48, 0.3)',
-  },
-  restrictionText: {
-    color: '#FF3B30',
-    fontSize: 10,
-    fontFamily: 'Inter_600SemiBold',
-    marginLeft: 4,
-  },
-  commentRestrictionIndicator: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    marginTop: 8,
-    marginBottom: 16,
-  },
-  commentRestrictionText: {
-    color: '#FF3B30',
-    fontSize: 12,
-    fontFamily: 'Inter_400Regular',
-    marginLeft: 4,
-  },
-  verifiedBadgeContainer: {
-    marginLeft: 2,
-    marginRight: 4,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  commentsRestrictionContainer: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    padding: 12,
-    marginTop: 8,
-    backgroundColor: 'rgba(255, 59, 48, 0.1)',
-    borderRadius: 12,
-    borderWidth: 1,
-    borderColor: 'rgba(255, 59, 48, 0.2)',
-  },
-  commentsRestrictionText: {
-    color: '#FF3B30',
-    fontSize: 15,
-    fontFamily: 'Inter_500Medium',
-    marginLeft: 10,
-    flex: 1,
   },
 }); 

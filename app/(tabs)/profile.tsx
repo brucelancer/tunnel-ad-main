@@ -46,6 +46,9 @@ import {
   Grid,
   MessageCircle,
   Bookmark,
+  Film,
+  Play,
+  PieChart,
 } from 'lucide-react-native';
 import { BlurView } from 'expo-blur';
 import { useRouter, useFocusEffect } from 'expo-router';
@@ -163,6 +166,9 @@ export default function ProfileScreen() {
   const [viewType, setViewType] = useState<'grid' | 'list'>('grid');
   const [userPosts, setUserPosts] = useState<PostData[]>([]);
   const [postsLoading, setPostsLoading] = useState(false);
+  const [activeTab, setActiveTab] = useState<'posts' | 'videos'>('posts');
+  const [userVideos, setUserVideos] = useState<any[]>([]);
+  const [videosLoading, setVideosLoading] = useState(false);
   
   // Get user data from Sanity auth hook
   const { user, logout } = useSanityAuth();
@@ -245,6 +251,109 @@ export default function ProfileScreen() {
     };
   }, [user]);
 
+  // Improve the refreshUserData function to also update points
+  const refreshUserData = async () => {
+    setRefreshing(true);
+    
+    try {
+      // If we have the user ID, fetch fresh data
+      if (user?._id) {
+        console.log("Refreshing user data from Sanity...");
+        
+        // Correct Sanity configuration with proper project ID and dataset
+        const client = createClient({
+          projectId: '21is7976', // Updated to the correct project ID
+          dataset: 'production',
+          useCdn: true,
+          apiVersion: '2021-10-21',
+        });
+        
+        if (!client) {
+          console.error("Failed to get Sanity client");
+          return;
+        }
+        
+        // Fetch the latest user data including points
+        const freshUserData = await client.fetch(`
+          *[_type == "user" && _id == $userId][0] {
+            _id,
+            username,
+            firstName,
+            lastName,
+            email,
+            points,
+            profile,
+            isBlueVerified
+          }
+        `, { userId: user._id });
+        
+        if (freshUserData) {
+          console.log("Received fresh user data from Sanity:", freshUserData);
+          
+          // Update points display if available
+          if (freshUserData.points !== undefined) {
+            console.log(`Updating points display to ${freshUserData.points} from refresh`);
+            setDisplayPoints(freshUserData.points);
+          }
+          
+          // Update the cached user display data
+          setUserDisplay(freshUserData);
+        }
+      } else {
+        console.log("Can't refresh: User is not logged in or no user ID available");
+      }
+      
+      // Fetch user posts if needed
+      if (isAuthenticated && user?._id) {
+        fetchUserPosts();
+      }
+    } catch (error) {
+      console.error("Error refreshing user data:", error);
+    } finally {
+      setRefreshing(false);
+    }
+  };
+
+  // Add event listeners after refreshUserData is defined
+  useEffect(() => {
+    // Set up the listener for points earned from videos
+    const pointsEarnedListener = DeviceEventEmitter.addListener('POINTS_EARNED', (event) => {
+      console.log('Profile: POINTS_EARNED event received:', event);
+      
+      // Handle verified points updates from Sanity
+      if (event.verifiedFromSanity && event.newTotal !== undefined) {
+        // Update points with the exact total from Sanity
+        console.log(`Profile: Updating points display to ${event.newTotal} from Sanity verification`);
+        setDisplayPoints(event.newTotal);
+        
+        // Show animation for better user experience
+        animatePointsEarned();
+      } 
+      // Handle incremental points updates
+      else if (event.amount) {
+        console.log(`Profile: Incrementing points by ${event.amount}`);
+        setDisplayPoints(current => current + event.amount);
+        animatePointsEarned();
+      }
+    });
+    
+    // Also listen for general POINTS_UPDATED events
+    const pointsUpdatedListener = DeviceEventEmitter.addListener('POINTS_UPDATED', (event) => {
+      console.log('Profile: POINTS_UPDATED event received:', event);
+      
+      if (event?.type === 'earned') {
+        // When points are earned, refresh from Sanity to get the latest total
+        refreshUserData();
+      }
+    });
+    
+    // Clean up on unmount
+    return () => {
+      pointsEarnedListener.remove();
+      pointsUpdatedListener.remove();
+    };
+  }, [refreshUserData]);
+
   const animatePointsEarned = () => {
     Animated.sequence([
       Animated.timing(scaleAnim, {
@@ -314,67 +423,6 @@ export default function ProfileScreen() {
   const handleEditProfile = () => {
     // Navigate to edit profile screen
     router.push('/editprofile' as any);
-  };
-
-  // Function to force refresh user data (can be called on focus or pull-to-refresh)
-  const refreshUserData = async () => {
-    try {
-      setRefreshing(true);
-      
-      // Always check AsyncStorage for the most recent user data
-      const userString = await AsyncStorage.getItem('sanity_user');
-      let storageUserData = null;
-      
-      if (userString) {
-        storageUserData = JSON.parse(userString);
-        console.log('refreshUserData: Found user data in AsyncStorage:', storageUserData);
-        logUserDataChanges(storageUserData, "refreshUserData - from AsyncStorage");
-      }
-      
-      // Check if we have user data from the auth hook
-      if (user) {
-        console.log('refreshUserData: Found user in useSanityAuth hook:', user);
-        logUserDataChanges(user, "refreshUserData - from hook");
-        setIsAuthenticated(true);
-        
-        // Merge hook user with storage user to ensure we have all fields
-        // Storage data takes precedence as it might be more recent
-        const mergedUser = {
-          ...user,
-          ...(storageUserData || {}),
-          points: (storageUserData?.points ?? user.points) || 0,
-          phone: (storageUserData?.phone ?? user.phone) || '',
-          location: (storageUserData?.location ?? user.location) || '',
-          isBlueVerified: (storageUserData?.isBlueVerified ?? user.isBlueVerified) || false
-        };
-        
-        // Make sure to update the user display with merged data
-        setUserDisplay(mergedUser);
-        
-        // Update points display
-        if (mergedUser.points !== undefined) {
-          setDisplayPoints(mergedUser.points);
-        }
-      } else if (storageUserData) {
-        // No user in hook but found in storage
-        setIsAuthenticated(true);
-        setUserDisplay(storageUserData);
-        
-        // Emit event with the user data to force update across components
-        DeviceEventEmitter.emit('AUTH_STATE_CHANGED', { 
-          isAuthenticated: true,
-          userData: storageUserData 
-        });
-      } else {
-        console.log('No user data found in AsyncStorage or hook');
-        setIsAuthenticated(false);
-        setUserDisplay(null);
-      }
-    } catch (error) {
-      console.error('Error refreshing user data:', error);
-    } finally {
-      setRefreshing(false);
-    }
   };
 
   const onRefresh = useCallback(() => {
@@ -641,10 +689,11 @@ export default function ProfileScreen() {
     return `${Math.floor(monthsAgo / 12)}y ago`;
   };
 
-  // Fetch posts when user data is loaded
+  // Fetch videos when user data is loaded
   useEffect(() => {
     if (userDisplay && userDisplay._id) {
       fetchUserPosts();
+      fetchUserVideos();
     }
   }, [userDisplay]);
 
@@ -765,6 +814,136 @@ export default function ProfileScreen() {
     );
   };
 
+  // Fetch user videos
+  const fetchUserVideos = async () => {
+    if (!userDisplay || !userDisplay._id) return;
+    
+    try {
+      setVideosLoading(true);
+      
+      // Create a Sanity client directly using createClient
+      const client = createClient({
+        projectId: '21is7976',
+        dataset: 'production',
+        useCdn: false,
+        apiVersion: '2023-03-01'
+      });
+      
+      if (!client) {
+        console.error('Failed to create Sanity client');
+        return;
+      }
+      
+      // Query to get videos by user ID
+      const query = `*[_type == "video" && author._ref == $userId] | order(createdAt desc) {
+        _id,
+        title,
+        description,
+        url,
+        "videoUrl": videoFile.asset->url,
+        type,
+        contentType,
+        aspectRatio,
+        points,
+        views,
+        likes,
+        dislikes,
+        "author": author->username,
+        "authorId": author->_id,
+        "authorAvatar": author->profile.avatar,
+        "isVerified": author->username == "admin" || author->username == "moderator",
+        "isBlueVerified": author->isBlueVerified,
+        "thumbnailUrl": thumbnail.asset->url,
+        createdAt,
+        "hasLiked": count(likedBy[_ref == $currentUserId]) > 0
+      }`;
+      
+      const videos = await client.fetch(query, { 
+        userId: userDisplay._id,
+        currentUserId: userDisplay._id || ''
+      });
+      
+      // Process videos data
+      const processedVideos = videos.map((video: any) => {
+        return {
+          id: video._id,
+          title: video.title || 'Untitled Video',
+          description: video.description || '',
+          url: video.videoUrl || video.url || '',
+          type: video.type || 'horizontal',
+          aspectRatio: video.aspectRatio || (video.type === 'horizontal' ? 16/9 : 9/16),
+          points: video.points || 0,
+          views: video.views || 0,
+          likes: video.likes || 0,
+          dislikes: video.dislikes || 0,
+          author: video.author || "Unknown",
+          authorId: video.authorId || userDisplay._id,
+          authorAvatar: video.authorAvatar ? sanityAuthService.urlFor(video.authorAvatar).url() : null,
+          isVerified: video.isVerified || false,
+          isBlueVerified: video.isBlueVerified || false,
+          thumbnail: video.thumbnailUrl || '',
+          timeAgo: calculateTimeAgo(video.createdAt),
+          hasLiked: video.hasLiked || false
+        };
+      });
+      
+      setUserVideos(processedVideos);
+      console.log(`Loaded ${processedVideos.length} videos for user`);
+    } catch (error) {
+      console.error('Error fetching user videos:', error);
+    } finally {
+      setVideosLoading(false);
+    }
+  };
+
+  // Render video grid item
+  const renderVideoGridItem = ({ item }: { item: any }) => {
+    return (
+      <Pressable 
+        style={styles.gridItem}
+        onPress={() => router.push({
+          pathname: '/video-detail',
+          params: { id: item.id }
+        } as any)}
+      >
+        <View style={styles.videoGridItem}>
+          {/* Thumbnail section */}
+          <View style={styles.videoThumbnailContainer}>
+            {item.thumbnail ? (
+              <Image 
+                source={{ uri: item.thumbnail }} 
+                style={styles.videoThumbnail}
+                resizeMode="cover"
+              />
+            ) : (
+              <View style={styles.videoPlaceholder}>
+                <Film size={24} color="#666" />
+              </View>
+            )}
+            
+            {/* Play button overlay */}
+            <View style={styles.videoPlayOverlay}>
+              <View style={styles.videoPlayButton}>
+                <Play size={20} color="#FFF" />
+              </View>
+            </View>
+          </View>
+          
+          {/* Video info section */}
+          <View style={styles.videoInfo}>
+            <Text 
+              style={styles.videoTitle}
+              numberOfLines={1}
+            >
+              {item.title || 'Untitled Video'}
+            </Text>
+            <Text style={styles.videoTimeAgo}>{item.timeAgo}</Text>
+          </View>
+        </View>
+      </Pressable>
+    );
+  };
+
   // If not authenticated, show the auth screen
   if (!isAuthenticated) {
     return <AuthScreen onAuthenticated={() => setIsAuthenticated(true)} />;
@@ -856,6 +1035,14 @@ export default function ProfileScreen() {
         </Pressable>
       </Modal>
     );
+  };
+
+  // Add this function to handle Insights navigation
+  const handleNavigateToInsights = () => {
+    router.push({
+      pathname: '/insights-userprofile' as any,
+      params: { userId: user?._id }
+    });
   };
 
   return (
@@ -1072,6 +1259,36 @@ export default function ProfileScreen() {
         <View style={styles.section}>
           <View style={styles.contentHeader}>
             <Text style={styles.sectionTitle}>Your Content</Text>
+            
+            {/* Add content type tabs */}
+            <View style={styles.contentTabs}>
+              <Pressable 
+                style={[
+                  styles.tabButton,
+                  activeTab === 'posts' && styles.activeTabButton
+                ]}
+                onPress={() => setActiveTab('posts')}
+              >
+                <Text style={[
+                  styles.tabText,
+                  activeTab === 'posts' && styles.activeTabText
+                ]}>Posts</Text>
+              </Pressable>
+              
+              <Pressable 
+                style={[
+                  styles.tabButton,
+                  activeTab === 'videos' && styles.activeTabButton
+                ]}
+                onPress={() => setActiveTab('videos')}
+              >
+                <Text style={[
+                  styles.tabText,
+                  activeTab === 'videos' && styles.activeTabText
+                ]}>Videos</Text>
+              </Pressable>
+            </View>
+            
             <Pressable 
               style={styles.viewToggleButton}
               onPress={toggleViewType}
@@ -1084,47 +1301,88 @@ export default function ProfileScreen() {
             </Pressable>
           </View>
           
-          {postsLoading ? (
-            <View style={styles.loadingContentContainer}>
-              <ActivityIndicator size="small" color="#0070F3" />
-              <Text style={styles.loadingContentText}>Loading your content...</Text>
-            </View>
-          ) : userPosts.length === 0 ? (
-            <View style={styles.emptyContentContainer}>
-              <Award size={40} color="#333" />
-              <Text style={styles.emptyContentTitle}>No Posts Yet</Text>
-              <Text style={styles.emptyContentText}>
-                You haven't shared any posts yet. Your posts will appear here.
-              </Text>
-              <Pressable
-                style={styles.createPostButton}
-                onPress={() => router.push('/newsfeed-upload' as any)}
-              >
-                <Text style={styles.createPostButtonText}>Create Post</Text>
-              </Pressable>
-            </View>
-          ) : (
-            viewType === 'grid' ? (
-              <FlatList
-                key="grid"
-                data={userPosts}
-                numColumns={3}
-                renderItem={renderGridItem}
-                keyExtractor={item => item.id}
-                scrollEnabled={false}
-                contentContainerStyle={styles.gridContainer}
-              />
-            ) : (
-              <FlatList
-                key="list"
-                data={userPosts}
-                numColumns={1}
-                renderItem={renderListItem}
-                keyExtractor={item => item.id}
-                scrollEnabled={false}
-                contentContainerStyle={styles.listContainer}
-              />
-            )
+          {/* Posts Tab Content */}
+          {activeTab === 'posts' && (
+            <>
+              {postsLoading ? (
+                <View style={styles.loadingContentContainer}>
+                  <ActivityIndicator size="small" color="#0070F3" />
+                  <Text style={styles.loadingContentText}>Loading your content...</Text>
+                </View>
+              ) : userPosts.length === 0 ? (
+                <View style={styles.emptyContentContainer}>
+                  <Award size={40} color="#333" />
+                  <Text style={styles.emptyContentTitle}>No Posts Yet</Text>
+                  <Text style={styles.emptyContentText}>
+                    You haven't shared any posts yet. Your posts will appear here.
+                  </Text>
+                  <Pressable
+                    style={styles.createPostButton}
+                    onPress={() => router.push('/newsfeed-upload' as any)}
+                  >
+                    <Text style={styles.createPostButtonText}>Create Post</Text>
+                  </Pressable>
+                </View>
+              ) : (
+                viewType === 'grid' ? (
+                  <FlatList
+                    key="grid"
+                    data={userPosts}
+                    numColumns={3}
+                    renderItem={renderGridItem}
+                    keyExtractor={item => item.id}
+                    scrollEnabled={false}
+                    contentContainerStyle={styles.gridContainer}
+                  />
+                ) : (
+                  <FlatList
+                    key="list"
+                    data={userPosts}
+                    numColumns={1}
+                    renderItem={renderListItem}
+                    keyExtractor={item => item.id}
+                    scrollEnabled={false}
+                    contentContainerStyle={styles.listContainer}
+                  />
+                )
+              )}
+            </>
+          )}
+          
+          {/* Videos Tab Content */}
+          {activeTab === 'videos' && (
+            <>
+              {videosLoading ? (
+                <View style={styles.loadingContentContainer}>
+                  <ActivityIndicator size="small" color="#0070F3" />
+                  <Text style={styles.loadingContentText}>Loading your videos...</Text>
+                </View>
+              ) : userVideos && userVideos.length > 0 ? (
+                <FlatList
+                  key="videos-grid"
+                  data={userVideos}
+                  numColumns={3}
+                  renderItem={renderVideoGridItem}
+                  keyExtractor={item => item.id}
+                  scrollEnabled={false}
+                  contentContainerStyle={styles.gridContainer}
+                />
+              ) : (
+                <View style={styles.emptyContentContainer}>
+                  <Film size={40} color="#333" />
+                  <Text style={styles.emptyContentTitle}>No Videos Yet</Text>
+                  <Text style={styles.emptyContentText}>
+                    You haven't uploaded any videos yet. Your videos will appear here.
+                  </Text>
+                  <Pressable
+                    style={styles.createPostButton}
+                    onPress={() => router.push('/video-upload' as any)}
+                  >
+                    <Text style={styles.createPostButtonText}>Upload Video</Text>
+                  </Pressable>
+                </View>
+              )}
+            </>
           )}
         </View>
 
@@ -1221,6 +1479,12 @@ export default function ProfileScreen() {
               'Edit Profile',
               undefined,
               handleEditProfile
+            )}
+            {renderSettingItem(
+              <BarChart2 color="#0070F3" size={20} />,
+              'Content Insights',
+              undefined,
+              handleNavigateToInsights
             )}
             {renderSettingItem(
               <Bell color="#0070F3" size={20} />,
@@ -1773,7 +2037,31 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
-    marginBottom: 15,
+    marginBottom: 16,
+  },
+  contentTabs: {
+    flexDirection: 'row',
+    marginRight: 8,
+    // Add any necessary adjustments to accommodate 3 tabs
+  },
+  tabButton: {
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    marginHorizontal: 4, // Adjust spacing between tabs
+    // Add any necessary adjustments
+  },
+  activeTabButton: {
+    borderBottomWidth: 2,
+    borderBottomColor: '#0070F3',
+  },
+  tabText: {
+    fontSize: 14,
+    color: '#777',
+    fontWeight: '500',
+  },
+  activeTabText: {
+    color: '#0070F3',
+    fontWeight: '600',
   },
   viewToggleButton: {
     width: 40,
@@ -2071,5 +2359,93 @@ const styles = StyleSheet.create({
     borderRadius: 20,
     justifyContent: 'center',
     alignItems: 'center',
+  },
+  videoGridItem: {
+    height: '100%',
+    borderRadius: 8,
+    overflow: 'hidden',
+    backgroundColor: '#111',
+  },
+  videoThumbnailContainer: {
+    height: '70%',
+    width: '100%', 
+    backgroundColor: '#222',
+    position: 'relative',
+  },
+  videoThumbnail: {
+    width: '100%',
+    height: '100%',
+  },
+  videoPlaceholder: {
+    flex: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  videoPlayOverlay: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
+    bottom: 0,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: 'rgba(0,0,0,0.3)',
+  },
+  videoPlayButton: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    backgroundColor: 'rgba(0,112,243,0.8)',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  videoInfo: {
+    padding: 10,
+    height: '30%',
+    justifyContent: 'center',
+  },
+  videoTitle: {
+    color: 'white',
+    fontSize: 14,
+    fontWeight: '600',
+    marginBottom: 4,
+  },
+  videoTimeAgo: {
+    color: '#888',
+    fontSize: 12,
+  },
+  insightsContainer: {
+    marginTop: 12,
+    backgroundColor: '#111',
+    borderRadius: 12,
+    overflow: 'hidden',
+  },
+  insightsButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    padding: 16,
+    backgroundColor: '#111',
+  },
+  insightsIconContainer: {
+    width: 50,
+    height: 50,
+    borderRadius: 25,
+    backgroundColor: 'rgba(0, 112, 243, 0.1)',
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginRight: 12,
+  },
+  insightsButtonContent: {
+    flex: 1,
+  },
+  insightsButtonTitle: {
+    color: '#FFF',
+    fontSize: 16,
+    fontWeight: '600',
+    marginBottom: 4,
+  },
+  insightsButtonText: {
+    color: '#ccc',
+    fontSize: 12,
   },
 });

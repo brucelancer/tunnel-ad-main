@@ -17,6 +17,7 @@ import {
   Platform,
   useWindowDimensions,
   Modal,
+  DeviceEventEmitter,
 } from 'react-native';
 import { useLocalSearchParams, useRouter, Stack } from 'expo-router';
 import { BlurView } from 'expo-blur';
@@ -47,6 +48,8 @@ import {
   List,
   Edit3,
   X,
+  Film,
+  Play,
 } from 'lucide-react-native';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useSanityAuth } from './hooks/useSanityAuth';
@@ -153,12 +156,14 @@ export default function UserProfileScreen() {
   // State
   const [userData, setUserData] = useState<UserData | null>(null);
   const [userPosts, setUserPosts] = useState<PostData[]>([]);
+  const [userVideos, setUserVideos] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [postsLoading, setPostsLoading] = useState(true);
+  const [videosLoading, setVideosLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [following, setFollowing] = useState(false);
   const [viewType, setViewType] = useState<'grid' | 'list'>('grid');
-  const [activeTab, setActiveTab] = useState<'posts' | 'saved' | 'tagged'>('posts');
+  const [activeTab, setActiveTab] = useState<'posts' | 'saved' | 'tagged' | 'videos'>('posts');
   
   // Followers state
   const [followers, setFollowers] = useState<UserData[]>([]);
@@ -192,19 +197,65 @@ export default function UserProfileScreen() {
   const contentPadding = windowWidth > 768 ? 24 : 16;
   
   // Grid sizing - adjust columns based on screen width
-  const gridColumns = windowWidth > 768 ? 4 : 3;
-  const fixedNumColumns = 3; // Use fixed number for the FlatList, as dynamic values cause errors
-  const itemGap = windowWidth > 768 ? 4 : 2;
+  const gridColumns = windowWidth > 768 ? 2 : 1;
+  const itemGap = windowWidth > 768 ? 8 : 4;
   const itemWidth = (windowWidth - (gridColumns + 1) * itemGap) / gridColumns;
-  const columnKey = windowWidth > 768 ? 'columns-4' : 'columns-3'; // For key prop
+  const columnKey = windowWidth > 768 ? 'columns-2' : 'columns-1'; // Update key prop
+  const fixedNumColumns = 2; // 2 items per row for videos and posts
   
   // Load user data
   useEffect(() => {
     if (id) {
       fetchUserData();
       fetchUserPosts();
+      fetchUserVideos();
     }
   }, [id]);
+
+  // Add a live points update listener - placed after initial data fetching useEffect
+  useEffect(() => {
+    // Listen for points earned events from videos
+    const pointsEarnedListener = DeviceEventEmitter.addListener('POINTS_EARNED', (event) => {
+      console.log('User Profile: POINTS_EARNED event received:', event);
+      
+      if (!userData) return;
+      
+      // If the event has verified data from Sanity, update immediately
+      if (event.verifiedFromSanity && event.newTotal !== undefined) {
+        console.log(`User Profile: Updating points to ${event.newTotal} from Sanity verification`);
+        
+        // Update the userData state with new points
+        setUserData(prevData => {
+          if (!prevData) return null;
+          return {
+            ...prevData,
+            points: event.newTotal
+          };
+        });
+      } 
+      // Otherwise increment by the earned amount
+      else if (event.amount) {
+        console.log(`User Profile: Incrementing points by ${event.amount}`);
+        
+        // Update userData with incremented points
+        setUserData(prevData => {
+          if (!prevData) return null;
+          const currentPoints = prevData.points || 0;
+          return {
+            ...prevData,
+            points: currentPoints + event.amount
+          };
+        });
+      }
+      
+      // Refresh user data in the background to ensure latest points
+      refreshUserData(false);
+    });
+    
+    return () => {
+      pointsEarnedListener.remove();
+    };
+  }, [userData]);
 
   // Fetch user data from Sanity
   const fetchUserData = async () => {
@@ -380,12 +431,183 @@ export default function UserProfileScreen() {
     }
   };
 
-  // Handle pull-to-refresh
-  const handleRefresh = useCallback(() => {
+  // Add this new function after fetchUserPosts
+  const fetchUserVideos = async () => {
+    if (!id) return;
+    
+    try {
+      setVideosLoading(true);
+      
+      // Query to get videos by user ID - using author._ref instead of userId
+      const query = `*[_type == "video" && author._ref == $userId] | order(createdAt desc) {
+        _id,
+        title,
+        description,
+        url,
+        "videoUrl": videoFile.asset->url,
+        type,
+        contentType,
+        aspectRatio,
+        points,
+        views,
+        likes,
+        dislikes,
+        "author": author->username,
+        "authorId": author->_id,
+        "authorAvatar": author->profile.avatar,
+        "isVerified": author->username == "admin" || author->username == "moderator",
+        "isBlueVerified": author->isBlueVerified,
+        "thumbnailUrl": thumbnail.asset->url,
+        createdAt,
+        "hasLiked": count(likedBy[_ref == $currentUserId]) > 0
+      }`;
+      
+      const client = getSanityClient();
+      const videos = await client.fetch(query, { 
+        userId: id,
+        currentUserId: currentUser?._id || ''
+      });
+      
+      // Process videos data to match VideoFeed format
+      const processedVideos = videos.map((video: any) => {
+        // Debug log for video thumbnails
+        console.log('Video from Sanity:', { 
+          id: video._id, 
+          thumbURL: video.thumbnailUrl,
+          type: video.type,
+          orientation: video.videoOrientation
+        });
+        
+        return {
+          id: video._id,
+          title: video.title || 'Untitled Video',
+          description: video.description || '',
+          url: video.videoUrl || video.url || '',
+          type: video.type || 'horizontal',
+          aspectRatio: video.aspectRatio || (video.type === 'horizontal' ? 16/9 : 9/16),
+          points: video.points || 0,
+          views: video.views || 0,
+          likes: video.likes || 0,
+          dislikes: video.dislikes || 0,
+          author: video.author || userData?.name || 'Unknown',
+          authorId: video.authorId || id,
+          authorAvatar: video.authorAvatar ? urlFor(video.authorAvatar).url() : userData?.avatar,
+          isVerified: video.isVerified || false,
+          isBlueVerified: video.isBlueVerified || false,
+          thumbnail: video.thumbnailUrl || '',
+          timeAgo: calculateTimeAgo(video.createdAt),
+          hasLiked: video.hasLiked || false
+        };
+      });
+      
+      setUserVideos(processedVideos);
+      console.log(`Loaded ${processedVideos.length} videos for user ${id}`);
+    } catch (error) {
+      console.error('Error fetching user videos:', error);
+    } finally {
+      setVideosLoading(false);
+    }
+  };
+
+  // Modify the handleRefresh function to refresh points specifically
+  const handleRefresh = () => {
     setRefreshing(true);
-    fetchUserData();
-    fetchUserPosts();
-  }, [id]);
+    refreshUserData(true);
+  };
+  
+  // Create a dedicated function to refresh user data with latest points
+  const refreshUserData = async (showLoadingUI = true) => {
+    if (showLoadingUI) {
+      setRefreshing(true);
+      setLoading(true);
+    }
+    
+    try {
+      // Execute all data fetches in parallel
+      await Promise.all([
+        fetchUserData(),
+        fetchUserPosts(),
+        fetchUserVideos()
+      ]);
+      
+      // Make sure we have the user ID
+      if (!id) {
+        console.error('No user ID available for refresh');
+        return;
+      }
+      
+      // Get client from service
+      const client = getSanityClient();
+      if (!client) {
+        console.error('Failed to get Sanity client for refreshing user data');
+        return;
+      }
+      
+      // Fetch latest user data from Sanity including points
+      const userDetail = await client.fetch(`
+        *[_type == "user" && _id == $userId][0] {
+          _id,
+          username,
+          firstName,
+          lastName,
+          email,
+          phone,
+          location,
+          points,
+          createdAt,
+          "avatar": profile.avatar,
+          "bio": profile.bio,
+          "interests": profile.interests,
+          "isVerified": username == "admin" || username == "moderator",
+          "isBlueVerified": isBlueVerified,
+          "postsCount": count(*[_type == "post" && author._ref == $userId]),
+          "likesCount": count(*[_type == "like" && user._ref == $userId]),
+          "followersCount": count(*[_type == "follow" && following._ref == $userId]),
+          "followingCount": count(*[_type == "follow" && follower._ref == $userId])
+        }
+      `, { userId: id });
+      
+      if (userDetail) {
+        console.log("Refreshed user data with latest points:", userDetail.points);
+        
+        // Format the user data with latest points
+        const formattedUser: UserData = {
+          id: userDetail._id,
+          name: userDetail.firstName && userDetail.lastName 
+            ? `${userDetail.firstName} ${userDetail.lastName}`.trim() 
+            : userDetail.username || 'User',
+          username: userDetail.username ? `@${userDetail.username}` : '@user',
+          avatar: userDetail.avatar ? urlFor(userDetail.avatar).url() : 'https://randomuser.me/api/portraits/lego/1.jpg',
+          email: userDetail.email,
+          phone: userDetail.phone,
+          isVerified: userDetail.isVerified || false,
+          isBlueVerified: userDetail.isBlueVerified || false,
+          bio: userDetail.bio || "No bio provided",
+          interests: userDetail.interests || [],
+          location: userDetail.location || 'Unknown location',
+          posts: userDetail.postsCount || 0,
+          likesCount: userDetail.likesCount || 0,
+          followers: userDetail.followersCount || 0,
+          following: userDetail.followingCount || 0,
+          memberSince: userDetail.createdAt 
+            ? formatDate(userDetail.createdAt) 
+            : 'June 2022',
+          points: userDetail.points || 0,
+          badges: generateBadges(userDetail)
+        };
+        
+        // Update user data with fresh info
+        setUserData(formattedUser);
+      }
+    } catch (error) {
+      console.error('Error refreshing user data with latest points:', error);
+    } finally {
+      if (showLoadingUI) {
+        setLoading(false);
+        setRefreshing(false);
+      }
+    }
+  };
 
   // Handle follow/unfollow
   const handleFollowToggle = useCallback(async () => {
@@ -715,6 +937,113 @@ export default function UserProfileScreen() {
 
   const isMyProfile = currentUser?._id === id;
 
+  // Function to render video items in grid view
+  const renderVideoGridItem = ({ item }: { item: any }) => {
+    // Calculate fixed width based on number of columns
+    const calculatedWidth = (windowWidth - (fixedNumColumns + 1) * itemGap) / fixedNumColumns;
+    
+    return (
+      <Pressable 
+        style={[
+          styles.gridItem,
+          {
+            width: calculatedWidth,
+            margin: itemGap / 2,
+            aspectRatio: 0.68, // Make cards slightly taller
+            borderRadius: 10,
+            overflow: 'hidden',
+            backgroundColor: '#111',
+            marginBottom: 16
+          }
+        ]}
+        onPress={() => router.push({
+          pathname: '/video-detail',
+          params: { id: item.id }
+        } as any)}
+      >
+        <View style={{
+          flex: 1,
+          overflow: 'hidden',
+        }}>
+          {/* Thumbnail section */}
+          <View style={{
+            height: '72%', // Slightly increase thumbnail height
+            width: '100%', 
+            backgroundColor: '#222',
+            position: 'relative',
+          }}>
+            {item.thumbnail ? (
+              <Image 
+                source={{ uri: item.thumbnail }} 
+                style={{
+                  width: '100%',
+                  height: '100%',
+                }}
+                resizeMode="cover"
+              />
+            ) : (
+              <View style={{
+                flex: 1,
+                alignItems: 'center',
+                justifyContent: 'center',
+              }}>
+                <Film size={30} color="#666" />
+              </View>
+            )}
+            
+            {/* Play button overlay */}
+            <View style={{
+              position: 'absolute',
+              top: 0,
+              left: 0,
+              right: 0,
+              bottom: 0,
+              alignItems: 'center',
+              justifyContent: 'center',
+              backgroundColor: 'rgba(0,0,0,0.3)',
+            }}>
+              <View style={{
+                width: 48, // Larger play button
+                height: 48,
+                borderRadius: 24,
+                backgroundColor: 'rgba(24, 119, 242, 0.9)',
+                alignItems: 'center',
+                justifyContent: 'center',
+              }}>
+                <Play size={24} color="#FFF" />
+              </View>
+            </View>
+          </View>
+          
+          {/* Video info section */}
+          <View style={{
+            padding: 14,
+            height: '28%',
+            backgroundColor: '#111',
+            justifyContent: 'center',
+          }}>
+            <Text 
+              style={{
+                color: 'white',
+                fontSize: 16, // Larger text
+                fontFamily: 'Inter_600SemiBold',
+                marginBottom: 6,
+              }}
+              numberOfLines={1}
+            >
+              {item.title || 'Untitled Video'}
+            </Text>
+            <Text style={{
+              color: '#888',
+              fontSize: 14, // Larger time text
+              fontFamily: 'Inter_400Regular',
+            }}>{item.timeAgo}</Text>
+          </View>
+        </View>
+      </Pressable>
+    );
+  };
+
   return (
     <View style={[styles.container, { paddingTop: 0 }]}>
       <StatusBar barStyle="light-content" translucent backgroundColor="transparent" />
@@ -746,9 +1075,9 @@ export default function UserProfileScreen() {
                 source={{ uri: userData.avatar }} 
                 style={[styles.headerAvatar, { width: headerAvatarSize, height: headerAvatarSize, borderRadius: headerAvatarSize/2 }]} 
               />
-              <View style={styles.headerTextContainer}>
+              <View style={[styles.headerTextContainer, { flex: 1, flexShrink: 1 }]}>
                 <View style={styles.headerNameContainer}>
-                  <Text style={[styles.headerName, windowWidth > 768 && styles.tabletHeaderText]}>
+                  <Text style={[styles.headerName, windowWidth > 768 && styles.tabletHeaderText, { flexShrink: 1 }]} numberOfLines={1} ellipsizeMode="tail">
                     {userData?.name || 'User'}
                   </Text>
                   <View style={styles.verificationBadges}>
@@ -1086,6 +1415,28 @@ export default function UserProfileScreen() {
               </Text>
             </Pressable>
             
+            {/* Add Videos tab */}
+            <Pressable
+              style={[
+                styles.tabButton,
+                activeTab === 'videos' && styles.activeTabButton,
+                windowWidth > 768 && { paddingVertical: 16 }
+              ]}
+              onPress={() => setActiveTab('videos')}
+            >
+              <Film 
+                size={windowWidth > 768 ? 22 : 18} 
+                color={activeTab === 'videos' ? '#1877F2' : '#888'} 
+              />
+              <Text style={[
+                styles.tabText,
+                activeTab === 'videos' && styles.activeTabText,
+                windowWidth > 768 && { fontSize: 16, marginLeft: 8 }
+              ]}>
+                Videos
+              </Text>
+            </Pressable>
+            
             <Pressable
               style={[
                 styles.tabButton,
@@ -1136,54 +1487,98 @@ export default function UserProfileScreen() {
                 styles.tabIndicator,
                 {
                   left: activeTab === 'posts' ? '0%' : 
-                        activeTab === 'saved' ? '33.33%' : '66.66%',
+                        activeTab === 'videos' ? '25%' :
+                        activeTab === 'saved' ? '50%' : '75%',
                   height: windowWidth > 768 ? 4 : 3,
-                  width: '33.33%'
+                  width: '25%',
+                  opacity: activeTab === 'posts' ? 0 : 1 // Hide indicator for Posts tab
                 }
               ]}
             />
           </View>
           
-          {/* View type toggle */}
-          <View style={[
-            styles.viewToggleContainer,
-            windowWidth > 768 && { top: 10, right: 20 }
-          ]}>
-            <Pressable
-              style={[
-                styles.viewToggleButton,
-                viewType === 'grid' && styles.activeViewToggle,
-                windowWidth > 768 && { paddingVertical: 8, paddingHorizontal: 12 }
-              ]}
-              onPress={() => setViewType('grid')}
-            >
-              <Grid 
-                size={windowWidth > 768 ? 22 : 18} 
-                color={viewType === 'grid' ? '#1877F2' : '#888'} 
-              />
-            </Pressable>
-            
-            <Pressable
-              style={[
-                styles.viewToggleButton,
-                viewType === 'list' && styles.activeViewToggle,
-                windowWidth > 768 && { paddingVertical: 8, paddingHorizontal: 12 }
-              ]}
-              onPress={() => setViewType('list')}
-            >
-              <List 
-                size={windowWidth > 768 ? 22 : 18} 
-                color={viewType === 'list' ? '#1877F2' : '#888'} 
-              />
-            </Pressable>
-          </View>
+          {/* View type toggle - moved outside tab container and made smaller */}
+          {activeTab === 'posts' && (
+            <View style={{
+              flexDirection: 'row',
+              backgroundColor: 'rgba(0,0,0,0.7)',
+              borderRadius: 6,
+              padding: 2,
+              marginHorizontal: 16,
+              marginTop: 12,
+              width: 140,
+              alignSelf: 'center',
+              zIndex: 10,
+              overflow: 'hidden',
+              borderWidth: 1,
+              borderColor: 'rgba(255,255,255,0.1)',
+            }}>
+              <Pressable
+                style={{
+                  flex: 1,
+                  paddingVertical: 6,
+                  paddingHorizontal: 6,
+                  flexDirection: 'row',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  backgroundColor: viewType === 'grid' ? 'rgba(24, 119, 242, 0.8)' : 'transparent',
+                  borderRadius: 4
+                }}
+                onPress={() => setViewType('grid')}
+              >
+                <Grid 
+                  size={16} 
+                  color={viewType === 'grid' ? '#FFFFFF' : '#888'} 
+                />
+                <Text style={{
+                  color: viewType === 'grid' ? '#FFFFFF' : '#888',
+                  marginLeft: 4,
+                  fontFamily: 'Inter_500Medium',
+                  fontSize: 12
+                }}>Grid</Text>
+              </Pressable>
+              
+              <Pressable
+                style={{
+                  flex: 1,
+                  paddingVertical: 6,
+                  paddingHorizontal: 6,
+                  flexDirection: 'row',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  backgroundColor: viewType === 'list' ? 'rgba(24, 119, 242, 0.8)' : 'transparent',
+                  borderRadius: 4
+                }}
+                onPress={() => setViewType('list')}
+              >
+                <List 
+                  size={16} 
+                  color={viewType === 'list' ? '#FFFFFF' : '#888'} 
+                />
+                <Text style={{
+                  color: viewType === 'list' ? '#FFFFFF' : '#888',
+                  marginLeft: 4,
+                  fontFamily: 'Inter_500Medium',
+                  fontSize: 12
+                }}>List</Text>
+              </Pressable>
+            </View>
+          )}
         </View>
         
         {/* Posts loading indicator */}
-        {postsLoading && (
+        {postsLoading && activeTab === 'posts' && (
           <View style={styles.postsLoadingContainer}>
             <ActivityIndicator size={windowWidth > 768 ? "large" : "small"} color="#1877F2" />
             <Text style={[styles.postsLoadingText, windowWidth > 768 && { fontSize: 18 }]}>Loading posts...</Text>
+          </View>
+        )}
+        
+        {/* Videos loading indicator */}
+        {videosLoading && activeTab === 'videos' && (
+          <View style={styles.postsLoadingContainer}>
+            <ActivityIndicator size={windowWidth > 768 ? "large" : "small"} color="#1877F2" />
+            <Text style={[styles.postsLoadingText, windowWidth > 768 && { fontSize: 18 }]}>Loading videos...</Text>
           </View>
         )}
         
@@ -1201,9 +1596,13 @@ export default function UserProfileScreen() {
                   scrollEnabled={false}
                   contentContainerStyle={[
                     styles.gridContainer,
-                    { paddingHorizontal: itemGap / 2 }
+                    { paddingHorizontal: itemGap, paddingTop: 16, paddingBottom: 32 }
                   ]}
-                  columnWrapperStyle={{ justifyContent: 'flex-start' }}
+                  columnWrapperStyle={{ 
+                    justifyContent: 'space-between', 
+                    marginBottom: 20,
+                    paddingHorizontal: itemGap / 2
+                  }}
                 />
               ) : (
                 <FlatList
@@ -1216,6 +1615,56 @@ export default function UserProfileScreen() {
                     { paddingHorizontal: contentPadding }
                   ]}
                 />
+              )
+            ) : activeTab === 'videos' && !videosLoading ? (
+              userVideos.length > 0 ? (
+                <FlatList
+                  data={userVideos}
+                  numColumns={fixedNumColumns}
+                  key={`videos-${columnKey}`}
+                  renderItem={renderVideoGridItem}
+                  keyExtractor={item => item.id}
+                  scrollEnabled={false}
+                  contentContainerStyle={[
+                    styles.gridContainer,
+                    { paddingHorizontal: itemGap, paddingTop: 16, paddingBottom: 32 }
+                  ]}
+                  columnWrapperStyle={{ 
+                    justifyContent: 'space-between', 
+                    marginBottom: 20,
+                    paddingHorizontal: itemGap / 2
+                  }}
+                />
+              ) : (
+                <View style={[
+                  styles.emptyStateContainer,
+                  windowWidth > 768 && { padding: 40 }
+                ]}>
+                  <Film size={windowWidth > 768 ? 60 : 40} color="#333" />
+                  <Text style={[styles.emptyStateTitle, windowWidth > 768 && { fontSize: 24 }]}>No Videos Yet</Text>
+                  <Text style={[
+                    styles.emptyStateText,
+                    windowWidth > 768 && { fontSize: 18, marginBottom: 30 }
+                  ]}>
+                    {isMyProfile 
+                      ? "You haven't uploaded any videos yet. Your videos will appear here."
+                      : `${userData?.name} hasn't uploaded any videos yet.`}
+                  </Text>
+                  {isMyProfile ? (
+                    <Pressable
+                      style={[
+                        styles.emptyStateButton,
+                        windowWidth > 768 && { 
+                          padding: 20,
+                          borderRadius: 12
+                        }
+                      ]}
+                      onPress={() => router.push('/video-upload' as any)}
+                    >
+                      <Text style={[styles.emptyStateButtonText, windowWidth > 768 && { fontSize: 18 }]}>Upload Video</Text>
+                    </Pressable>
+                  ) : null}
+                </View>
               )
             ) : (
               // Empty state content maintained from before
@@ -1643,8 +2092,9 @@ const styles = StyleSheet.create({
   // Grid view
   gridContainer: {
     paddingHorizontal: 1,
-    paddingTop: 8, // Add top padding
-    paddingBottom: 16, // Add bottom padding
+    paddingTop: 8,
+    paddingBottom: 16,
+    gap: 4,
   },
   gridItem: {
     margin: 1,
@@ -1944,6 +2394,7 @@ const styles = StyleSheet.create({
     marginBottom: 1,
     marginTop: 15,
     zIndex: 5,
+    paddingBottom: 8, // Add padding to prevent indicator from reaching bottom
   },
   tabsRow: {
     flexDirection: 'row',
@@ -1958,7 +2409,9 @@ const styles = StyleSheet.create({
     paddingVertical: 12,
   },
   activeTabButton: {
+    // Only add bottom color if not Posts tab
     borderBottomColor: '#1877F2',
+    borderBottomWidth: 0, // Remove default border
   },
   tabText: {
     color: '#888',
@@ -1969,9 +2422,12 @@ const styles = StyleSheet.create({
   activeTabText: {
     color: '#1877F2',
   },
+  activeTabTextPosts: {
+    color: '#1877F2',
+  },
   tabIndicatorContainer: {
     position: 'absolute',
-    bottom: 0,
+    bottom: 8, // Adjust to match the padding of tabsContainer
     left: 0,
     right: 0,
     height: 4,
@@ -1979,7 +2435,7 @@ const styles = StyleSheet.create({
   tabIndicator: {
     position: 'absolute',
     bottom: 0,
-    width: '33.33%',
+    width: '25%', // Change from 33.33% to 25% for 4 tabs
     height: 3,
     backgroundColor: '#1877F2',
   },
@@ -2213,5 +2669,57 @@ const styles = StyleSheet.create({
   },
   verifiedBadgeSmall: {
     marginLeft: 6,
+  },
+  videoContainer: {
+    flex: 1,
+    aspectRatio: 0.9,
+  
+  },
+  thumbnailContainer: {
+    position: 'relative',
+    height: '70%',
+    backgroundColor: '#222',
+  },
+  thumbnail: {
+    width: '100%',
+    height: '100%',
+  },
+  placeholderContainer: {
+    flex: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  playOverlay: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
+    bottom: 0,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: 'rgba(0,0,0,0.3)',
+  },
+  playButton: {
+    width: 32,
+    height: 32,
+    borderRadius: 16,
+    backgroundColor: 'rgba(24, 119, 242, 0.8)',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  videoInfo: {
+    padding: 8,
+    height: '30%',
+  },
+  videoTitle: {
+    color: 'white',
+    fontSize: 14,
+    fontFamily: 'Inter_500Medium',
+    marginBottom: 2,
+  },
+  videoTime: {
+    color: '#888',
+    fontSize: 12,
+    fontFamily: 'Inter_400Regular',
   },
 }); 

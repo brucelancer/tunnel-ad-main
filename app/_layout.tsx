@@ -27,6 +27,8 @@ export default function RootLayout() {
           <Stack.Screen name="screens" />
           <Stack.Screen name="newsfeed-upload" />
           <Stack.Screen name="feedpost-detail" />
+          <Stack.Screen name="insights-likers-detail" />
+          <Stack.Screen name="insights-comment-detail" />
           <Stack.Screen name="+not-found" />
         </Stack>
         <StatusBar style="light" />

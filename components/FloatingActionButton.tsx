@@ -13,6 +13,7 @@ import {
   MessageSquare,
   Plus,
   X,
+  BarChart2,
 } from 'lucide-react-native';
 
 const { width: SCREEN_WIDTH } = Dimensions.get('window');
@@ -139,6 +140,11 @@ export default function FloatingActionButton() {
     router.push("/newsfeed-upload" as any);
   };
 
+  const navigateToFeedInsights = () => {
+    setIsOpen(false);
+    router.push("/feed-insights" as any);
+  };
+
   const rotate = rotateAnim.interpolate({
     inputRange: [0, 1],
     outputRange: ['0deg', '45deg']
@@ -214,6 +220,12 @@ export default function FloatingActionButton() {
           activeOpacity={1}
           onPress={toggleMenu}
         />
+      )}
+
+      {renderActionButton(
+        <BarChart2 color="#FFFFFF" size={22} />,
+        navigateToFeedInsights,
+        3
       )}
 
       {renderActionButton(

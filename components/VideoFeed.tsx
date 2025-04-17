@@ -59,6 +59,7 @@ import {
   Trash2,
   Eye,
   ExternalLink,
+  BarChart2,
 } from 'lucide-react-native';
 import { usePoints } from '../hooks/usePoints';
 import { useReactions } from '../hooks/useReactions';
@@ -1253,7 +1254,7 @@ const VideoItemComponent = memo(({
   onVideoRef, 
   isLocked = false, 
   autoScroll, 
-  toggleAutoScroll,
+  toggleAutoScroll, 
   autoScrollPulse,
   showPremiumAd,
   isTabFocused,
@@ -1611,23 +1612,45 @@ const VideoItemComponent = memo(({
   const handlePlaybackStatusUpdate = async (status: any) => {
     setStatus(status);
     
+    // Skip processing if video isn't loaded
+    if (!status.isLoaded) {
+      return;
+    }
+    
+    // Track video position for progress
+    const position = status.positionMillis || 0;
+    const duration = status.durationMillis || 1;
+    
+    // Check if this video was uploaded by the current user
+    const isOwnVideo = user && item.authorId === user._id;
+    
     // Track view count and trigger animation when countdown reaches zero
-    if (status.isLoaded && 
-        status.positionMillis && 
+    if (status.positionMillis && 
         status.durationMillis && 
         isCurrentVideo && 
         !viewCounted && 
-        !hasEarnedPoints) {
+        !hasEarnedPoints &&
+        !isOwnVideo && 
+        user) { // Skip points for own videos and non-authenticated users
       
       // Calculate remaining time to 50% point (halfway mark)
       const halfwayPoint = status.durationMillis * 0.5;
       const remaining = Math.max(0, halfwayPoint - status.positionMillis);
       const seconds = Math.ceil(remaining / 1000);
       
-      // Update countdown display
-      setRemainingTime(`${seconds}s`);
+      // Show countdown when approaching points threshold (less than 30 seconds)
+      if (seconds <= 30) {
+        setShowStaticPoints(true);
+        
+        // Update countdown display
+        if (seconds > 0) {
+          setRemainingTime(`${seconds}s`);
+        } else {
+          setRemainingTime(null);
+        }
+      }
       
-      // Check if we just reached the countdown end (0 seconds remaining)
+      // Check if we've reached the halfway point
       const hasReachedHalfway = status.positionMillis >= halfwayPoint;
       
       if (hasReachedHalfway) {
@@ -1639,27 +1662,24 @@ const VideoItemComponent = memo(({
         setShowStaticPoints(false);
         
         try {
-          // Get the current user ID from Sanity auth and use type assertion to fix type issues
-          const currentUserId = user?._id;
+          // If user is authenticated, proceed with points
+          const currentUserId = user._id;
           
           // Show points animation IMMEDIATELY when countdown reaches zero
-          // Don't wait for the server call to complete
           setHasEarnedPoints(true);
           setShowPointsAnimation(true);
           
           // Provide haptic feedback for immediate notification
           if (Platform.OS === 'ios' || Platform.OS === 'android') {
             try {
-              // Use stronger haptic feedback for better notification
+              // @ts-ignore: TS complains about the parameter type but this works
               Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
               
-              // Add a small vibration for devices without haptic feedback
               if (Platform.OS === 'android') {
                 Vibration.vibrate(100);
               }
             } catch (e) {
               console.log('Haptics not supported');
-              // Fallback to basic vibration
               Vibration.vibrate(100);
             }
           }
@@ -1667,14 +1687,15 @@ const VideoItemComponent = memo(({
           // Start animation right away
           animatePoints();
           
-          // Update view count in Sanity and track user for points
+          // Update view count and points in Sanity
           const result = await videoService.updateVideoStats(
             item.id, 
             { 
               views: 1,
               points: true // Flag to indicate we want to award points
             },
-            currentUserId as any // Type assertion to bypass TypeScript errors
+            // Use type assertion to satisfy TypeScript
+            currentUserId as any
           );
           
           // Update local count for immediate UI feedback
@@ -1684,9 +1705,11 @@ const VideoItemComponent = memo(({
           if (result.success && result.firstTimeWatch && result.pointsEarned) {
             console.log(`User earned ${result.pointsEarned} points for watching video ${item.id}`);
             
-            // Update points balance in UI with the exact new total from Sanity
-            if (result.newTotalPoints) {
-              // Update the points in the header immediately
+            // Check if we have the accurate updated points total from Sanity
+            if (result.newTotalPoints !== undefined) {
+              console.log(`Updating header with verified points total from Sanity: ${result.newTotalPoints}`);
+              
+              // Update the header display immediately with the confirmed value
               if (updateUserPoints) {
                 updateUserPoints(result.newTotalPoints);
               }
@@ -1696,20 +1719,55 @@ const VideoItemComponent = memo(({
                 amount: result.pointsEarned, 
                 newTotal: result.newTotalPoints,
                 source: 'video', 
-                videoId: item.id 
+                videoId: item.id,
+                verifiedFromSanity: true
               });
+              
+              // Update the user object's points for immediate UI updates
+              if (user) {
+                user.points = result.newTotalPoints;
+              }
             }
           } else if (result.success && !result.firstTimeWatch) {
-            console.log('User already earned points for this video');
+            console.log('User already earned points for this video (verified in Sanity)');
             // Make sure UI shows already watched state
             setHasEarnedPoints(true);
+            setShowPointsAnimation(false);
             setShowStaticPoints(false);
           } else {
-            console.log('Video already watched or no points earned:', result);
+            console.log('Video view counted but no points earned:', result);
           }
         } catch (error) {
-          console.error('Failed to update view count:', error);
+          console.error('Failed to update view count or points in Sanity:', error);
         }
+      }
+    } else if (status.positionMillis && 
+               status.durationMillis && 
+               isCurrentVideo && 
+               !viewCounted && 
+               isOwnVideo) {
+      // For user's own videos, don't update the view count at all
+      const halfwayPoint = status.durationMillis * 0.5;
+      const hasReachedHalfway = status.positionMillis >= halfwayPoint;
+      
+      if (hasReachedHalfway) {
+        // Just mark as viewed to prevent rechecking
+        setViewCounted(true);
+        console.log('Own video viewed, not counting view');
+      }
+    } else if (status.positionMillis && 
+              status.durationMillis && 
+              isCurrentVideo && 
+              !viewCounted && 
+              !user) {
+      // For non-authenticated users, also don't count views
+      const halfwayPoint = status.durationMillis * 0.5;
+      const hasReachedHalfway = status.positionMillis >= halfwayPoint;
+      
+      if (hasReachedHalfway) {
+        // Just mark as viewed to prevent rechecking
+        setViewCounted(true);
+        console.log('Video viewed by non-authenticated user, not counting view');
       }
     }
     
@@ -1761,10 +1819,10 @@ const VideoItemComponent = memo(({
         useNativeDriver: true,
         easing: Easing.out(Easing.cubic)
       }),
-      Animated.timing(pointsScale, {
+        Animated.timing(pointsScale, {
         toValue: 1.3, // Slightly larger scale for more impact
         duration: 150, // Reduced from 200ms
-        useNativeDriver: true,
+          useNativeDriver: true,
         easing: Easing.bezier(0.175, 0.885, 0.32, 1.275) // Bounce effect
       })
     ]).start(() => {
@@ -1895,12 +1953,12 @@ const VideoItemComponent = memo(({
     
     try {
       // Optimistically update UI
-      const newAction = reactions.userAction === 'like' ? null : 'like';
-      setReactions({
-        ...reactions,
-        userAction: newAction,
-        likes: newAction === 'like' ? reactions.likes + 1 : reactions.likes - 1
-      });
+    const newAction = reactions.userAction === 'like' ? null : 'like';
+    setReactions({
+      ...reactions,
+      userAction: newAction,
+      likes: newAction === 'like' ? reactions.likes + 1 : reactions.likes - 1
+    });
       
       // Provide haptic feedback
       Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
@@ -2108,6 +2166,75 @@ const VideoItemComponent = memo(({
     );
   };
 
+  // Effect to hide points UI for own videos
+  useEffect(() => {
+    // Check if this video was uploaded by the current user
+    const isOwnVideo = user && item.authorId === user._id;
+    
+    if (isOwnVideo) {
+      // Hide all points-related UI for own videos
+      setHasEarnedPoints(false);
+      setShowStaticPoints(false);
+      setShowPointsAnimation(false);
+      // Reset remaining time to prevent points countdown
+      setRemainingTime(null);
+    }
+  }, [user, item.authorId]);
+
+  // Function to render points display with different states
+  const renderPointsDisplay = () => {
+    // Check if this video was uploaded by the current user
+    const isOwnVideo = user && item.authorId === user._id;
+    
+    // Don't show points UI for own videos or unauthenticated users
+    if (isOwnVideo || !user) {
+      return null;
+    }
+    
+    // Only show the countdown text if not yet earned points
+    if (!hasEarnedPoints && showStaticPoints && !showPointsAnimation) {
+      return (
+        <View style={styles.staticPoints}>
+          <Text style={styles.staticPointsText}>+{item.points} P</Text>
+          {remainingTime && (
+            <Text style={styles.staticPointsText}>{remainingTime}</Text>
+          )}
+        </View>
+      );
+    } 
+    
+    // Show the points animation if currently displaying
+    if (showPointsAnimation) {
+      return (
+        <Animated.View
+          style={[
+            styles.pointsEarned,
+            {
+              transform: [
+                { translateY: pointsAnimation.interpolate({
+                  inputRange: [0, 75, 150],
+                  outputRange: [0, -75, -150],
+                  extrapolate: 'clamp'
+                })},
+                { scale: pointsScale }
+              ],
+              opacity: pointsAnimation.interpolate({
+                inputRange: [0, 75, 150],
+                outputRange: [1, 1, 0],
+                extrapolate: 'clamp'
+              })
+            }
+          ]}
+        >
+          <Text style={styles.earnedPointsText}>+{item.points} 🎉</Text>
+        </Animated.View>
+      );
+    }
+    
+    // Return null for all other states
+    return null;
+  };
+
   return (
     <View style={[
       styles.videoContainer,
@@ -2184,7 +2311,7 @@ const VideoItemComponent = memo(({
                   </View>
                 )}
               </View>
-            {remainingTime && !hasEarnedPoints && (
+            {remainingTime && !hasEarnedPoints && !(user && item.authorId === user._id) && (
               <View style={styles.countdownWrapper}>
                 <View style={styles.countdownDot} />
                 <Text style={styles.inlineCountdown}>
@@ -2215,22 +2342,36 @@ const VideoItemComponent = memo(({
             <View style={styles.buttonRow}>
                 {(!isFullScreen || fullscreenMode === 0) && (
                   <>
-                    <View style={styles.statsContainer}>
-                      <Eye 
-                        color="white" 
-                        size={SCREEN_WIDTH * 0.04} 
-                        opacity={0.9}
-                      />
-                      <Text style={styles.viewCountText}>
-                        {formatCount(item.views || 0)}
-                      </Text>
-                    </View>
+              <View style={styles.statsContainer}>
+                <Eye 
+                  color="white" 
+                  size={SCREEN_WIDTH * 0.04} 
+                  opacity={0.9}
+                />
+                <Text style={styles.viewCountText}>
+                  {formatCount(item.views || 0)}
+                </Text>
+              </View>
                     
                     {/* Add "Your Post" indicator for user's own videos */}
                     {isOwnVideo && (
                       <View style={styles.yourPostContainer}>
                         <Text style={styles.yourPostText}>Your Post</Text>
                       </View>
+                    )}
+                    
+                    {/* Add insights button for user's own videos */}
+                    {isOwnVideo && (
+                      <Pressable 
+                        style={styles.insightsButton} 
+                        onPress={() => router.push({
+                          pathname: '/video-insights',
+                          params: { id: item.id }
+                        } as any)}
+                        hitSlop={{top: 10, bottom: 10, left: 10, right: 10}}
+                      >
+                        <BarChart2 color="#1877F2" size={SCREEN_WIDTH * 0.05} opacity={0.9} />
+                      </Pressable>
                     )}
                     
                     {/* Add delete button for user's own videos */}
@@ -2244,9 +2385,9 @@ const VideoItemComponent = memo(({
                       </Pressable>
                     )}
                     
-                    <Pressable style={styles.watchFullIconButton} onPress={handleWatchFull}>
-                      <ExternalLink color="white" size={SCREEN_WIDTH * 0.05} opacity={0.9} />
-                    </Pressable>
+              <Pressable style={styles.watchFullIconButton} onPress={handleWatchFull}>
+                <ExternalLink color="white" size={SCREEN_WIDTH * 0.05} opacity={0.9} />
+              </Pressable>
                   </>
                 )}
                 <Pressable 
@@ -2266,7 +2407,7 @@ const VideoItemComponent = memo(({
                   <Minimize color="white" size={SCREEN_WIDTH * 0.05} /> : 
                   <Maximize color="white" size={SCREEN_WIDTH * 0.05} />
                 }
-                </Pressable>
+              </Pressable>
             </View>
           </View>
           )}
@@ -2344,39 +2485,21 @@ const VideoItemComponent = memo(({
                 color="white" 
                 size={Math.max(Math.min(videoSize.height * 0.06, SCREEN_WIDTH * 0.08), 24)} 
               />
-          </Pressable>
-            </View>
-            
+              </Pressable>
+          </View>
+          
           <View style={styles.watchedContainer}>
+            {/* Restore the original check mark icon */}
             {hasEarnedPoints && <CheckCircle color="#00ff00" size={SCREEN_WIDTH * 0.06} />}
-            {showStaticPoints && !showPointsAnimation && (
+            
+            {/* Show points animation if active */}
+            {renderPointsDisplay()}
+            
+            {/* Show static countdown if needed */}
+            {showStaticPoints && !showPointsAnimation && !hasEarnedPoints && (
               <View style={styles.staticPoints}>
-                    <Text style={styles.staticPointsText}>+10 P</Text>
+                <Text style={styles.staticPointsText}>+{item.points} P</Text>
               </View>
-            )}
-            {showPointsAnimation && (
-              <Animated.View
-                style={[
-                  styles.pointsEarned,
-                  {
-                    transform: [
-                      { translateY: pointsAnimation.interpolate({
-                        inputRange: [0, 75, 150],
-                        outputRange: [0, -75, -150],
-                        extrapolate: 'clamp'
-                      })},
-                      { scale: pointsScale }
-                    ],
-                    opacity: pointsAnimation.interpolate({
-                      inputRange: [0, 75, 150],
-                      outputRange: [1, 1, 0],
-                      extrapolate: 'clamp'
-                    })
-                  }
-                ]}
-              >
-                    <Text style={styles.earnedPointsText}>+{item.points} 🎉</Text>
-              </Animated.View>
             )}
           </View>
         </View>
@@ -2547,6 +2670,28 @@ export default function VideoFeed() {
     // Clean up event listener
     return () => {
       pointsEarnedSubscription.remove();
+    };
+  }, []);
+
+  // Listen for authentication state changes to update points
+  useEffect(() => {
+    const authStateChangedSubscription = DeviceEventEmitter.addListener('AUTH_STATE_CHANGED', (event) => {
+      console.log('Authentication state changed in VideoFeed:', event?.isAuthenticated);
+      
+      if (event?.isAuthenticated === true && event?.userData) {
+        // User logged in - set points from the user data
+        const points = event.userData.points || 0;
+        console.log(`User logged in with ${points} points`);
+        setUserPoints(points);
+      } else if (event?.isAuthenticated === false) {
+        // User logged out - reset points to zero
+        console.log('User logged out, resetting points to 0');
+        setUserPoints(0);
+      }
+    });
+    
+    return () => {
+      authStateChangedSubscription.remove();
     };
   }, []);
 
@@ -2740,15 +2885,22 @@ export default function VideoFeed() {
   
   // Add a function to load a specific video by ID
   const loadSpecificVideo = async (id: string | string[]) => {
-    // Ensure id is a string
     const videoId = Array.isArray(id) ? id[0] : id;
-    if (!videoId) return;
+    
+    console.log('Loading specific video:', videoId);
+      setIsLoading(true);
     
     try {
-      const loadedVideo = await videoService.fetchVideos(1, null, null, user._id as any);
-      // Process the loaded video...
+      // If user is null, pass null to fetchVideos but undefined for lastId
+      const userIdToPass = user ? user._id : null;
+      const loadedVideo = await videoService.fetchVideos(1, undefined, null, userIdToPass as any);
+      
+      // Rest of the function remains unchanged
+      // ...
     } catch (error) {
       console.error('Error loading specific video:', error);
+    } finally {
+      setIsLoading(false);
     }
   };
   
@@ -2786,12 +2938,21 @@ export default function VideoFeed() {
       
       // Create a wrapper to handle the type mismatch
       const getVideos = async () => {
-        if (refresh || !lastVideoId) {
-          return await videoService.fetchVideos(20, null, null, userId as any);
+        try {
+          // Use null instead of a string variable for lastVideoId if not needed
+          let queryParams = {};
+          
+          if (lastVideoId) {
+            // Force TypeScript to understand this is what we need
+            const result = await videoService.fetchVideos(20, lastVideoId as any, null, userId as any);
+            return result;
         } else {
-          // Type assertion to string to bypass TypeScript's type checking
-          const id = lastVideoId as string;
-          return await videoService.fetchVideos(20, id, null, userId as any);
+            // Otherwise, pass null
+            return await videoService.fetchVideos(20, null, null, userId as any);
+          }
+        } catch (error) {
+          console.error('Error fetching videos:', error);
+          return [];
         }
       };
       
@@ -4425,6 +4586,61 @@ const styles = StyleSheet.create({
     fontWeight: 'bold',
   },
   deleteVideoButton: {
+    backgroundColor: 'rgba(255, 77, 103, 0.2)',
+    borderRadius: 4,
+    paddingHorizontal: 8,
+    paddingVertical: 4,
     marginRight: 10,
+  },
+  pointsAnimationContainer: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginBottom: 5,
+  },
+  pointsAnimationText: {
+    color: '#FFD700',
+    fontSize: 14,
+    fontWeight: 'bold',
+    marginLeft: 5,
+  },
+  pointsEarnedBadge: {
+    backgroundColor: 'rgba(255, 255, 255, 0.2)',
+    borderRadius: 10,
+    padding: 5,
+    marginRight: 5,
+  },
+  pointsCountdownContainer: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginBottom: 5,
+  },
+  pointsCountdownText: {
+    color: '#FFD700',
+    fontSize: 14,
+    fontWeight: 'bold',
+    marginLeft: 5,
+  },
+  pointsContainer: {
+    position: 'absolute',
+    right: 16,
+    top: 0,
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: 'rgba(0, 0, 0, 0.5)',
+    paddingHorizontal: 10,
+    paddingVertical: 5,
+    borderRadius: 20,
+  },
+  insightsButton: {
+    backgroundColor: 'rgba(0, 112, 243, 0.2)',
+    borderRadius: 4,
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    marginRight: 10,
+  },
+  insightsButtonText: {
+    color: '#1877F2',
+    fontSize: 12,
+    fontWeight: 'bold',
   },
 });
