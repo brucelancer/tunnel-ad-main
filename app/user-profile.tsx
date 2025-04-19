@@ -173,7 +173,7 @@ export default function UserProfileScreen() {
   // Animation values
   const scrollY = useRef(new Animated.Value(0)).current;
   const headerHeightValue = windowWidth > 768 ? 350 : 300;
-  const collapsedHeaderHeight = windowWidth > 768 ? 100 : 80;
+  const collapsedHeaderHeight = windowWidth > 768 ? 120 : 100; // Increased from 100/80
   const headerHeight = scrollY.interpolate({
     inputRange: [0, 200],
     outputRange: [headerHeightValue, collapsedHeaderHeight],
@@ -257,7 +257,7 @@ export default function UserProfileScreen() {
     };
   }, [userData]);
 
-  // Fetch user data from Sanity
+  // Modify the fetchUserData function to properly check the following status
   const fetchUserData = async () => {
     try {
       setLoading(true);
@@ -326,16 +326,23 @@ export default function UserProfileScreen() {
       
       setUserData(formattedUser);
       
-      // Check if current user is following this user
+      // Check if current user is following this user - Important fix for persistence
       if (currentUser?._id) {
-        const isFollowing = await client.fetch(`
-          count(*[_type == "follow" && follower._ref == $currentUserId && following._ref == $userId]) > 0
-        `, { 
-          currentUserId: currentUser._id,
-          userId: id 
-        });
-        
-        setFollowing(isFollowing);
+        try {
+          // Use a direct count query for better performance
+          const isFollowingResult = await client.fetch(`
+            count(*[_type == "follow" && follower._ref == $currentUserId && following._ref == $userId]) > 0
+          `, { 
+            currentUserId: currentUser._id,
+            userId: id 
+          });
+          
+          console.log('Follow status check result:', isFollowingResult);
+          setFollowing(isFollowingResult || false);
+        } catch (followError) {
+          console.error('Error checking follow status:', followError);
+          setFollowing(false);
+        }
       }
     } catch (error) {
       console.error('Error fetching user details:', error);
@@ -344,6 +351,33 @@ export default function UserProfileScreen() {
       setRefreshing(false);
     }
   };
+
+  // Also add a useEffect to ensure we recheck the follow status when currentUser changes
+  useEffect(() => {
+    if (currentUser?._id && id) {
+      // Check follow status if we have both logged in user and profile user IDs
+      const checkFollowStatus = async () => {
+        try {
+          const client = getSanityClient();
+          if (!client) return;
+          
+          const isFollowingResult = await client.fetch(`
+            count(*[_type == "follow" && follower._ref == $currentUserId && following._ref == $userId]) > 0
+          `, { 
+            currentUserId: currentUser._id,
+            userId: id 
+          });
+          
+          console.log('Follow status updated:', isFollowingResult);
+          setFollowing(isFollowingResult || false);
+        } catch (err) {
+          console.error('Error checking follow status on user change:', err);
+        }
+      };
+      
+      checkFollowStatus();
+    }
+  }, [currentUser, id]);
 
   // Fetch user posts
   const fetchUserPosts = async () => {
@@ -609,21 +643,28 @@ export default function UserProfileScreen() {
     }
   };
 
-  // Handle follow/unfollow
+  // Modify the handleFollowToggle function to update UI immediately before the API call completes
   const handleFollowToggle = useCallback(async () => {
     if (!currentUser || !id) return;
     
     try {
+      // Immediately update UI to show toggle action
+      setFollowing(prevState => !prevState);
+      
+      // Immediately update followers count to reflect the change
+      setUserData(prevData => {
+        if (!prevData) return null;
+        const followersDelta = following ? -1 : 1; // Decrease if unfollowing, increase if following
+        return {
+          ...prevData,
+          followers: (prevData.followers || 0) + followersDelta
+        };
+      });
+      
       const client = getSanityClient();
       if (!client) return;
       
-      if (following) {
-        // Unfollow user
-        await client.delete({
-          query: `*[_type == "follow" && follower._ref == $currentUserId && following._ref == $userId][0]`,
-          params: { currentUserId: currentUser._id, userId: id }
-        });
-      } else {
+      if (!following) { // Was previously not following, now following
         // Follow user
         await client.create({
           _type: 'follow',
@@ -631,14 +672,36 @@ export default function UserProfileScreen() {
           following: { _type: 'reference', _ref: id as string },
           createdAt: new Date().toISOString()
         });
+      } else { // Was previously following, now unfollowing
+        // Unfollow user
+        await client.delete({
+          query: `*[_type == "follow" && follower._ref == $currentUserId && following._ref == $userId][0]`,
+          params: { currentUserId: currentUser._id, userId: id }
+        });
       }
       
-      setFollowing(!following);
+      // If API call fails, we'll reset to actual data in the catch block
       
-      // Update user data with new followers count
-      fetchUserData();
+      // For a smoother UX, don't refresh entire profile data which can cause UI flicker
+      // Just let the local state update handle the immediate feedback
     } catch (error) {
       console.error('Error toggling follow status:', error);
+      
+      // If there was an error, revert UI changes
+      setFollowing(prevState => !prevState);
+      
+      // Revert followers count as well
+      setUserData(prevData => {
+        if (!prevData) return null;
+        const followersDelta = following ? 1 : -1; // Restore previous count
+        return {
+          ...prevData,
+          followers: (prevData.followers || 0) + followersDelta
+        };
+      });
+      
+      // Show error toast or message
+      // If you have a toast notification system, you could use it here
     }
   }, [currentUser, id, following]);
 
@@ -1059,8 +1122,8 @@ export default function UserProfileScreen() {
           }
         ]}
       >
-        <BlurView intensity={80} style={StyleSheet.absoluteFill} />
-        <View style={[styles.headerContent, windowWidth > 768 && styles.tabletHeaderContent]}>
+        <BlurView intensity={100} style={StyleSheet.absoluteFill} /> {/* Increased blur intensity from 80 to 100 */}
+        <View style={[styles.headerContent, windowWidth > 768 && styles.tabletHeaderContent, {paddingTop: Platform.OS === 'ios' ? 55 : 25}]}>
           <Pressable
             style={styles.backButton}
             onPress={() => router.back()}
@@ -1070,28 +1133,21 @@ export default function UserProfileScreen() {
           </Pressable>
           
           {userData && (
-            <View style={styles.headerUserInfo}>
+            <View style={[styles.headerUserInfo, {flex: 1, paddingHorizontal: 12}]}>
               <Image 
                 source={{ uri: userData.avatar }} 
                 style={[styles.headerAvatar, { width: headerAvatarSize, height: headerAvatarSize, borderRadius: headerAvatarSize/2 }]} 
               />
-              <View style={[styles.headerTextContainer, { flex: 1, flexShrink: 1 }]}>
+              <View style={[styles.headerTextContainer, { flex: 1, flexShrink: 1, paddingHorizontal: 8 }]}>
                 <View style={styles.headerNameContainer}>
                   <Text style={[styles.headerName, windowWidth > 768 && styles.tabletHeaderText, { flexShrink: 1 }]} numberOfLines={1} ellipsizeMode="tail">
                     {userData?.name || 'User'}
                   </Text>
-                  <View style={styles.verificationBadges}>
-                    {userData?.isBlueVerified && (
-                      <View style={styles.blueVerifiedBadge}>
-                        <TunnelVerifiedMark size={windowWidth > 768 ? 14 : 12} />
-                      </View>
-                    )}
-                    {userData?.isVerified && !userData?.isBlueVerified && (
-                      <View style={styles.verifiedBadge}>
-                        <TunnelVerifiedMark size={windowWidth > 768 ? 14 : 12} />
-                      </View>
-                    )}
-                  </View>
+                  {(userData?.isVerified || userData?.isBlueVerified) && (
+                    <View style={{ marginLeft: 4 }}>
+                      <TunnelVerifiedMark size={windowWidth > 768 ? 14 : 12} />
+                    </View>
+                  )}
                 </View>
                 <Text style={[styles.headerUsername, windowWidth > 768 && { fontSize: 14 }]}>{userData.username}</Text>
               </View>
@@ -1141,29 +1197,35 @@ export default function UserProfileScreen() {
             styles.coverContainer,
             { 
               opacity: imageOpacity,
-              height: windowWidth > 768 ? 480 : 440, // Further increase height
+              height: windowWidth > 768 ? 480 : 440,
               marginTop: 0,
               marginBottom: 10,
               top: 0,
               left: 0,
               right: 0,
+              backgroundColor: '#000', // Solid black background only
             }
           ]}
         >
-          <LinearGradient
-            colors={['rgba(24, 119, 242, 0.8)', 'rgba(0, 0, 0, 0.9)']}
-            style={styles.coverGradient}
-          />
+          {/* Add solid black background */}
+          <View style={[styles.coverBackground, { 
+            ...StyleSheet.absoluteFillObject,
+            backgroundColor: '#000',
+          }]} />
+          
+          {/* Remove gradient for top half */}
           
           <View style={[
             styles.profileSection, 
             { 
               marginTop: windowWidth > 768 ? 110 : 90,
               paddingHorizontal: contentPadding,
-              paddingBottom: 120 // Increase bottom padding even more
+              paddingBottom: 120,
+              backgroundColor: 'transparent',
+              zIndex: 2, // Ensure content appears above gradient and background
             }
           ]}>
-            <View style={styles.avatarContainer}>
+            <View style={[styles.avatarContainer, { flexDirection: 'row', alignItems: 'center' }]}>
               <Image 
                 source={{ uri: userData?.avatar }} 
                 style={[
@@ -1177,33 +1239,33 @@ export default function UserProfileScreen() {
                   }
                 ]}
               />
+              <View style={{ marginLeft: 16 }}>
+                <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+                  <Text style={[styles.userName, { 
+                    fontSize: windowWidth > 768 ? 26 : 22, 
+                    color: 'white',
+                    fontFamily: 'Inter_700Bold'
+                  }]}>{userData?.name}</Text>
+                  {(userData?.isVerified || userData?.isBlueVerified) && (
+                    <View style={{ marginLeft: -3 }}>
+                      <TunnelVerifiedMark size={windowWidth > 768 ? 20 : 18} />
+                    </View>
+                  )}
+                </View>
+                <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+                  <Text style={[styles.userUsername, { 
+                    fontSize: windowWidth > 768 ? 18 : 16, 
+                    color: '#AAA',
+                    fontFamily: 'Inter_500Medium'
+                  }]}>{userData?.username}</Text>
+                </View>
+              </View>
             </View>
             
             <View style={[styles.userInfoContainer, windowWidth > 768 && { paddingHorizontal: 16 }]}>
-              {/* Restore name, username and bio sections */}
-              <View style={styles.nameContainer}>
-                <Text style={[styles.userName, { fontSize: nameTextSize }]}>{userData?.name}</Text>
-                {(userData?.isVerified || userData?.isBlueVerified) && (
-                  <View style={[
-                    styles.nameBadgeContainer,
-                    { 
-                      backgroundColor: 'transparent',
-                      marginLeft: windowWidth > 768 ? 12 : 8,
-                      padding: 2,
-                      alignItems: 'center',
-                      justifyContent: 'center',
-                    }
-                  ]}>
-                    <TunnelVerifiedMark size={windowWidth > 768 ? 24 : 20} />
-                  </View>
-                )}
-              </View>
-              <Text style={[styles.userUsername, windowWidth > 768 && { fontSize: 18 }]}>{userData?.username}</Text>
-              
-              {/* Bio */}
+              {/* Remove duplicate name and username and just keep bio section */}
               {userData?.bio && (
-                <TypingAnimatedText 
-                  text={userData.bio}
+                <Text 
                   style={[
                     styles.userBio, 
                     windowWidth > 768 && { fontSize: 16, lineHeight: 24 },
@@ -1211,14 +1273,15 @@ export default function UserProfileScreen() {
                       marginTop: 12, 
                       marginBottom: 16,
                       color: '#FFF',
-                      backgroundColor: 'rgba(0,0,0,0.5)',
+                      backgroundColor: 'transparent', // Removed background
                       padding: 12,
-                      borderRadius: 8,
-                      borderWidth: 1,
-                      borderColor: 'rgba(255,255,255,0.1)',
+                      borderRadius: 0, // Removed border radius
+                      borderWidth: 0, // Removed border
                     }
                   ]}
-                />
+                >
+                  {userData.bio}
+                </Text>
               )}
               
               {/* Location and join date */}
@@ -1242,6 +1305,101 @@ export default function UserProfileScreen() {
                   <Text style={[styles.userMetaText, windowWidth > 768 && { fontSize: 15 }]}>
                     Joined {userData?.memberSince}
                   </Text>
+                </View>
+                
+                {userData?.interests && userData.interests.length > 0 && (
+                  <View style={styles.userMetaItem}>
+                    <Award size={windowWidth > 768 ? 16 : 14} color="#888" />
+                    <Text style={[styles.userMetaText, windowWidth > 768 && { fontSize: 15 }]}>
+                      Interests: {userData.interests.slice(0, 3).join(', ')}
+                      {userData.interests.length > 3 && ' and more'}
+                    </Text>
+                  </View>
+                )}
+              </View>
+              
+  
+              <View style={{
+                marginTop: 12,
+                marginBottom: 16,
+                paddingVertical: 8,
+                borderTopWidth: 0.5,
+                borderBottomWidth: 0.5,
+                borderTopColor: 'rgba(255, 255, 255, 0.1)',
+                borderBottomColor: 'rgba(255, 255, 255, 0.1)'
+              }}>
+                <View style={{
+                  flexDirection: 'row',
+                  alignItems: 'center',
+                }}>
+                  <View style={{ marginRight: 20 }}>
+                    <Text>
+                      <Text style={{
+                        color: 'white',
+                        fontSize: windowWidth > 768 ? 18 : 16,
+                        fontFamily: 'Inter_700Bold',
+                      }}>{userData?.posts || '0'}</Text>
+                      <Text style={{
+                        color: '#8899A6',
+                        fontSize: windowWidth > 768 ? 15 : 13,
+                        fontFamily: 'Inter_400Regular',
+                      }}> Posts</Text>
+                    </Text>
+                  </View>
+                  
+                  <Pressable 
+                    style={{ marginRight: 20 }}
+                    onPress={() => router.push({
+                      pathname: "/following" as any,
+                      params: { id: userData?.id }
+                    })}
+                  >
+                    <Text>
+                      <Text style={{
+                        color: 'white',
+                        fontSize: windowWidth > 768 ? 18 : 16,
+                        fontFamily: 'Inter_700Bold',
+                      }}>{userData?.following || '0'}</Text>
+                      <Text style={{
+                        color: '#8899A6',
+                        fontSize: windowWidth > 768 ? 15 : 13,
+                        fontFamily: 'Inter_400Regular',
+                      }}> Following</Text>
+                    </Text>
+                  </Pressable>
+                  
+                  <Pressable 
+                    style={{ marginRight: 20 }}
+                    onPress={openFollowersModal}
+                  >
+                    <Text>
+                      <Text style={{
+                        color: 'white',
+                        fontSize: windowWidth > 768 ? 18 : 16,
+                        fontFamily: 'Inter_700Bold',
+                      }}>{userData?.followers || '0'}</Text>
+                      <Text style={{
+                        color: '#8899A6',
+                        fontSize: windowWidth > 768 ? 15 : 13,
+                        fontFamily: 'Inter_400Regular',
+                      }}> Followers</Text>
+                    </Text>
+                  </Pressable>
+                  
+                  <View>
+                    <Text>
+                      <Text style={{
+                        color: 'white',
+                        fontSize: windowWidth > 768 ? 18 : 16,
+                        fontFamily: 'Inter_700Bold',
+                      }}>{userData?.likesCount || '0'}</Text>
+                      <Text style={{
+                        color: '#8899A6',
+                        fontSize: windowWidth > 768 ? 15 : 13,
+                        fontFamily: 'Inter_400Regular',
+                      }}> Likes</Text>
+                    </Text>
+                  </View>
                 </View>
               </View>
               
@@ -1316,80 +1474,6 @@ export default function UserProfileScreen() {
             </View>
           </View>
         </Animated.View>
-        
-        {/* Social Stats section */}
-        <View style={[styles.socialStatsSection, { 
-          marginHorizontal: contentPadding,
-          marginBottom: 20,
-        }]}>
-          <Text style={styles.socialStatsTitle}>Social Stats</Text>
-          
-          <View style={styles.socialStatsGrid}>
-            <View style={styles.socialStatItem}>
-              <View style={[styles.socialStatIconContainer, { backgroundColor: 'rgba(24, 119, 242, 0.15)' }]}>
-                <LayoutGrid size={windowWidth > 768 ? 20 : 16} color="#1877F2" />
-              </View>
-              <View style={styles.socialStatTextContainer}>
-                <Text style={styles.socialStatValue}>{userData?.posts || '0'}</Text>
-                <Text style={styles.socialStatLabel}>Posts</Text>
-              </View>
-            </View>
-            
-            <View style={styles.socialStatItem}>
-              <View style={[styles.socialStatIconContainer, { backgroundColor: 'rgba(255, 59, 48, 0.15)' }]}>
-                <Heart size={windowWidth > 768 ? 20 : 16} color="#FF3B30" />
-              </View>
-              <View style={styles.socialStatTextContainer}>
-                <Text style={styles.socialStatValue}>{userData?.likesCount || '0'}</Text>
-                <Text style={styles.socialStatLabel}>Likes</Text>
-              </View>
-            </View>
-            
-            <Pressable 
-              style={styles.socialStatItem}
-              onPress={openFollowersModal}
-            >
-              <View style={[styles.socialStatIconContainer, { backgroundColor: 'rgba(0, 122, 255, 0.15)' }]}>
-                <UserPlus size={windowWidth > 768 ? 20 : 16} color="#007AFF" />
-              </View>
-              <View style={styles.socialStatTextContainer}>
-                <Text style={styles.socialStatValue}>{userData?.followers || '0'}</Text>
-                <Text style={styles.socialStatLabel}>Followers</Text>
-              </View>
-            </Pressable>
-            
-            <View style={styles.socialStatItem}>
-              <View style={[styles.socialStatIconContainer, { backgroundColor: 'rgba(52, 199, 89, 0.15)' }]}>
-                <UserPlus size={windowWidth > 768 ? 20 : 16} color="#34C759" />
-              </View>
-              <View style={styles.socialStatTextContainer}>
-                <Text style={styles.socialStatValue}>{userData?.following || '0'}</Text>
-                <Text style={styles.socialStatLabel}>Following</Text>
-              </View>
-            </View>
-          </View>
-        </View>
-        
-        {/* Interests section */}
-        {userData?.interests && userData.interests.length > 0 && (
-          <View style={[styles.interestsSection, { paddingHorizontal: contentPadding }]}>
-            <Text style={[styles.sectionTitle, { color: '#1877F2', fontSize: windowWidth > 768 ? 18 : 16 }]}>Interests</Text>
-            <View style={styles.tagsContainer}>
-              {userData.interests.map((interest, index) => (
-                <View key={index} style={[
-                  styles.tagItem,
-                  windowWidth > 768 && { 
-                    paddingVertical: 8,
-                    paddingHorizontal: 16,
-                    borderRadius: 20,
-                  }
-                ]}>
-                  <Text style={[styles.tagText, windowWidth > 768 && { fontSize: 14 }]}>{interest}</Text>
-                </View>
-              ))}
-            </View>
-          </View>
-        )}
         
         {/* Content tabs */}
         <View style={styles.tabsContainer}>
@@ -1926,6 +2010,11 @@ const styles = StyleSheet.create({
     ...StyleSheet.absoluteFillObject,
     top: 0, // Ensure it starts from the very top
   },
+  coverBackground: {
+    ...StyleSheet.absoluteFillObject,
+    top: 0,
+    backgroundColor: '#000',
+  },
   profileSection: {
     marginTop: 110,
     paddingHorizontal: 16,
@@ -2038,7 +2127,7 @@ const styles = StyleSheet.create({
   },
   actionButton: {
     height: 40,
-    borderRadius: 20,
+    borderRadius: 8, // Reduced from 20 to 8 for less roundness
     justifyContent: 'center',
     alignItems: 'center',
     paddingHorizontal: 20,
@@ -2721,5 +2810,15 @@ const styles = StyleSheet.create({
     color: '#888',
     fontSize: 12,
     fontFamily: 'Inter_400Regular',
+  },
+  socialStatsRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    width: '100%'
+  },
+  socialStatText: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    padding: 10,
   },
 }); 

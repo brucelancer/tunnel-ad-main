@@ -9,6 +9,7 @@ import {
   StatusBar,
 } from 'react-native';
 import { BlurView } from 'expo-blur';
+import {BannerAd, BannerAdSize, TestIds } from 'react-native-google-mobile-ads';
 import { usePoints } from '@/hooks/usePoints';
 import { 
   DollarSign,
@@ -99,7 +100,17 @@ export default function PointsAboutScreen() {
           <Text style={styles.balanceLabel}>Available Points</Text>
           <Text style={styles.balanceValue}>{points}</Text>
         </View>
-
+          <BannerAd
+          unitId={TestIds.BANNER}
+          size={BannerAdSize.ANCHORED_ADAPTIVE_BANNER}
+          requestOptions={{
+            requestNonPersonalizedAdsOnly: true,
+            networkExtras: {
+              collapsible: "bottom",
+            },
+          }}
+          
+          />
         {/* Exchange Rate Info */}
         <View style={styles.infoSection}>
           <View style={styles.exchangeInfo}>
