@@ -48,7 +48,8 @@ import {
   Clock,
   AlertTriangle,
   Play, // Add Play icon for videos
-  BarChart2 // Add BarChart2 icon for insights
+  BarChart2, // Add BarChart2 icon for insights
+  Pause // Add Pause icon for toggling video playback
 } from 'lucide-react-native';
 import { usePostFeed } from '@/app/hooks/usePostFeed';
 import { PinchGestureHandler, State, GestureHandlerRootView } from 'react-native-gesture-handler';
@@ -60,6 +61,8 @@ import { eventEmitter } from '../app/utils/eventEmitter';
 // Import videoService to fetch videos
 import videoService from '@/tunnel-ad-main/services/videoService.js';
 import * as postService from '@/tunnel-ad-main/services/postService';
+// Import Video from expo-av for video playback
+import { Video, ResizeMode } from 'expo-av';
 
 const { width: SCREEN_WIDTH, height: SCREEN_HEIGHT } = Dimensions.get('window');
 
@@ -223,6 +226,31 @@ const TunnelVerifiedMark = ({ size = 10 }) => (
     />
   </Svg>
 );
+
+// Add a blue verified mark variant
+const TunnelBlueVerifiedMark = ({ size = 10 }) => {
+  // Calculate a responsive size based on screen width
+  const responsiveSize = SCREEN_WIDTH * 0.03 > 12 ? SCREEN_WIDTH * 0.03 : 12;
+  
+  return (
+    <Svg 
+      width={responsiveSize * 1.8} 
+      height={responsiveSize * 1.8} 
+      viewBox="0 0 24 24" 
+      fill="none"
+    >
+      <Path 
+        d="M12 2L14 5.1L17.5 3.5L17 7.3L21 8L18.9 11L21 14L17 14.7L17.5 18.5L14 16.9L12 20L10 16.9L6.5 18.5L7 14.7L3 14L5.1 11L3 8L7 7.3L6.5 3.5L10 5.1L12 2Z" 
+        fill="#1877F2" 
+      />
+      <Path 
+        d="M10 13.17l-2.59-2.58L6 12l4 4 8-8-1.41-1.42L10 13.17z" 
+        fill="#FFFFFF" 
+        strokeWidth="0"
+      />
+    </Svg>
+  );
+};
 
 // User Profile Popup component
 interface UserProfilePopupProps {
@@ -799,6 +827,10 @@ export default function Feed() {
   const [videos, setVideos] = useState<VideoItem[]>([]);
   const [loadingVideos, setLoadingVideos] = useState(false);
   
+  // Add state to track which video is currently playing
+  const [playingVideoId, setPlayingVideoId] = useState<string | null>(null);
+  const videoRefs = useRef<{[key: string]: any}>({});
+  
   // State for menu actions
   const [menuVisible, setMenuVisible] = useState(false);
   const [selectedPostId, setSelectedPostId] = useState<string>('');
@@ -1223,6 +1255,12 @@ export default function Feed() {
 
   // Navigate to video feed with the selected video
   const navigateToVideoFeed = (video: VideoItem) => {
+    // Stop any currently playing video before navigation
+    if (playingVideoId && videoRefs.current[playingVideoId]) {
+      videoRefs.current[playingVideoId].stopAsync();
+    }
+    setPlayingVideoId(null);
+    
     // Navigate to the correct video screen path based on the app structure
     router.push({
       pathname: "/video-detail" as any,
@@ -1231,6 +1269,45 @@ export default function Feed() {
         autoPlay: 'true'
       }
     });
+  };
+  
+  // Handle play button press to play/pause video
+  const handlePlayButtonPress = async (video: VideoItem) => {
+    try {
+      // If this video is already playing, pause it and reset state
+      if (playingVideoId === video.id && videoRefs.current[video.id]) {
+        await videoRefs.current[video.id].pauseAsync();
+        setPlayingVideoId(null);
+        return;
+      }
+      
+      // If another video is playing, stop it first
+      if (playingVideoId && videoRefs.current[playingVideoId]) {
+        await videoRefs.current[playingVideoId].stopAsync();
+      }
+      
+      // Set this video as the currently playing video immediately
+      setPlayingVideoId(video.id);
+      
+      // Add a small delay to ensure ref is available after state update
+      setTimeout(async () => {
+        if (videoRefs.current[video.id]) {
+          // Make sure the video is loaded and then play it
+          const status = await videoRefs.current[video.id].getStatusAsync();
+          if (status.isLoaded) {
+            await videoRefs.current[video.id].playAsync();
+          } else {
+            // If not loaded, first load it then play
+            await videoRefs.current[video.id].loadAsync(
+              { uri: video.url },
+              { shouldPlay: true }
+            );
+          }
+        }
+      }, 50);
+    } catch (error) {
+      console.error('Error playing video:', error);
+    }
   };
 
   // Handle post interactions using Sanity (if user is authenticated) or local state
@@ -1583,8 +1660,10 @@ export default function Feed() {
           <View style={styles.userInfo}>
             <View style={styles.nameContainer}>
               <Text style={styles.userName}>{item.user.name}</Text>
-              {isVerified && (
-                <View style={[styles.verifiedBadge, item.user.isBlueVerified && styles.blueVerifiedBadge]}>
+              {item.user.isBlueVerified ? (
+                <TunnelBlueVerifiedMark size={14} />
+              ) : item.user.isVerified && (
+                <View style={styles.verifiedBadge}>
                   <TunnelVerifiedMark size={14} />
                 </View>
               )}
@@ -1900,6 +1979,8 @@ export default function Feed() {
     const thumbnailUrl = item.thumbnail || 
                          `https://i.imgur.com/${item.type === 'horizontal' ? '8LWOKjz' : '6kYnVGf'}.png`;
     
+    const isPlaying = playingVideoId === item.id;
+    
     return (
       <View style={[styles.postContainer, { width: cardWidth }]}>
         {/* Video author info */}
@@ -1911,8 +1992,10 @@ export default function Feed() {
           <View style={styles.userInfo}>
             <View style={styles.nameContainer}>
               <Text style={styles.userName}>{item.author || 'Unknown Author'}</Text>
-              {(item.isVerified || item.isBlueVerified) && (
-                <View style={[styles.verifiedBadge, item.isBlueVerified && styles.blueVerifiedBadge]}>
+              {item.isBlueVerified ? (
+                <TunnelBlueVerifiedMark size={14} />
+              ) : item.isVerified && (
+                <View style={styles.verifiedBadge}>
                   <TunnelVerifiedMark size={14} />
                 </View>
               )}
@@ -1921,21 +2004,47 @@ export default function Feed() {
           </View>
         </View>
         
-        {/* Video preview */}
-        <Pressable onPress={() => navigateToVideoFeed(item)}>
-          <View style={styles.videoPreviewContainer}>
-            <Image 
-              source={{ uri: thumbnailUrl }} 
-              style={styles.videoThumbnail} 
+        {/* Video preview or player */}
+        <View style={styles.videoPreviewContainer}>
+          {isPlaying ? (
+            <Video
+              ref={ref => { videoRefs.current[item.id] = ref; }}
+              source={{ uri: item.url }}
+              style={styles.videoPlayer}
+              useNativeControls={true}
+              resizeMode={ResizeMode.CONTAIN}
+              isLooping={false}
+              shouldPlay={true}
+              posterSource={{ uri: thumbnailUrl }}
+              usePoster={true}
+              progressUpdateIntervalMillis={200}
+              onPlaybackStatusUpdate={(status) => {
+                if (status.isLoaded && status.positionMillis > 0 && status.positionMillis === status.durationMillis) {
+                  setPlayingVideoId(null);
+                }
+              }}
             />
-            <View style={styles.videoPlayButton}>
-              <Play color="white" size={40} fill="white" />
-            </View>
-            <View style={styles.videoDurationBadge}>
-              <Text style={styles.videoDurationText}>Video</Text>
-            </View>
-          </View>
-          
+          ) : (
+            <>
+              <Image 
+                source={{ uri: thumbnailUrl }} 
+                style={styles.videoThumbnail} 
+              />
+              <Pressable 
+                style={styles.videoPlayButton}
+                onPress={() => handlePlayButtonPress(item)}
+              >
+                <Play color="white" size={40} fill="white" />
+              </Pressable>
+              <View style={styles.videoDurationBadge}>
+                <Text style={styles.videoDurationText}>Video</Text>
+              </View>
+            </>
+          )}
+        </View>
+        
+        {/* Video title and description - clickable to navigate to detail page */}
+        <Pressable onPress={() => navigateToVideoFeed(item)}>
           <Text style={styles.videoTitle}>{item.title || 'Untitled Video'}</Text>
           <Text style={styles.videoDescription} numberOfLines={2}>{item.description || 'No description'}</Text>
         </Pressable>
@@ -1955,13 +2064,23 @@ export default function Feed() {
               <MessageCircle size={20} color="#888" />
               <Text style={styles.actionText}>{formatCount(item.comments || 0)}</Text>
             </Pressable>
-            <Pressable 
-              style={styles.actionButton}
-              onPress={() => navigateToVideoFeed(item)}
-            >
-              <Play size={20} color="#1877F2" fill="#1877F2" />
-              <Text style={[styles.actionText, { color: '#1877F2' }]}>Watch</Text>
-            </Pressable>
+            {isPlaying ? (
+              <Pressable 
+                style={styles.actionButton}
+                onPress={() => handlePlayButtonPress(item)}
+              >
+                <Pause size={20} color="#1877F2" fill="#1877F2" />
+                <Text style={[styles.actionText, { color: '#1877F2' }]}>Pause</Text>
+              </Pressable>
+            ) : (
+              <Pressable 
+                style={styles.actionButton}
+                onPress={() => handlePlayButtonPress(item)}
+              >
+                <Play size={20} color="#1877F2" fill="#1877F2" />
+                <Text style={[styles.actionText, { color: '#1877F2' }]}>Play</Text>
+              </Pressable>
+            )}
           </View>
         </View>
       </View>
@@ -2585,7 +2704,7 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
   blueVerifiedBadge: {
-    backgroundColor: 'transparent',
+    backgroundColor: '#1877F2',
   },
   userHandle: {
     color: '#777',
@@ -3268,6 +3387,11 @@ const styles = StyleSheet.create({
     marginLeft: 4,
     fontSize: 14,
     fontFamily: 'Inter_500Medium',
+  },
+  videoPlayer: {
+    width: '100%',
+    aspectRatio: 16/9,
+    borderRadius: 12,
   },
 
 }); 

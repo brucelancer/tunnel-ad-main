@@ -9,7 +9,9 @@
     "start": "sanity start",
     "build": "sanity build",
     "deploy": "sanity deploy",
-    "deploy-graphql": "sanity graphql deploy"
+    "deploy-graphql": "sanity graphql deploy",
+    "android": "expo run:android",
+    "ios": "expo run:ios"
   },
   "keywords": [
     "sanity"
@@ -22,7 +24,9 @@
     "react-dom": "^18.2.0",
     "react-is": "^18.2.0",
     "sanity": "^3.0.0",
-    "styled-components": "^6.0.0"
+    "styled-components": "^6.0.0",
+    "expo": "~52.0.46",
+    "react-native": "0.76.9"
   },
   "devDependencies": {
     "@sanity/eslint-config-studio": "^5.0.2",
