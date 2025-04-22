@@ -1,10 +1,24 @@
-import React, { useEffect } from 'react';
+import React, { useEffect, useState } from 'react';
 import { View, StyleSheet, DeviceEventEmitter } from 'react-native';
 import Feed from '@/components/Feed';
 import { useRouter } from 'expo-router';
 
 export default function FeedTabScreen() {
   const router = useRouter();
+  const [key, setKey] = useState(Date.now()); // Key to force component reload
+
+  // Listen for auth state changes to force reload of Feed
+  useEffect(() => {
+    const authStateSubscription = DeviceEventEmitter.addListener('AUTH_STATE_CHANGED', (event) => {
+      console.log('Feed tab detected auth state change:', event?.isAuthenticated);
+      // Force Feed component to remount by changing its key
+      setKey(Date.now());
+    });
+
+    return () => {
+      authStateSubscription.remove();
+    };
+  }, []);
 
   // Set up scroll event listeners when component mounts
   useEffect(() => {
@@ -25,11 +39,11 @@ export default function FeedTabScreen() {
     };
   }, []);
     
-    return (
+  return (
     <View style={styles.container}>
-      <Feed />
-      </View>
-    );
+      <Feed key={key} /> {/* Use key to force complete remount of Feed component */}
+    </View>
+  );
 }
 
 const styles = StyleSheet.create({
