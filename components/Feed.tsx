@@ -1981,6 +1981,9 @@ export default function Feed() {
     
     const isPlaying = playingVideoId === item.id;
     
+    // Calculate container height based on video type
+    const containerHeight = item.type === 'vertical' ? 450 : 300;
+    
     return (
       <View style={[styles.postContainer, { width: cardWidth }]}>
         {/* Video author info */}
@@ -2005,14 +2008,14 @@ export default function Feed() {
         </View>
         
         {/* Video preview or player */}
-        <View style={styles.videoPreviewContainer}>
+        <View style={[styles.videoPreviewContainer, { height: containerHeight }]}>
           {isPlaying ? (
             <Video
               ref={ref => { videoRefs.current[item.id] = ref; }}
               source={{ uri: item.url }}
               style={styles.videoPlayer}
               useNativeControls={true}
-              resizeMode={ResizeMode.CONTAIN}
+              resizeMode={item.type === 'vertical' ? ResizeMode.COVER : ResizeMode.CONTAIN}
               isLooping={false}
               shouldPlay={true}
               posterSource={{ uri: thumbnailUrl }}
@@ -3274,7 +3277,7 @@ const styles = StyleSheet.create({
   // Add video related styles
   videoPreviewContainer: {
     width: '100%',
-    height: 200,
+    height: 300, // Increased from 200 to 300 for taller videos
     borderRadius: 12,
     marginBottom: 12,
     position: 'relative',
@@ -3390,7 +3393,7 @@ const styles = StyleSheet.create({
   },
   videoPlayer: {
     width: '100%',
-    aspectRatio: 16/9,
+    height: '100%', // Set to 100% of container rather than using aspectRatio
     borderRadius: 12,
   },
 
