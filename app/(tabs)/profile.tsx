@@ -1260,130 +1260,105 @@ export default function ProfileScreen() {
           <View style={styles.contentHeader}>
             <Text style={styles.sectionTitle}>Your Content</Text>
             
-            {/* Add content type tabs */}
-            <View style={styles.contentTabs}>
-              <Pressable 
-                style={[
-                  styles.tabButton,
-                  activeTab === 'posts' && styles.activeTabButton
-                ]}
-                onPress={() => setActiveTab('posts')}
-              >
-                <Text style={[
-                  styles.tabText,
-                  activeTab === 'posts' && styles.activeTabText
-                ]}>Posts</Text>
-              </Pressable>
-              
-              <Pressable 
-                style={[
-                  styles.tabButton,
-                  activeTab === 'videos' && styles.activeTabButton
-                ]}
-                onPress={() => setActiveTab('videos')}
-              >
-                <Text style={[
-                  styles.tabText,
-                  activeTab === 'videos' && styles.activeTabText
-                ]}>Videos</Text>
-              </Pressable>
-            </View>
-            
             <Pressable 
-              style={styles.viewToggleButton}
-              onPress={toggleViewType}
+              style={styles.viewAllButton}
+              onPress={() => router.push('/components/YourContents' as any)}
             >
-              {viewType === 'grid' ? (
-                <List size={20} color="#0070F3" />
-              ) : (
-                <Grid size={20} color="#0070F3" />
-              )}
+              <Text style={styles.viewAllText}>View All</Text>
+              <ChevronRight color="#0070F3" size={16} />
             </Pressable>
           </View>
           
-          {/* Posts Tab Content */}
-          {activeTab === 'posts' && (
-            <>
-              {postsLoading ? (
-                <View style={styles.loadingContentContainer}>
-                  <ActivityIndicator size="small" color="#0070F3" />
-                  <Text style={styles.loadingContentText}>Loading your content...</Text>
-                </View>
-              ) : userPosts.length === 0 ? (
-                <View style={styles.emptyContentContainer}>
-                  <Award size={40} color="#333" />
-                  <Text style={styles.emptyContentTitle}>No Posts Yet</Text>
-                  <Text style={styles.emptyContentText}>
-                    You haven't shared any posts yet. Your posts will appear here.
-                  </Text>
-                  <Pressable
-                    style={styles.createPostButton}
+          {/* Preview of recent content */}
+          <View style={styles.contentPreview}>
+            {userPosts.length > 0 || userVideos.length > 0 ? (
+              <View style={styles.contentPreviewGrid}>
+                {/* Show first 4 items (posts and videos combined) */}
+                {[...userPosts, ...userVideos].slice(0, 4).map((item, index) => {
+                  // Determine if it's a post or video
+                  const isVideo = 'title' in item;
+                  
+                  return (
+                    <Pressable 
+                      key={`content-${item.id}`}
+                      style={styles.previewItem}
+                      onPress={() => router.push({
+                        pathname: isVideo ? "/video-detail" : "/feedpost-detail" as any,
+                        params: { id: item.id }
+                      })}
+                    >
+                      {isVideo ? (
+                        // Video preview
+                        <>
+                          {item.thumbnail ? (
+                            <Image 
+                              source={{ uri: item.thumbnail }} 
+                              style={styles.previewImage}
+                            />
+                          ) : (
+                            <View style={styles.previewVideoPlaceholder}>
+                              <Film size={24} color="#666" />
+                            </View>
+                          )}
+                          
+                          {/* Play button overlay */}
+                          <View style={styles.previewPlayButton}>
+                            <Play size={16} color="#FFF" />
+                          </View>
+                        </>
+                      ) : (
+                        // Post preview
+                        <>
+                          {item.images && item.images.length > 0 ? (
+                            <Image 
+                              source={{ uri: item.images[0] }}
+                              style={styles.previewImage}
+                            />
+                          ) : (
+                            <View style={styles.previewTextOnly}>
+                              <Text 
+                                style={styles.previewText}
+                                numberOfLines={3}
+                              >
+                                {item.content}
+                              </Text>
+                            </View>
+                          )}
+                        </>
+                      )}
+                    </Pressable>
+                  );
+                })}
+                
+                {/* Show upload button if needed */}
+                {userPosts.length + userVideos.length < 4 && (
+                  <Pressable 
+                    style={[styles.previewItem, styles.previewUploadItem]}
                     onPress={() => router.push('/newsfeed-upload' as any)}
                   >
-                    <Text style={styles.createPostButtonText}>Create Post</Text>
+                    <View style={styles.previewUploadContent}>
+                      <Text style={styles.previewUploadText}>Upload Content</Text>
+                      <Text style={styles.previewUploadSubtext}>Share photos & videos</Text>
+                    </View>
                   </Pressable>
-                </View>
-              ) : (
-                viewType === 'grid' ? (
-                  <FlatList
-                    key="grid"
-                    data={userPosts}
-                    numColumns={3}
-                    renderItem={renderGridItem}
-                    keyExtractor={item => item.id}
-                    scrollEnabled={false}
-                    contentContainerStyle={styles.gridContainer}
-                  />
-                ) : (
-                  <FlatList
-                    key="list"
-                    data={userPosts}
-                    numColumns={1}
-                    renderItem={renderListItem}
-                    keyExtractor={item => item.id}
-                    scrollEnabled={false}
-                    contentContainerStyle={styles.listContainer}
-                  />
-                )
-              )}
-            </>
-          )}
-          
-          {/* Videos Tab Content */}
-          {activeTab === 'videos' && (
-            <>
-              {videosLoading ? (
-                <View style={styles.loadingContentContainer}>
-                  <ActivityIndicator size="small" color="#0070F3" />
-                  <Text style={styles.loadingContentText}>Loading your videos...</Text>
-                </View>
-              ) : userVideos && userVideos.length > 0 ? (
-                <FlatList
-                  key="videos-grid"
-                  data={userVideos}
-                  numColumns={3}
-                  renderItem={renderVideoGridItem}
-                  keyExtractor={item => item.id}
-                  scrollEnabled={false}
-                  contentContainerStyle={styles.gridContainer}
-                />
-              ) : (
-                <View style={styles.emptyContentContainer}>
-                  <Film size={40} color="#333" />
-                  <Text style={styles.emptyContentTitle}>No Videos Yet</Text>
-                  <Text style={styles.emptyContentText}>
-                    You haven't uploaded any videos yet. Your videos will appear here.
-                  </Text>
-                  <Pressable
-                    style={styles.createPostButton}
-                    onPress={() => router.push('/video-upload' as any)}
-                  >
-                    <Text style={styles.createPostButtonText}>Upload Video</Text>
-                  </Pressable>
-                </View>
-              )}
-            </>
-          )}
+                )}
+              </View>
+            ) : (
+              <View style={styles.emptyContentContainer}>
+                <Award size={40} color="#333" />
+                <Text style={styles.emptyContentTitle}>No Content Yet</Text>
+                <Text style={styles.emptyContentText}>
+                  You haven't shared any posts or videos yet. Your content will appear here.
+                </Text>
+                <Pressable
+                  style={styles.createPostButton}
+                  onPress={() => router.push('/components/YourContents' as any)}
+                >
+                  <Text style={styles.createPostButtonText}>View Your Content</Text>
+                </Pressable>
+              </View>
+            )}
+          </View>
         </View>
 
         {/* Privacy Settings Section */}
@@ -2039,48 +2014,76 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     marginBottom: 16,
   },
-  contentTabs: {
+  contentPreview: {
+    marginTop: 12,
+  },
+  contentPreviewGrid: {
     flexDirection: 'row',
-    marginRight: 8,
-    // Add any necessary adjustments to accommodate 3 tabs
+    flexWrap: 'wrap',
+    justifyContent: 'space-between',
   },
-  tabButton: {
-    paddingHorizontal: 12,
-    paddingVertical: 6,
-    marginHorizontal: 4, // Adjust spacing between tabs
-    // Add any necessary adjustments
+  previewItem: {
+    width: (SCREEN_WIDTH - 80) / 2,
+    height: (SCREEN_WIDTH - 80) / 2,
+    borderRadius: 12,
+    overflow: 'hidden',
+    backgroundColor: '#111',
+    marginBottom: 16,
   },
-  activeTabButton: {
-    borderBottomWidth: 2,
-    borderBottomColor: '#0070F3',
+  previewImage: {
+    width: '100%',
+    height: '100%',
+    resizeMode: 'cover',
   },
-  tabText: {
-    fontSize: 14,
-    color: '#777',
-    fontWeight: '500',
+  previewTextOnly: {
+    width: '100%',
+    height: '100%',
+    justifyContent: 'center',
+    alignItems: 'center',
+    padding: 12,
+    backgroundColor: 'rgba(0, 112, 243, 0.1)',
   },
-  activeTabText: {
-    color: '#0070F3',
-    fontWeight: '600',
+  previewText: {
+    color: 'white',
+    fontSize: 12,
+    textAlign: 'center',
   },
-  viewToggleButton: {
+  previewVideoPlaceholder: {
+    width: '100%',
+    height: '100%',
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#111',
+  },
+  previewPlayButton: {
+    position: 'absolute',
+    top: '50%',
+    left: '50%',
     width: 40,
     height: 40,
     borderRadius: 20,
+    backgroundColor: 'rgba(0, 112, 243, 0.8)',
+    justifyContent: 'center',
+    alignItems: 'center',
+    transform: [{ translateX: -20 }, { translateY: -20 }],
+  },
+  previewUploadItem: {
     backgroundColor: 'rgba(0, 112, 243, 0.1)',
-    alignItems: 'center',
     justifyContent: 'center',
-  },
-  loadingContentContainer: {
-    padding: 40,
     alignItems: 'center',
-    justifyContent: 'center',
   },
-  loadingContentText: {
-    color: '#888',
+  previewUploadContent: {
+    alignItems: 'center',
+  },
+  previewUploadText: {
+    color: 'white',
     fontSize: 14,
-    fontFamily: 'Inter_400Regular',
-    marginTop: 10,
+    fontWeight: '600',
+    marginBottom: 4,
+  },
+  previewUploadSubtext: {
+    color: '#888',
+    fontSize: 12,
   },
   emptyContentContainer: {
     padding: 40,
@@ -2447,5 +2450,20 @@ const styles = StyleSheet.create({
   insightsButtonText: {
     color: '#ccc',
     fontSize: 12,
+  },
+  viewAllButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    borderRadius: 20,
+    backgroundColor: 'rgba(0, 112, 243, 0.1)',
+  },
+  viewAllText: {
+    color: '#0070F3',
+    fontSize: 14,
+    fontWeight: '600',
+    marginRight: 4,
   },
 });

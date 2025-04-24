@@ -663,46 +663,58 @@ const UserProfilePopup = ({ visible, onClose, userData }: UserProfilePopupProps)
           
           {/* Action buttons */}
           <View style={styles.popupActionsContainer}>
+            {/* Only show Follow button if it's not the current user's profile */}
+            {currentUser?._id !== displayUser.id && (
+              <TouchableOpacity
+                style={[
+                  styles.popupActionButton, 
+                  following ? styles.unfollowButton : styles.followButton
+                ]}
+                onPress={handleFollowToggle}
+                disabled={loading}
+              >
+                {loading ? (
+                  <ActivityIndicator size="small" color="#FFF" />
+                ) : (
+                  <Text style={following ? styles.unfollowButtonText : styles.followButtonText}>
+                    {following ? 'Following' : 'Follow'}
+                  </Text>
+                )}
+              </TouchableOpacity>
+            )}
+            
+            {/* Only show Message button if it's not the current user's profile */}
+            {currentUser?._id !== displayUser.id && (
+              <TouchableOpacity
+                style={[styles.popupActionButton, styles.messageButton]}
+                onPress={() => {
+                  onClose();
+                  if (displayUser) {
+                    // Emit an event to update unread count in the FloatingChatButton
+                    eventEmitter.emit('messages-seen');
+                    
+                    router.push({
+                      pathname: "/chat" as any,
+                      params: { id: displayUser.id }
+                    });
+                  }
+                }}
+              >
+                <Text style={styles.messageButtonText}>Message</Text>
+              </TouchableOpacity>
+            )}
+            
             <TouchableOpacity
               style={[
                 styles.popupActionButton, 
-                following ? styles.unfollowButton : styles.followButton
+                styles.viewProfileButton,
+                currentUser?._id === displayUser.id && styles.fullWidthButton
               ]}
-              onPress={handleFollowToggle}
-              disabled={loading}
-            >
-              {loading ? (
-                <ActivityIndicator size="small" color="#FFF" />
-              ) : (
-                <Text style={following ? styles.unfollowButtonText : styles.followButtonText}>
-                  {following ? 'Following' : 'Follow'}
-                </Text>
-              )}
-            </TouchableOpacity>
-            
-            <TouchableOpacity
-              style={[styles.popupActionButton, styles.messageButton]}
-              onPress={() => {
-                onClose();
-                if (displayUser) {
-                  // Emit an event to update unread count in the FloatingChatButton
-                  eventEmitter.emit('messages-seen');
-                  
-                  router.push({
-                    pathname: "/chat" as any,
-                    params: { id: displayUser.id }
-                  });
-                }
-              }}
-            >
-              <Text style={styles.messageButtonText}>Message</Text>
-            </TouchableOpacity>
-            
-            <TouchableOpacity
-              style={[styles.popupActionButton, styles.viewProfileButton]}
               onPress={handleViewFullProfile}
             >
-              <Text style={styles.viewProfileButtonText}>View Full Profile</Text>
+              <Text style={styles.viewProfileButtonText}>
+                {currentUser?._id === displayUser.id ? 'View Your Profile' : 'View Full Profile'}
+              </Text>
             </TouchableOpacity>
           </View>
         </Animated.View>
@@ -1198,7 +1210,7 @@ export default function Feed() {
   // Calculate responsive dimensions
   const isTablet = windowWidth > 768;
   const isLargePhone = windowWidth > 428;
-  const cardWidth = isTablet ? Math.min((windowWidth * 0.5) - 40, 500) : windowWidth - 32;
+  const cardWidth = isTablet ? Math.min((windowWidth * 0.5) - 40, 500) : windowWidth - 16; // Reduced side padding from 32 to 16
   const imageHeight = calculateImageHeight(windowWidth, windowHeight, isTablet);
 
   function calculateImageHeight(width: number, height: number, isTablet: boolean) {
@@ -1661,7 +1673,9 @@ export default function Feed() {
             <View style={styles.nameContainer}>
               <Text style={styles.userName}>{item.user.name}</Text>
               {item.user.isBlueVerified ? (
-                <TunnelBlueVerifiedMark size={14} />
+                <View style={{marginLeft: 5}}>
+                  <TunnelBlueVerifiedMark size={14} />
+                </View>
               ) : item.user.isVerified && (
                 <View style={styles.verifiedBadge}>
                   <TunnelVerifiedMark size={14} />
@@ -2705,6 +2719,7 @@ const styles = StyleSheet.create({
     padding: 3,
     alignItems: 'center',
     justifyContent: 'center',
+    marginLeft: 4, // Add margin to create space between username and badge
   },
   blueVerifiedBadge: {
     backgroundColor: '#1877F2',
@@ -3227,6 +3242,7 @@ const styles = StyleSheet.create({
     padding: 1,
     alignItems: 'center',
     justifyContent: 'center',
+  
   },
   popupBlueVerifiedBadge: {
     backgroundColor: 'transparent',
@@ -3395,6 +3411,9 @@ const styles = StyleSheet.create({
     width: '100%',
     height: '100%', // Set to 100% of container rather than using aspectRatio
     borderRadius: 12,
+  },
+  fullWidthButton: {
+    flex: 1,
   },
 
 }); 
