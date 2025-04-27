@@ -408,55 +408,33 @@ export default function PostDetailScreen() {
           
           console.log("Full post data with restrictions:", fullPostData);
           
-          // Merge post data with comment restrictions
-          if (fullPostData) {
-            setPost({
-              ...postData,
-              commentRestrictions: fullPostData.commentRestrictions || { restricted: false, allowedUsers: [] }
-            });
-            
-            // Check if current user is the post author
-            if (user && user._id && postData.user && postData.user.id) {
-              setIsPostAuthor(user._id === postData.user.id);
-            }
-            
-            // Set restriction states
-            if (fullPostData.commentRestrictions) {
-              setCommentsRestricted(fullPostData.commentRestrictions.restricted || false);
-              setAllowedCommentUsers(fullPostData.commentRestrictions.allowedUsers || []);
-              console.log("Comment restrictions loaded:", {
-                restricted: fullPostData.commentRestrictions.restricted || false,
-                allowedUsers: fullPostData.commentRestrictions.allowedUsers || []
-              });
-            } else {
-              setCommentsRestricted(false);
-              setAllowedCommentUsers([]);
-              console.log("No comment restrictions found");
-            }
-          } else {
-            // If no extended data found, use original post data
-            setPost(postData);
-            setCommentsRestricted(false);
-            setAllowedCommentUsers([]);
+          // Check if comments are restricted
+          if (fullPostData && fullPostData.commentRestrictions) {
+            setCommentsRestricted(fullPostData.commentRestrictions.restricted || false);
+            setAllowedCommentUsers(fullPostData.commentRestrictions.allowedUsers || []);
           }
+          
+          // Check if the current user is the post author
+          if (user && user._id && postData.user && (postData.user.id === user._id || postData.user._id === user._id)) {
+            setIsPostAuthor(true);
+            console.log("Current user is the post author");
+          } else {
+            setIsPostAuthor(false);
+            console.log("Current user is NOT the post author");
+          }
+          
+          // Set the post data
+          setPost({
+            ...postData,
+            commentRestrictions: fullPostData && fullPostData.commentRestrictions ? 
+              fullPostData.commentRestrictions : 
+              { restricted: false, allowedUsers: [] }
+          });
+          
         } catch (err) {
-          console.error("Error fetching full post data:", err);
+          console.error('Error fetching full post data:', err);
           // Fall back to basic post data
           setPost(postData);
-          
-          // Check if current user is the post author
-          if (user && user._id && postData.user && postData.user.id) {
-            setIsPostAuthor(user._id === postData.user.id);
-          }
-          
-          // Check for comment restrictions
-          if ((postData as PostWithRestrictions).commentRestrictions) {
-            setCommentsRestricted((postData as PostWithRestrictions).commentRestrictions?.restricted || false);
-            setAllowedCommentUsers((postData as PostWithRestrictions).commentRestrictions?.allowedUsers || []);
-          } else {
-            setCommentsRestricted(false);
-            setAllowedCommentUsers([]);
-          }
         }
         
         // Safely handle comments
@@ -1940,13 +1918,16 @@ export default function PostDetailScreen() {
                 </View>
                 
                 <View style={styles.actionGroup}>
-                  <Pressable 
-                    style={styles.actionButton} 
-                    onPress={handleAwardPoints}
-                    hitSlop={10}
-                  >
-                    <Award size={22} color="#FFD700" />
-                  </Pressable>
+                  {/* Only show the Give Points button if the user is not the post author */}
+                  {!isPostAuthor && (
+                    <Pressable 
+                      style={styles.actionButton} 
+                      onPress={handleAwardPoints}
+                      hitSlop={10}
+                    >
+                      <Award size={22} color="#FFD700" />
+                    </Pressable>
+                  )}
                   
                   <Pressable 
                     style={styles.actionButton} 

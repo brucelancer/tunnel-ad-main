@@ -234,11 +234,40 @@ export const usePostFeed = () => {
       
       setPosts(updatedPosts);
 
-      // Update on server
-      await postService.awardPoints(postId, points);
+      // Update on server - this already creates the pointsAwardedBy entry
+      const result = await postService.awardPoints(postId, points, user._id);
       
       // Subtract points from user
       addPoints(-points);
+      
+      console.log(`User ${user._id} awarded ${points} points to post ${postId} owned by ${post.user.id}`);
+      
+      // The pointsTransaction document is only needed if your schema requires a separate document
+      // Uncomment this section if you need a separate document in addition to the postAwardedBy array
+      /* 
+      try {
+        const pointsRecordData = {
+          _type: 'pointsTransaction',
+          postId: postId,
+          awardedBy: {
+            _type: 'reference',
+            _ref: user._id
+          },
+          awardedTo: {
+            _type: 'reference',
+            _ref: post.user.id
+          },
+          points: points,
+          awardedAt: new Date().toISOString()
+        };
+        
+        // Create a standalone record for points analytics
+        await postService.getSanityClient().create(pointsRecordData);
+      } catch (analyticsErr) {
+        console.error('Error recording points analytics:', analyticsErr);
+        // Don't fail the main function if analytics recording fails
+      }
+      */
     } catch (err) {
       console.error('Error awarding points:', err);
       loadPosts(); // Reload to get correct state

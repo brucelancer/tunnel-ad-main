@@ -4,6 +4,7 @@ import post from './post'
 import message from './message'
 import conversation from './conversation'
 import report from './report'
+import pointsAwarded from './pointsAwarded'
 
 export const schemaTypes = [
   ...authSchemas,
@@ -11,6 +12,7 @@ export const schemaTypes = [
   post,
   message,
   conversation,
-  report
+  report,
+  pointsAwarded
   // Add other schemas here
 ] 

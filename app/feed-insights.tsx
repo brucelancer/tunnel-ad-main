@@ -135,6 +135,14 @@ interface FeedInsights {
     commentDate: string;
     absoluteTime?: string | null;
   }[];
+  topPointsGivers?: {
+    userId: string;
+    username: string;
+    avatar: string;
+    isVerified: boolean;
+    pointsAwarded: number;
+    awardedAt: string;
+  }[];
 }
 
 // Helper function to get color based on points value
@@ -368,6 +376,19 @@ export default function FeedInsights() {
             },
             []
           ),
+          // Fetch points awarded by users
+          "pointsAwardedBy": pointsAwardedBy[] {
+            points,
+            awardedAt,
+            "user": user-> {
+              _id,
+              username,
+              firstName,
+              lastName,
+              "avatar": profile.avatar,
+              "isVerified": username == "admin" || username == "moderator" || defined(isBlueVerified)
+            }
+          },
           // Fetch comments with their authors
           "comments": comments[0..9]{
             _key,
@@ -388,6 +409,7 @@ export default function FeedInsights() {
       
       console.log("Post data fetched successfully");
       console.log("Liked by users count:", result?.likedBy?.length || 0);
+      console.log("Points awarded by count:", result?.pointsAwardedBy?.length || 0);
       console.log("Comments count:", result?.comments?.length || 0);
       
       // If no likedBy data was found, try a fallback approach
@@ -423,6 +445,24 @@ export default function FeedInsights() {
         }
       }
       
+      // Process points data to ensure user info is properly loaded
+      let pointsAwardedByUsers = result?.pointsAwardedBy || [];
+      console.log("Raw points awarded data:", JSON.stringify(pointsAwardedByUsers));
+      
+      // Filter out entries with missing user data
+      pointsAwardedByUsers = pointsAwardedByUsers.filter((entry: any) => {
+        const hasUser = entry && entry.user && entry.user._id;
+        if (!hasUser) {
+          console.log("Filtering out entry without user:", JSON.stringify(entry));
+        }
+        return hasUser;
+      });
+      
+      console.log("Filtered points awarded data count:", pointsAwardedByUsers.length);
+      if (pointsAwardedByUsers.length > 0) {
+        console.log("First points entry:", JSON.stringify(pointsAwardedByUsers[0]));
+      }
+      
       if (result) {
         // Format the data
         const formattedData = {
@@ -440,9 +480,11 @@ export default function FeedInsights() {
             avatar: result.authorAvatar ? postService.urlFor(result.authorAvatar).url() : 'https://randomuser.me/api/portraits/lego/1.jpg',
           },
           likedBy: likedByUsers,
+          pointsAwardedBy: pointsAwardedByUsers,
           commentsList: result.comments || []
         };
         console.log("Processed likedBy users:", formattedData.likedBy.length);
+        console.log("Processed points awarded users:", formattedData.pointsAwardedBy.length);
         console.log("Processed comments:", formattedData.commentsList.length);
         setPostData(formattedData);
         return formattedData;
@@ -463,6 +505,7 @@ export default function FeedInsights() {
             avatar: 'https://randomuser.me/api/portraits/lego/1.jpg',
           },
           likedBy: [],
+          pointsAwardedBy: [],
           commentsList: []
         };
         setPostData(emptyData);
@@ -486,6 +529,7 @@ export default function FeedInsights() {
           avatar: 'https://randomuser.me/api/portraits/lego/1.jpg',
         },
         likedBy: [],
+        pointsAwardedBy: [],
         commentsList: []
       };
       setPostData(emptyData);
@@ -504,6 +548,7 @@ export default function FeedInsights() {
       if (postId && currentPostData) {
         console.log("Generating insights for post:", currentPostData.id);
         console.log("LikedBy users available:", currentPostData.likedBy?.length || 0);
+        console.log("PointsAwardedBy users available:", currentPostData.pointsAwardedBy?.length || 0);
         
         // For a specific post, we'll use the post data we already fetched
         // We'll also calculate engagement metrics
@@ -538,6 +583,52 @@ export default function FeedInsights() {
         });
         
         console.log("Generated topLikers:", topLikers.length);
+        
+        // Process points givers from pointsAwardedBy array
+        const topPointsGivers = (currentPostData.pointsAwardedBy || []).map((pointsData: any) => {
+          console.log("Processing points giver:", pointsData);
+          
+          const user = pointsData.user || {};
+          const displayName = user.username || 
+                             (user.firstName ? `${user.firstName} ${user.lastName || ''}`.trim() : 'User');
+          
+          return {
+            userId: user._id || `points-giver-${Date.now()}`,
+            username: displayName,
+            avatar: user.avatar ? postService.urlFor(user.avatar).url() : 'https://randomuser.me/api/portraits/lego/2.jpg',
+            isVerified: user.isVerified || false,
+            pointsAwarded: pointsData.points || 1,
+            awardedAt: pointsData.awardedAt || new Date().toISOString()
+          };
+        });
+        
+        console.log("Generated topPointsGivers:", topPointsGivers.length);
+        
+        // Generate points distribution data
+        const pointsDistribution: Array<{points: number, userCount: number}> = [];
+        
+        // Group points by amount
+        const pointsByAmount: Record<number, number> = {};
+        topPointsGivers.forEach((giver: any) => {
+          const points = giver.pointsAwarded;
+          if (!pointsByAmount[points]) {
+            pointsByAmount[points] = 0;
+          }
+          pointsByAmount[points]++;
+        });
+        
+        // Convert to the format needed for the UI
+        Object.entries(pointsByAmount).forEach(([points, count]) => {
+          pointsDistribution.push({
+            points: parseInt(points),
+            userCount: count as number
+          });
+        });
+        
+        // Sort by points amount
+        pointsDistribution.sort((a, b) => b.points - a.points);
+        
+        console.log("Generated pointsDistribution:", pointsDistribution);
         
         // Process comments for display
         const topCommenters = (currentPostData.commentsList || []).map((comment: any) => {
@@ -641,9 +732,10 @@ export default function FeedInsights() {
             points: pointsTotal
           }],
           commentsByDay: [0, 0, 0, 0, 0, 0, 0],
-          pointsDistribution: [],
+          pointsDistribution,
           topLikers,
-          topCommenters
+          topCommenters,
+          topPointsGivers
         };
         
         setInsights(insightsData);
@@ -683,7 +775,8 @@ export default function FeedInsights() {
             commentsByDay: [0, 0, 0, 0, 0, 0, 0],
             pointsDistribution: [],
             topLikers: [],
-            topCommenters: []
+            topCommenters: [],
+            topPointsGivers: []
           };
           setInsights(emptyInsights);
         } catch (error) {
@@ -725,7 +818,8 @@ export default function FeedInsights() {
         commentsByDay: [0, 0, 0, 0, 0, 0, 0],
         pointsDistribution: [],
         topLikers: [],
-        topCommenters: []
+        topCommenters: [],
+        topPointsGivers: []
       };
       setInsights(emptyInsights);
     }
@@ -875,7 +969,8 @@ export default function FeedInsights() {
 
   // Conditional rendering for points distribution
   const renderPointsDistribution = () => {
-    if (!insights || !insights.pointsDistribution || insights.pointsDistribution.length === 0) {
+    if (!insights || (!insights.pointsDistribution || insights.pointsDistribution.length === 0) && 
+        (!insights.topPointsGivers || insights.topPointsGivers.length === 0)) {
       return (
         <View style={styles.emptyStateContainer}>
           <View style={styles.emptyStateIconContainer}>
@@ -891,25 +986,92 @@ export default function FeedInsights() {
     
     return (
       <View style={styles.pointsDistributionContainer}>
-        {insights.pointsDistribution.map((item, index) => (
-          <View key={index} style={styles.pointsDistributionItem}>
-            <View style={styles.pointsDistributionInfo}>
-              <Text style={styles.pointsValue}>{item.points} points</Text>
-              <Text style={styles.pointsUserCount}>{item.userCount} users</Text>
-            </View>
-            <View style={styles.pointsBarContainer}>
-              <View 
-                style={[
-                  styles.pointsBar, 
-                  { 
-                    width: `${(item.userCount / Math.max(...insights.pointsDistribution.map(i => i.userCount))) * 100}%`,
-                    backgroundColor: getPointsColor(item.points),
-                  }
-                ]} 
-              />
-            </View>
+        {/* Points summary graph */}
+        {insights.pointsDistribution && insights.pointsDistribution.length > 0 && (
+          <View style={styles.pointsGraphSection}>
+            <Text style={styles.sectionSubheading}>Points Distribution</Text>
+            {insights.pointsDistribution.map((item, index) => (
+              <View key={index} style={styles.pointsDistributionItem}>
+                <View style={styles.pointsDistributionInfo}>
+                  <Text style={styles.pointsValue}>{item.points} points</Text>
+                  <Text style={styles.pointsUserCount}>{item.userCount} users</Text>
+                </View>
+                <View style={styles.pointsBarContainer}>
+                  <View 
+                    style={[
+                      styles.pointsBar, 
+                      { 
+                        width: `${(item.userCount / Math.max(...insights.pointsDistribution.map(i => i.userCount))) * 100}%`,
+                        backgroundColor: getPointsColor(item.points),
+                      }
+                    ]} 
+                  />
+                </View>
+              </View>
+            ))}
           </View>
-        ))}
+        )}
+        
+        {/* Users who awarded points */}
+        {insights.topPointsGivers && insights.topPointsGivers.length > 0 && (
+          <View style={styles.pointsUsersSection}>
+            <Text style={styles.sectionSubheading}>Points Awarded By</Text>
+            {insights.topPointsGivers.map((user, index) => {
+              // Format the awarded at date
+              let awardedTimeAgo = 'Recently';
+              if (user.awardedAt) {
+                try {
+                  const date = new Date(user.awardedAt);
+                  if (!isNaN(date.getTime())) {
+                    awardedTimeAgo = formatDistance(date, new Date(), { addSuffix: true });
+                  }
+                } catch (e) {
+                  console.error('Error formatting date:', e);
+                }
+              }
+              
+              return (
+                <View key={`${user.userId}-${index}`} style={styles.pointsUserItem}>
+                  <Image 
+                    source={{ uri: user.avatar }} 
+                    style={styles.pointsUserAvatar} 
+                  />
+                  <View style={styles.pointsUserInfo}>
+                    <View style={styles.usernameRow}>
+                      <Text style={styles.pointsUserName}>{user.username}</Text>
+                      {user.isVerified && <TunnelVerifiedMark size={12} />}
+                    </View>
+                    <Text style={styles.pointsUserAwarded}>
+                      Awarded {user.pointsAwarded} {user.pointsAwarded === 1 ? 'point' : 'points'} {awardedTimeAgo}
+                    </Text>
+                  </View>
+                  <View style={[styles.pointsBadge, { backgroundColor: getPointsColor(user.pointsAwarded) }]}>
+                    <Text style={styles.pointsBadgeText}>{user.pointsAwarded}</Text>
+                  </View>
+                </View>
+              );
+            })}
+            
+            {/* Add View All button if there are more than 5 users */}
+            {insights.topPointsGivers.length > 5 && (
+              <TouchableOpacity 
+                style={styles.viewAllButton}
+                onPress={() => router.push({
+                  pathname: "/feed-insights-points-detail",
+                  params: { 
+                    postId: postId,
+                    postContent: postData?.content || 'Post'
+                  }
+                } as any)}
+              >
+                <Text style={styles.viewAllButtonText}>
+                  View All Points Givers ({insights.topPointsGivers.length})
+                </Text>
+                <ChevronRight color="#1877F2" size={16} />
+              </TouchableOpacity>
+            )}
+          </View>
+        )}
       </View>
     );
   };
@@ -1652,6 +1814,9 @@ const styles = StyleSheet.create({
     borderRadius: 12,
     padding: 16,
   },
+  pointsGraphSection: {
+    marginBottom: 16,
+  },
   pointsDistributionItem: {
     marginBottom: 12,
   },
@@ -1677,6 +1842,65 @@ const styles = StyleSheet.create({
   },
   pointsBar: {
     height: '100%',
+  },
+  pointsUsersSection: {
+    marginBottom: 16,
+  },
+  pointsUserItem: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginBottom: 12,
+  },
+  pointsUserAvatar: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    marginRight: 8,
+  },
+  pointsUserInfo: {
+    flex: 1,
+  },
+  pointsUserNameRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginBottom: 4,
+  },
+  pointsUserName: {
+    color: '#fff',
+    fontSize: 14,
+    fontWeight: '600',
+  },
+  pointsUserAwarded: {
+    color: '#ccc',
+    fontSize: 12,
+  },
+  pointsBadge: {
+    width: 24,
+    height: 24,
+    borderRadius: 12,
+    backgroundColor: '#333',
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginLeft: 8,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.3,
+    shadowRadius: 3,
+    elevation: 3,
+  },
+  pointsBadgeText: {
+    color: '#fff',
+    fontSize: 12,
+    fontWeight: '700',
+  },
+  sectionSubheading: {
+    color: '#fff',
+    fontSize: 16,
+    fontWeight: '600',
+    marginBottom: 12,
+    borderBottomWidth: 1,
+    borderBottomColor: 'rgba(255,255,255,0.1)',
+    paddingBottom: 8,
   },
   liveUpdateContainer: {
     padding: 8,

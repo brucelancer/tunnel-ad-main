@@ -86,6 +86,17 @@ export const fetchPosts = async (userId = '') => {
           "isVerified": username == "admin" || username == "moderator",
           "isBlueVerified": defined(isBlueVerified) && isBlueVerified == true
         },
+        pointsAwardedBy[]{
+          _key,
+          points,
+          awardedAt,
+          user->{
+            _id,
+            username,
+            firstName,
+            lastName
+          }
+        },
         images
       }
     `, { userId: userId || '' });
@@ -96,6 +107,8 @@ export const fetchPosts = async (userId = '') => {
     if (posts.length > 0) {
       const firstPost = posts[0];
       console.log('First post images:', JSON.stringify(firstPost.images));
+      console.log('First post points:', firstPost.points);
+      console.log('First post points awarded by:', firstPost.pointsAwardedBy ? firstPost.pointsAwardedBy.length : 0);
     }
     
     // Calculate time ago for each post
@@ -438,15 +451,21 @@ export const awardPoints = async (postId, points, userId = '') => {
     if (userId && userId.trim() !== '' && userId !== 'guest-user' && userId !== 'anonymous') {
       console.log(`User ${userId} is awarding points`);
       
+      // Generate a unique key for this points transaction
+      const uniqueKey = `points-${userId}-${Date.now()}`;
+      
       // Add user to the pointsAwardedBy array if it doesn't exist
       transaction = transaction
         .setIfMissing({ pointsAwardedBy: [] })
         .append('pointsAwardedBy', [{ 
+          _key: uniqueKey,
           _type: 'object',
           user: { _type: 'reference', _ref: userId },
           points: points,
           awardedAt: new Date().toISOString()
         }]);
+      
+      console.log(`Added points transaction with key: ${uniqueKey}`);
     }
     
     await transaction.commit();
@@ -475,6 +494,20 @@ export const getPostById = async (postId, userId = '') => {
         points,
         "hasLiked": count(likes[_ref == $userId]) > 0,
         "hasSaved": count(savedBy[_ref == $userId]) > 0,
+        pointsAwardedBy[]{
+          _key,
+          points,
+          awardedAt,
+          user->{
+            _id,
+            username,
+            firstName,
+            lastName,
+            "avatar": profile.avatar,
+            "isVerified": username == "admin" || username == "moderator",
+            "isBlueVerified": defined(isBlueVerified) && isBlueVerified == true
+          }
+        },
         "author": author->{
           _id,
           username,
@@ -513,6 +546,7 @@ export const getPostById = async (postId, userId = '') => {
     }
     
     console.log(`Post ${postId} fetched successfully`);
+    console.log(`Points awarded data: ${post.pointsAwardedBy ? post.pointsAwardedBy.length : 0} entries`);
     
     // Add timeAgo
     return {

@@ -1401,6 +1401,14 @@ export default function Feed() {
     if (user) {
       // Use Sanity points functionality if user is authenticated
       handleSanityAwardPoints(id, points);
+      
+      // Show a brief confirmation toast
+      Alert.alert(
+        "Points Awarded",
+        `You awarded ${points} points to the post creator.`,
+        [{ text: "OK" }],
+        { cancelable: true }
+      );
     } else {
       // Use local state for demo purposes
       setPosts(currentPosts => 
@@ -1854,32 +1862,38 @@ export default function Feed() {
               <Share2 size={20} color="#888" />
             </Pressable>
             
-            <Pressable 
-              style={styles.actionButton}
-              onPress={() => {
-                // Emit an event to update unread count in the FloatingChatButton
-                // This is preemptive as messages will be marked as seen on the chat screen
-                eventEmitter.emit('messages-seen');
-                
-                router.push({
-                  pathname: "/chat" as any,
-                  params: { id: item.user.id }
-                });
-              }}
-              hitSlop={{top: 10, bottom: 10, left: 10, right: 10}}
-            >
-              <Send size={20} color="#888" />
-            </Pressable>
+            {/* Only show the Send Message button if it's not the user's own post */}
+            {!isOwnPost && (
+              <Pressable 
+                style={styles.actionButton}
+                onPress={() => {
+                  // Emit an event to update unread count in the FloatingChatButton
+                  // This is preemptive as messages will be marked as seen on the chat screen
+                  eventEmitter.emit('messages-seen');
+                  
+                  router.push({
+                    pathname: "/chat" as any,
+                    params: { id: item.user.id }
+                  });
+                }}
+                hitSlop={{top: 10, bottom: 10, left: 10, right: 10}}
+              >
+                <Send size={20} color="#888" />
+              </Pressable>
+            )}
           </View>
           
           <View style={styles.actionGroup}>
-            <Pressable 
-              style={styles.actionButton} 
-              onPress={() => handleAwardPoints(item.id, 1)}
-              hitSlop={{top: 10, bottom: 10, left: 10, right: 10}}
-            >
-              <Award size={20} color="#FFD700" />
-            </Pressable>
+            {/* Only show the Give Points button if it's not the user's own post */}
+            {!isOwnPost && (
+              <Pressable 
+                style={styles.actionButton} 
+                onPress={() => handleAwardPoints(item.id, 1)}
+                hitSlop={{top: 10, bottom: 10, left: 10, right: 10}}
+              >
+                <Award size={20} color="#FFD700" />
+              </Pressable>
+            )}
             
             <Pressable 
               style={styles.actionButton} 

@@ -97,6 +97,16 @@ export default {
       initialValue: 0
     },
     {
+      name: 'pointsAwardedBy',
+      title: 'Points Awarded By',
+      type: 'array',
+      of: [{ type: 'pointsAwarded' }],
+      initialValue: [],
+      options: {
+        layout: 'grid'
+      }
+    },
+    {
       name: 'createdAt',
       title: 'Created At',
       type: 'datetime',
