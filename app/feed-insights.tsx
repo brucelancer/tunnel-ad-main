@@ -13,6 +13,7 @@ import {
   TouchableOpacity,
   FlatList,
   Animated,
+  Alert,
 } from 'react-native';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { 
@@ -140,7 +141,7 @@ interface FeedInsights {
     username: string;
     avatar: string;
     isVerified: boolean;
-    pointsAwarded: number;
+    totalPoints: number;
     awardedAt: string;
   }[];
 }
@@ -246,6 +247,7 @@ export default function FeedInsights() {
   const [postData, setPostData] = useState<any>(null);
   const [lastUpdated, setLastUpdated] = useState<Date>(new Date());
   const [initialLoadComplete, setInitialLoadComplete] = useState(false);
+  const [claimingPoints, setClaimingPoints] = useState(false);
 
   // Add animation value for the live indicator
   const pulseAnim = useRef(new Animated.Value(1)).current;
@@ -279,6 +281,94 @@ export default function FeedInsights() {
     setRefreshing(true);
     fetchPostData();
     fetchInsights();
+  };
+
+  // Handle claiming points
+  const handleClaimPoints = async () => {
+    if (!user || !user._id || !postId || !insights || !postData) {
+      DeviceEventEmitter.emit('SHOW_TOAST', { 
+        message: 'You need to be logged in to claim points', 
+        type: 'error' 
+      });
+      return;
+    }
+
+    // Check if post belongs to current user
+    if (postData.user.name !== user.username && postData.authorId !== user._id) {
+      DeviceEventEmitter.emit('SHOW_TOAST', { 
+        message: 'Only the post owner can claim points', 
+        type: 'error' 
+      });
+      return;
+    }
+
+    // Check if there are points to claim
+    if (!insights.pointsTotal || insights.pointsTotal <= 0) {
+      DeviceEventEmitter.emit('SHOW_TOAST', { 
+        message: 'No points available to claim', 
+        type: 'info' 
+      });
+      return;
+    }
+
+    try {
+      setClaimingPoints(true);
+      
+      // Log user points before claiming
+      console.log('Current user points before claiming:', user.points);
+      
+      // Call the claim points API
+      const result = await postService.claimPoints(postId, user._id);
+      
+      console.log('Claim points result:', JSON.stringify(result));
+      
+      if (result.success) {
+        // Update the insights to show claimed points
+        setInsights(prev => prev ? {
+          ...prev,
+          pointsTotal: 0,
+          pointsDistribution: []
+        } : null);
+        
+        // Fetch the latest user data to verify points update
+        try {
+          const userData = await postService.getUserData(user._id);
+          console.log('Updated user data:', JSON.stringify(userData));
+          
+          // Update user points in local state if available
+          if (userData && typeof userData.points === 'number') {
+            // Emit an event to update user points in app state
+            DeviceEventEmitter.emit('USER_POINTS_UPDATED', { 
+              points: userData.points
+            });
+          }
+        } catch (userErr) {
+          console.error('Error fetching updated user data:', userErr);
+        }
+        
+        // Show success message
+        DeviceEventEmitter.emit('SHOW_TOAST', { 
+          message: `Successfully claimed ${result.pointsClaimed} points!`, 
+          type: 'success' 
+        });
+        
+        // Refresh data
+        fetchInsights();
+      } else {
+        DeviceEventEmitter.emit('SHOW_TOAST', { 
+          message: result.message || 'Failed to claim points', 
+          type: 'error' 
+        });
+      }
+    } catch (error: any) {
+      console.error('Error claiming points:', error);
+      DeviceEventEmitter.emit('SHOW_TOAST', { 
+        message: error.message || 'Failed to claim points', 
+        type: 'error' 
+      });
+    } finally {
+      setClaimingPoints(false);
+    }
   };
 
   // Improved data loading with proper initialization and error handling
@@ -585,24 +675,50 @@ export default function FeedInsights() {
         console.log("Generated topLikers:", topLikers.length);
         
         // Process points givers from pointsAwardedBy array
-        const topPointsGivers = (currentPostData.pointsAwardedBy || []).map((pointsData: any) => {
-          console.log("Processing points giver:", pointsData);
-          
+        const userPointsMap: Record<string, any> = {};
+
+        // First, group and aggregate points by each unique user ID
+        (currentPostData.pointsAwardedBy || []).forEach((pointsData: any) => {
           const user = pointsData.user || {};
-          const displayName = user.username || 
-                             (user.firstName ? `${user.firstName} ${user.lastName || ''}`.trim() : 'User');
+          if (!user || !user._id) return;
           
-          return {
-            userId: user._id || `points-giver-${Date.now()}`,
-            username: displayName,
-            avatar: user.avatar ? postService.urlFor(user.avatar).url() : 'https://randomuser.me/api/portraits/lego/2.jpg',
-            isVerified: user.isVerified || false,
-            pointsAwarded: pointsData.points || 1,
-            awardedAt: pointsData.awardedAt || new Date().toISOString()
-          };
+          const userId = user._id;
+          const points = pointsData.points || 1;
+          const latestAwardDate = pointsData.awardedAt || new Date().toISOString();
+          
+          // If user already exists in the map, add to their points total
+          if (userPointsMap[userId]) {
+            userPointsMap[userId].totalPoints += points;
+            
+            // Keep track of the latest award date
+            const currentDate = new Date(userPointsMap[userId].awardedAt);
+            const newDate = new Date(latestAwardDate);
+            if (newDate > currentDate) {
+              userPointsMap[userId].awardedAt = latestAwardDate;
+            }
+          } else {
+            // First time seeing this user
+            const displayName = user.username || 
+                               (user.firstName ? `${user.firstName} ${user.lastName || ''}`.trim() : 'User');
+            
+            userPointsMap[userId] = {
+              userId,
+              username: displayName,
+              avatar: user.avatar ? postService.urlFor(user.avatar).url() : 'https://randomuser.me/api/portraits/lego/2.jpg',
+              isVerified: user.isVerified || false,
+              totalPoints: points,
+              awardedAt: latestAwardDate
+            };
+          }
         });
-        
-        console.log("Generated topPointsGivers:", topPointsGivers.length);
+
+        // Convert map to array for the UI
+        const topPointsGivers = Object.values(userPointsMap);
+
+        // Sort by highest points awarded first
+        topPointsGivers.sort((a: any, b: any) => b.totalPoints - a.totalPoints);
+
+        console.log("Generated unique topPointsGivers:", topPointsGivers.length);
         
         // Generate points distribution data
         const pointsDistribution: Array<{points: number, userCount: number}> = [];
@@ -610,7 +726,7 @@ export default function FeedInsights() {
         // Group points by amount
         const pointsByAmount: Record<number, number> = {};
         topPointsGivers.forEach((giver: any) => {
-          const points = giver.pointsAwarded;
+          const points = giver.totalPoints;
           if (!pointsByAmount[points]) {
             pointsByAmount[points] = 0;
           }
@@ -980,35 +1096,103 @@ export default function FeedInsights() {
           <Text style={styles.emptyStateSubtext}>
             Points distribution will appear here as users engage with your content.
           </Text>
+          
+          {/* Debug button */}
+          {__DEV__ && user && (
+            <TouchableOpacity 
+              style={[styles.claimPointsButton, {marginTop: 20}]}
+              onPress={async () => {
+                try {
+                  console.log('Fetching user data for debug...');
+                  const userData = await postService.getUserData(user._id);
+                  console.log('Current user data:', JSON.stringify(userData));
+                  
+                  // Make a direct request to update points
+                  const response = await fetch(`/api/debug-user?userId=${user._id}`);
+                  const data = await response.json();
+                  
+                  console.log('Debug API response:', JSON.stringify(data));
+                  
+                  DeviceEventEmitter.emit('SHOW_TOAST', { 
+                    message: `Debug: ${JSON.stringify(data)}`, 
+                    type: 'info' 
+                  });
+                  
+                  // Refresh data
+                  fetchInsights();
+                } catch (error: any) {
+                  console.error('Debug error:', error);
+                  DeviceEventEmitter.emit('SHOW_TOAST', { 
+                    message: `Debug error: ${error.message}`, 
+                    type: 'error' 
+                  });
+                }
+              }}
+            >
+              <Text style={styles.claimPointsButtonText}>Debug: Check User Points</Text>
+            </TouchableOpacity>
+          )}
         </View>
       );
     }
     
+    // Check if the current user is the post author
+    const isPostAuthor = postData && user && 
+      (postData.user.name === user.username || postData.authorId === user._id);
+    
+    // Check if there are points to claim
+    const hasPointsToClaim = insights.pointsTotal > 0;
+    
     return (
       <View style={styles.pointsDistributionContainer}>
+        {/* Points claim button for post author */}
+        {isPostAuthor && hasPointsToClaim && (
+          <View style={styles.claimPointsSection}>
+            <Text style={styles.claimPointsTitle}>
+              You have {insights.pointsTotal} points available to claim!
+            </Text>
+            <TouchableOpacity 
+              style={styles.claimPointsButton}
+              onPress={handleClaimPoints}
+              disabled={claimingPoints}
+            >
+              {claimingPoints ? (
+                <ActivityIndicator size="small" color="#FFFFFF" />
+              ) : (
+                <Text style={styles.claimPointsButtonText}>
+                  Claim {insights.pointsTotal} Points
+                </Text>
+              )}
+            </TouchableOpacity>
+            <Text style={styles.claimPointsDescription}>
+              Claiming points will add them to your account balance.
+            </Text>
+          </View>
+        )}
+
         {/* Points summary graph */}
         {insights.pointsDistribution && insights.pointsDistribution.length > 0 && (
           <View style={styles.pointsGraphSection}>
             <Text style={styles.sectionSubheading}>Points Distribution</Text>
-            {insights.pointsDistribution.map((item, index) => (
-              <View key={index} style={styles.pointsDistributionItem}>
-                <View style={styles.pointsDistributionInfo}>
-                  <Text style={styles.pointsValue}>{item.points} points</Text>
-                  <Text style={styles.pointsUserCount}>{item.userCount} users</Text>
-                </View>
-                <View style={styles.pointsBarContainer}>
-                  <View 
-                    style={[
-                      styles.pointsBar, 
-                      { 
-                        width: `${(item.userCount / Math.max(...insights.pointsDistribution.map(i => i.userCount))) * 100}%`,
-                        backgroundColor: getPointsColor(item.points),
-                      }
-                    ]} 
-                  />
-                </View>
-              </View>
-            ))}
+        {insights.pointsDistribution.map((item, index) => (
+          <View key={index} style={styles.pointsDistributionItem}>
+            <View style={styles.pointsDistributionInfo}>
+              <Text style={styles.pointsValue}>{item.points} points</Text>
+              <Text style={styles.pointsUserCount}>{item.userCount} users</Text>
+            </View>
+            <View style={styles.pointsBarContainer}>
+              <View 
+                style={[
+                  styles.pointsBar, 
+                  { 
+                    width: `${(item.userCount / Math.max(...insights.pointsDistribution.map(i => i.userCount))) * 100}%`,
+                    backgroundColor: getPointsColor(item.points),
+                  }
+                ]} 
+              />
+            </View>
+          </View>
+        ))}
           </View>
         )}
         
@@ -1042,11 +1226,11 @@ export default function FeedInsights() {
                       {user.isVerified && <TunnelVerifiedMark size={12} />}
                     </View>
                     <Text style={styles.pointsUserAwarded}>
-                      Awarded {user.pointsAwarded} {user.pointsAwarded === 1 ? 'point' : 'points'} {awardedTimeAgo}
+                      Awarded {user.totalPoints} {user.totalPoints === 1 ? 'point' : 'points'} {awardedTimeAgo}
                     </Text>
                   </View>
-                  <View style={[styles.pointsBadge, { backgroundColor: getPointsColor(user.pointsAwarded) }]}>
-                    <Text style={styles.pointsBadgeText}>{user.pointsAwarded}</Text>
+                  <View style={[styles.pointsBadge, { backgroundColor: getPointsColor(user.totalPoints) }]}>
+                    <Text style={styles.pointsBadgeText}>{user.totalPoints}</Text>
                   </View>
                 </View>
               );
@@ -1337,6 +1521,18 @@ export default function FeedInsights() {
           </View>
         )}
         
+        {/* Points Distribution Section */}
+        {insights && (
+          <View style={styles.section}>
+            <View style={styles.sectionHeader}>
+              <Text style={styles.sectionTitle}>Points Earned by Users</Text>
+              <Award color="#1877F2" size={20} />
+            </View>
+            
+            {renderPointsDistribution()}
+          </View>
+        )}
+        
         {/* Top Likers Section */}
         {insights && (
           <View style={styles.section}>
@@ -1361,15 +1557,27 @@ export default function FeedInsights() {
           </View>
         )}
         
-        {/* Points Distribution Section */}
+        {/* Comments Section */}
         {insights && (
           <View style={styles.section}>
             <View style={styles.sectionHeader}>
-              <Text style={styles.sectionTitle}>Points Earned by Users</Text>
-              <Award color="#1877F2" size={20} />
+              <Text style={styles.sectionTitle}>Recent Comments</Text>
+              <TouchableOpacity 
+                onPress={() => router.push({
+                  pathname: "/feed-insights-comment-detail",
+                  params: { 
+                    postId: postId,
+                    postContent: postData?.content || 'Post'
+                  }
+                } as any)}
+                style={styles.viewAllHeaderLink}
+              >
+                <Text style={styles.viewAllHeaderText}>View All</Text>
+                <ChevronRight color="#1877F2" size={14} />
+              </TouchableOpacity>
             </View>
             
-            {renderPointsDistribution()}
+            {renderComments()}
           </View>
         )}
         
@@ -1416,30 +1624,6 @@ export default function FeedInsights() {
                 </Text>
               </View>
             </View>
-          </View>
-        )}
-        
-        {/* Comments Section */}
-        {insights && (
-          <View style={styles.section}>
-            <View style={styles.sectionHeader}>
-              <Text style={styles.sectionTitle}>Recent Comments</Text>
-              <TouchableOpacity 
-                onPress={() => router.push({
-                  pathname: "/feed-insights-comment-detail",
-                  params: { 
-                    postId: postId,
-                    postContent: postData?.content || 'Post'
-                  }
-                } as any)}
-                style={styles.viewAllHeaderLink}
-              >
-                <Text style={styles.viewAllHeaderText}>View All</Text>
-                <ChevronRight color="#1877F2" size={14} />
-              </TouchableOpacity>
-            </View>
-            
-            {renderComments()}
           </View>
         )}
         
@@ -1991,5 +2175,36 @@ const styles = StyleSheet.create({
     color: '#1877F2',
     fontSize: 12,
     marginRight: 2,
+  },
+  claimPointsSection: {
+    backgroundColor: '#111',
+    borderRadius: 12,
+    padding: 16,
+    marginBottom: 16,
+  },
+  claimPointsTitle: {
+    color: '#fff',
+    fontSize: 16,
+    fontWeight: '600',
+    marginBottom: 8,
+  },
+  claimPointsButton: {
+    backgroundColor: '#1877F2',
+    borderRadius: 8,
+    padding: 12,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginVertical: 12,
+  },
+  claimPointsButtonText: {
+    color: '#fff',
+    fontSize: 14,
+    fontWeight: '500',
+    textAlign: 'center',
+  },
+  claimPointsDescription: {
+    color: 'rgba(255,255,255,0.6)',
+    fontSize: 12,
+    textAlign: 'center',
   },
 }); 

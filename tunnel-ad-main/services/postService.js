@@ -12,7 +12,7 @@ const client = createClient({
   dataset,
   useCdn: false, // Set to `false` for real-time data
   apiVersion: '2023-03-01',
-  token
+  token // Use the token for write operations
 })
 
 // Export the client for other uses (like real-time subscriptions)
@@ -445,6 +445,18 @@ export const awardPoints = async (postId, points, userId = '') => {
     
     console.log(`Awarding ${points} points to post ${postId}`);
     
+    // Get the post author ID 
+    const post = await client.fetch(`
+      *[_type == "post" && _id == $postId][0] {
+        "authorId": author->_id
+      }
+    `, { postId });
+    
+    if (!post) {
+      console.error(`Post not found: ${postId}`);
+      throw new Error('Post not found');
+    }
+    
     // Record who awarded the points if we have a valid user ID
     let transaction = client.patch(postId).inc({ points: points });
     
@@ -471,9 +483,184 @@ export const awardPoints = async (postId, points, userId = '') => {
     await transaction.commit();
     console.log(`Successfully awarded ${points} points to post ${postId}`);
     
+    // Create a pointTransaction document
+    await client.create({
+      _type: 'pointTransaction',
+      points: points,
+      transactionType: 'award',
+      source: {
+        _type: 'reference',
+        _ref: postId
+      },
+      user: {
+        _type: 'reference',
+        _ref: post.authorId
+      },
+      createdAt: new Date().toISOString(),
+      description: userId ? `Awarded by user ${userId}` : 'Anonymous award'
+    });
+    
     return { success: true, points: points };
   } catch (error) {
     console.error('Error awarding points:', error);
+    throw error;
+  }
+}
+
+// Claim points from a post and transfer to user account
+export const claimPoints = async (postId, receiverId, claimedAmount = null) => {
+  try {
+    if (!postId) {
+      console.error('Missing postId in claimPoints');
+      throw new Error('Missing post ID');
+    }
+    
+    if (!receiverId) {
+      console.error('Missing receiverId in claimPoints');
+      throw new Error('Missing receiver ID');
+    }
+    
+    console.log(`Claiming points from post ${postId} for user ${receiverId}`);
+    
+    // Get the post to check available points
+    const post = await client.fetch(`
+      *[_type == "post" && _id == $postId][0] {
+        _id,
+        points,
+        "authorId": author->_id
+      }
+    `, { postId });
+    
+    if (!post) {
+      console.error(`Post not found: ${postId}`);
+      throw new Error('Post not found');
+    }
+    
+    // Verify post author matches receiver
+    if (post.authorId !== receiverId) {
+      console.error('User is not the post author');
+      throw new Error('Only the post author can claim points');
+    }
+    
+    // Get user's current points before update
+    const userBefore = await client.fetch(`*[_type == "user" && _id == $receiverId][0]{
+      _id, 
+      username,
+      points
+    }`, {receiverId});
+    
+    console.log('User points before claiming:', userBefore?.points || 0);
+    
+    // Calculate points to claim (either specified amount or all available)
+    const pointsToClaim = claimedAmount && claimedAmount > 0 && claimedAmount <= post.points 
+      ? claimedAmount 
+      : post.points;
+    
+    if (pointsToClaim <= 0) {
+      console.log('No points available to claim');
+      return { success: false, message: 'No points available to claim' };
+    }
+    
+    // Start a transaction
+    // 1. Reduce points from post
+    await client.patch(postId)
+      .dec({ points: pointsToClaim })
+      .commit();
+    
+    console.log(`Reduced ${pointsToClaim} points from post ${postId}`);
+    
+    // 2. Add points to user
+    const updatedUser = await client.patch(receiverId)
+      .inc({ points: pointsToClaim })
+      .commit();
+    
+    console.log('User points update result:', JSON.stringify(updatedUser));
+    
+    // 2b. Add a record to the user's pointsHistory
+    await client.patch(receiverId)
+      .setIfMissing({ pointsHistory: [] })
+      .append('pointsHistory', [
+        {
+          _type: 'pointsEntry',
+          _key: `points-${Date.now()}-${Math.floor(Math.random() * 1000)}`,
+          points: pointsToClaim,
+          source: 'post',
+          sourceId: postId,
+          earnedAt: new Date().toISOString()
+        }
+      ])
+      .commit();
+    
+    console.log(`Successfully claimed ${pointsToClaim} points from post ${postId} for user ${receiverId}`);
+    
+    // Get user's updated points to verify
+    const userAfter = await client.fetch(`*[_type == "user" && _id == $receiverId][0]{
+      _id, 
+      username,
+      points
+    }`, {receiverId});
+    
+    console.log('User points after claiming:', userAfter?.points || 0);
+    
+    // 3. Record this transaction in a dedicated document (optional)
+    await client.create({
+      _type: 'pointTransaction',
+      points: pointsToClaim,
+      transactionType: 'claim',
+      source: {
+        _type: 'reference',
+        _ref: postId
+      },
+      user: {
+        _type: 'reference',
+        _ref: receiverId
+      },
+      createdAt: new Date().toISOString()
+    });
+    
+    return { 
+      success: true, 
+      pointsClaimed: pointsToClaim,
+      remainingPostPoints: post.points - pointsToClaim,
+      userPointsBefore: userBefore?.points || 0,
+      userPointsAfter: userAfter?.points || 0
+    };
+  } catch (error) {
+    console.error('Error claiming points:', error);
+    throw error;
+  }
+}
+
+// Get user points and information
+export const getUserData = async (userId) => {
+  try {
+    if (!userId) {
+      console.error('Missing userId in getUserData');
+      throw new Error('Missing user ID');
+    }
+    
+    const userData = await client.fetch(`
+      *[_type == "user" && _id == $userId][0] {
+        _id,
+        username,
+        firstName,
+        lastName,
+        points,
+        pointsHistory,
+        profile {
+          avatar
+        }
+      }
+    `, { userId });
+    
+    if (!userData) {
+      console.error(`User not found: ${userId}`);
+      throw new Error('User not found');
+    }
+    
+    return userData;
+  } catch (error) {
+    console.error(`Error fetching user data for ${userId}:`, error);
     throw error;
   }
 }

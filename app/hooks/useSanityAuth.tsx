@@ -47,7 +47,7 @@ export const useSanityAuth = () => {
     checkUserSession();
     
     // Add listener for auth state changes
-    const subscription = DeviceEventEmitter.addListener('AUTH_STATE_CHANGED', (event) => {
+    const authSubscription = DeviceEventEmitter.addListener('AUTH_STATE_CHANGED', (event) => {
       console.log('useSanityAuth received AUTH_STATE_CHANGED event:', event);
       
       // If user data is included in the event, update the user state
@@ -60,11 +60,38 @@ export const useSanityAuth = () => {
       }
     });
     
-    // Cleanup subscription on unmount
+    // Add listener for points updates
+    const pointsSubscription = DeviceEventEmitter.addListener('USER_POINTS_UPDATED', (event) => {
+      console.log('useSanityAuth received USER_POINTS_UPDATED event:', event);
+      
+      if (event?.points !== undefined && user) {
+        // Update user with new points
+        const updatedUser = {
+          ...user,
+          points: event.points
+        };
+        console.log('Updating user points to:', event.points);
+        
+        // Update state and storage
+        setUser(updatedUser);
+        AsyncStorage.setItem('sanity_user', JSON.stringify(updatedUser))
+          .then(() => console.log('Updated user points in AsyncStorage'))
+          .catch(err => console.error('Failed to update AsyncStorage with new points:', err));
+        
+        // Emit event to notify all components about user data change
+        DeviceEventEmitter.emit('AUTH_STATE_CHANGED', {
+          isAuthenticated: true,
+          userData: updatedUser
+        });
+      }
+    });
+    
+    // Cleanup subscriptions on unmount
     return () => {
-      subscription.remove();
+      authSubscription.remove();
+      pointsSubscription.remove();
     };
-  }, []);
+  }, [user]);
 
   // Load auth settings from Sanity
   const loadAuthSettings = async () => {

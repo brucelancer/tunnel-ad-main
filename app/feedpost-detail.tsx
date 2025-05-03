@@ -410,8 +410,8 @@ export default function PostDetailScreen() {
           
           // Check if comments are restricted
           if (fullPostData && fullPostData.commentRestrictions) {
-            setCommentsRestricted(fullPostData.commentRestrictions.restricted || false);
-            setAllowedCommentUsers(fullPostData.commentRestrictions.allowedUsers || []);
+              setCommentsRestricted(fullPostData.commentRestrictions.restricted || false);
+              setAllowedCommentUsers(fullPostData.commentRestrictions.allowedUsers || []);
           }
           
           // Check if the current user is the post author
@@ -1920,13 +1920,13 @@ export default function PostDetailScreen() {
                 <View style={styles.actionGroup}>
                   {/* Only show the Give Points button if the user is not the post author */}
                   {!isPostAuthor && (
-                    <Pressable 
-                      style={styles.actionButton} 
-                      onPress={handleAwardPoints}
-                      hitSlop={10}
-                    >
-                      <Award size={22} color="#FFD700" />
-                    </Pressable>
+                  <Pressable 
+                    style={styles.actionButton} 
+                    onPress={handleAwardPoints}
+                    hitSlop={10}
+                  >
+                    <Award size={22} color="#FFD700" />
+                  </Pressable>
                   )}
                   
                   <Pressable 

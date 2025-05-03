@@ -120,6 +120,15 @@ export default {
       initialValue: 0,
     },
     {
+      name: 'pointsHistory',
+      title: 'Points History',
+      type: 'array',
+      of: [
+        { type: 'pointsEntry' }
+      ],
+      initialValue: [],
+    },
+    {
       name: 'needsPasswordReset',
       title: 'Needs Password Reset',
       type: 'boolean',

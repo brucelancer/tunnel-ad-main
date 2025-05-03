@@ -49,6 +49,7 @@ import {
   Film,
   Play,
   PieChart,
+  RefreshCw,
 } from 'lucide-react-native';
 import { BlurView } from 'expo-blur';
 import { useRouter, useFocusEffect } from 'expo-router';
@@ -169,6 +170,8 @@ export default function ProfileScreen() {
   const [activeTab, setActiveTab] = useState<'posts' | 'videos'>('posts');
   const [userVideos, setUserVideos] = useState<any[]>([]);
   const [videosLoading, setVideosLoading] = useState(false);
+  // New state for points loading
+  const [pointsLoading, setPointsLoading] = useState(false);
   
   // Get user data from Sanity auth hook
   const { user, logout } = useSanityAuth();
@@ -176,24 +179,124 @@ export default function ProfileScreen() {
   // Add local state to cache user data for display
   const [userDisplay, setUserDisplay] = useState<any>(null);
 
+  // Add a forced refresh flag to track when we're forcing a refresh
+  const [forcedRefresh, setForcedRefresh] = useState(false);
+  
+  // Track if this is the first focus to avoid reloading on initial render
+  const isFirstFocus = useRef(true);
+  
+  // Add this effect to reload the entire screen when it comes into focus
+  useFocusEffect(
+    useCallback(() => {
+      console.log('Profile screen focused, reloading page');
+      
+      // Show loading indicator
+      setRefreshing(true);
+      
+      // Small delay to ensure the loading indicator shows
+      setTimeout(async () => {
+        try {
+          // Force refresh points data first
+          await fetchLivePointsData(true);
+          
+          // Force a full refresh of user data
+          await refreshUserData();
+          
+          console.log('Profile screen fully reloaded');
+        } catch (error) {
+          console.error('Error during page reload:', error);
+        } finally {
+          setRefreshing(false);
+        }
+      }, 100);
+      
+      return () => {
+        // Clean up or actions to take when screen loses focus
+      };
+    }, [])
+  );
+
   useEffect(() => {
     setDisplayPoints(points);
   }, [points]);
 
-  useEffect(() => {
-    const subscription = DeviceEventEmitter.addListener('POINTS_UPDATED', (event) => {
-      if (event?.type === 'reset') {
-        setDisplayPoints(0);
-        animatePointsReset();
-      } else if (event?.type === 'earned') {
+  // Function to fetch live points data from Sanity with forced refreshing
+  const fetchLivePointsData = async (force = false) => {
+    if (!user?._id) return;
+
+    if (force) {
+      setForcedRefresh(true);
+    }
+    setPointsLoading(true);
+    
+    try {
+      console.log("Fetching live points data from Sanity...");
+      
+      // Create Sanity client with no caching
+      const client = createClient({
+        projectId: '21is7976',
+        dataset: 'production',
+        useCdn: false, // Disable CDN to get real-time data
+        apiVersion: '2023-03-01',
+      });
+      
+      // Use a timestamp to prevent any caching
+      const timestamp = new Date().getTime();
+      
+      // Query with a timestamp parameter to force a new request
+      const userData = await client.fetch(
+        '*[_type == "user" && _id == $userId][0] { _id, points }',
+        { userId: user._id, timestamp }
+      );
+      
+      if (userData?.points !== undefined) {
+        console.log(`(LIVE) Fetched points from Sanity: ${userData.points}`);
+        
+        // Always update the display points, even if they seem the same
+        setDisplayPoints(userData.points);
+        
+        // If the points in user state don't match the fetched points, update the user state
+        if (user.points !== userData.points) {
+          console.log(`Points mismatch: local ${user.points}, Sanity ${userData.points}. Updating local state.`);
+          
+          // Emit event to update user object in auth context
+          DeviceEventEmitter.emit('USER_POINTS_UPDATED', {
+            points: userData.points
+          });
+        }
+        
+        // Always animate on forced refresh
+        if (force || displayPoints !== userData.points) {
         animatePointsEarned();
       }
-    });
+      }
+    } catch (error) {
+      console.error("Error fetching live points:", error);
+    } finally {
+      setPointsLoading(false);
+      if (force) {
+        setForcedRefresh(false);
+      }
+    }
+  };
+
+  // Add periodic points refresh on a shorter interval
+  useEffect(() => {
+    // Set up interval to fetch points more frequently
+    const pointsRefreshInterval = setInterval(() => {
+      console.log("Running periodic points refresh...");
+      fetchLivePointsData();
+    }, 10000); // 10 seconds instead of 30
 
     return () => {
-      subscription.remove();
+      clearInterval(pointsRefreshInterval);
     };
-  }, []);
+  }, [user?._id]);
+
+  // Function to force refresh points
+  const forceRefreshPoints = useCallback(async () => {
+    await fetchLivePointsData(true);
+  }, [user?._id]);
 
   // Listen for auth state changes and for direct user updates
   useEffect(() => {
@@ -211,6 +314,9 @@ export default function ProfileScreen() {
       if (user.points !== undefined) {
         setDisplayPoints(user.points);
       }
+      
+      // Fetch latest points when user data is loaded
+      fetchLivePointsData();
     } else {
       console.log("No user data in useSanityAuth hook");
       // Don't set isAuthenticated to false here, as we might still be loading
@@ -246,8 +352,29 @@ export default function ProfileScreen() {
       }
     });
 
+    // Listen for POINTS_EARNED events
+    const pointsEarnedSubscription = DeviceEventEmitter.addListener('POINTS_EARNED', (event) => {
+      console.log('Profile screen received POINTS_EARNED event:', event);
+      
+      if (event.verifiedFromSanity && event.newTotal !== undefined) {
+        // Update with the exact total from Sanity
+        console.log(`Setting points to ${event.newTotal} (verified from Sanity)`);
+        setDisplayPoints(event.newTotal);
+        animatePointsEarned();
+      } else if (event.amount) {
+        // Increment points locally
+        console.log(`Adding ${event.amount} points locally`);
+        setDisplayPoints(prev => prev + event.amount);
+        animatePointsEarned();
+        
+        // Also fetch from Sanity to ensure accuracy
+        fetchLivePointsData();
+      }
+    });
+
     return () => {
       subscription.remove();
+      pointsEarnedSubscription.remove();
     };
   }, [user]);
 
@@ -260,12 +387,15 @@ export default function ProfileScreen() {
       if (user?._id) {
         console.log("Refreshing user data from Sanity...");
         
+        // Add a random parameter to bust cache
+        const cacheBuster = new Date().getTime();
+        
         // Correct Sanity configuration with proper project ID and dataset
         const client = createClient({
           projectId: '21is7976', // Updated to the correct project ID
           dataset: 'production',
-          useCdn: true,
-          apiVersion: '2021-10-21',
+          useCdn: false, // Changed to false for real-time data
+          apiVersion: '2023-03-01',
         });
         
         if (!client) {
@@ -273,7 +403,7 @@ export default function ProfileScreen() {
           return;
         }
         
-        // Fetch the latest user data including points
+        // Fetch the latest user data including points - with cache busting
         const freshUserData = await client.fetch(`
           *[_type == "user" && _id == $userId][0] {
             _id,
@@ -283,7 +413,8 @@ export default function ProfileScreen() {
             email,
             points,
             profile,
-            isBlueVerified
+            isBlueVerified,
+            "cacheBuster": ${cacheBuster}
           }
         `, { userId: user._id });
         
@@ -292,12 +423,31 @@ export default function ProfileScreen() {
           
           // Update points display if available
           if (freshUserData.points !== undefined) {
-            console.log(`Updating points display to ${freshUserData.points} from refresh`);
+            console.log(`Refreshed points from Sanity: ${freshUserData.points}`);
+            
+            // Always set the display points to match Sanity
             setDisplayPoints(freshUserData.points);
+            
+            // Animate to show the refresh if there's a change
+            if (displayPoints !== freshUserData.points) {
+              animatePointsEarned();
+            }
+            
+            // If points are different from what's in the user object, update that too
+            if (user.points !== freshUserData.points) {
+              console.log(`Points mismatch during refresh: user object ${user.points}, Sanity ${freshUserData.points}`);
+              DeviceEventEmitter.emit('USER_POINTS_UPDATED', {
+                points: freshUserData.points
+              });
+            }
           }
           
           // Update the cached user display data
-          setUserDisplay(freshUserData);
+          setUserDisplay({
+            ...freshUserData,
+            // Force the points to be up to date in the display data
+            points: freshUserData.points
+          });
         }
       } else {
         console.log("Can't refresh: User is not logged in or no user ID available");
@@ -313,46 +463,6 @@ export default function ProfileScreen() {
       setRefreshing(false);
     }
   };
-
-  // Add event listeners after refreshUserData is defined
-  useEffect(() => {
-    // Set up the listener for points earned from videos
-    const pointsEarnedListener = DeviceEventEmitter.addListener('POINTS_EARNED', (event) => {
-      console.log('Profile: POINTS_EARNED event received:', event);
-      
-      // Handle verified points updates from Sanity
-      if (event.verifiedFromSanity && event.newTotal !== undefined) {
-        // Update points with the exact total from Sanity
-        console.log(`Profile: Updating points display to ${event.newTotal} from Sanity verification`);
-        setDisplayPoints(event.newTotal);
-        
-        // Show animation for better user experience
-        animatePointsEarned();
-      } 
-      // Handle incremental points updates
-      else if (event.amount) {
-        console.log(`Profile: Incrementing points by ${event.amount}`);
-        setDisplayPoints(current => current + event.amount);
-        animatePointsEarned();
-      }
-    });
-    
-    // Also listen for general POINTS_UPDATED events
-    const pointsUpdatedListener = DeviceEventEmitter.addListener('POINTS_UPDATED', (event) => {
-      console.log('Profile: POINTS_UPDATED event received:', event);
-      
-      if (event?.type === 'earned') {
-        // When points are earned, refresh from Sanity to get the latest total
-        refreshUserData();
-      }
-    });
-    
-    // Clean up on unmount
-    return () => {
-      pointsEarnedListener.remove();
-      pointsUpdatedListener.remove();
-    };
-  }, [refreshUserData]);
 
   const animatePointsEarned = () => {
     Animated.sequence([
@@ -433,17 +543,6 @@ export default function ProfileScreen() {
   useEffect(() => {
     refreshUserData();
   }, []);
-
-  // Refresh data when the screen comes into focus
-  useFocusEffect(
-    useCallback(() => {
-      console.log('Profile screen is focused, refreshing data...');
-      refreshUserData();
-      return () => {
-        // Clean up or actions to take when screen loses focus
-      };
-    }, [])
-  );
 
   const headerOpacity = scrollY.interpolate({
     inputRange: [0, 50, 100],
@@ -1220,14 +1319,34 @@ export default function ProfileScreen() {
           
           <View style={styles.pointsContainer}>
             <Text style={styles.pointsLabel}>Your Points</Text>
+            <View style={styles.pointsRow}>
             <Animated.Text
               style={[
                 styles.pointsValue,
                 { transform: [{ scale: scaleAnim }] }
               ]}
             >
-              {profileData?.points || displayPoints}
+                {displayPoints}
             </Animated.Text>
+              
+              <Pressable 
+                onPress={forceRefreshPoints}
+                style={[
+                  styles.refreshPointsButton,
+                  forcedRefresh && styles.refreshPointsButtonActive
+                ]}
+                disabled={pointsLoading}
+              >
+                {pointsLoading ? (
+                  <ActivityIndicator size="small" color="#0070F3" />
+                ) : (
+                  <RefreshCw size={16} color={forcedRefresh ? "#00ff00" : "#0070F3"} />
+                )}
+              </Pressable>
+            </View>
+            <Text style={styles.pointsSource}>
+              {pointsLoading ? 'Syncing with Sanity...' : 'Synced with Sanity'}
+            </Text>
           </View>
         </View>
 
@@ -2465,5 +2584,29 @@ const styles = StyleSheet.create({
     fontSize: 14,
     fontWeight: '600',
     marginRight: 4,
+  },
+  pointsRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  refreshPointsButton: {
+    marginLeft: 10,
+    padding: 5,
+    borderRadius: 12,
+    backgroundColor: 'rgba(0, 112, 243, 0.1)',
+    width: 24,
+    height: 24,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  refreshPointsButtonActive: {
+    backgroundColor: 'rgba(0, 255, 0, 0.2)',
+  },
+  pointsSource: {
+    color: '#888',
+    fontSize: 10,
+    fontFamily: 'Inter_400Regular',
+    marginTop: 5,
   },
 });

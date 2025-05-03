@@ -4,11 +4,13 @@
   "version": "1.0.0",
   "private": true,
   "scripts": {
-    "dev": "EXPO_NO_TELEMETRY=1 expo start",
+    "dev": "expo start",
     "build:web": "expo export --platform web",
     "lint": "expo lint",
     "android": "expo run:android",
-    "ios": "expo run:ios"
+    "ios": "expo run:ios",
+    "fix-points": "node scripts/direct-fix.js",
+    "fix-points-direct": "node scripts/direct-fix-sanity.js"
   },
   "dependencies": {
     "@emotion/react": "^11.14.0",
@@ -23,11 +25,10 @@
     "@react-native-masked-view/masked-view": "^0.3.2",
     "@react-navigation/bottom-tabs": "^7.2.0",
     "@react-navigation/native": "^7.0.14",
-    "@sanity/client": "^6.28.3",
+    "@sanity/client": "^6.29.1",
     "@sanity/image-url": "^1.1.0",
     "@supabase/supabase-js": "^2.49.4",
     "@types/bcrypt": "^5.0.2",
-    "bcrypt": "^5.1.1",
     "bcryptjs": "^3.0.2",
     "dotenv": "^16.4.7",
     "expo": "52.0.33",
@@ -55,6 +56,7 @@
     "lucide-react-native": "^0.475.0",
     "moti": "^0.30.0",
     "next-sanity": "^9.9.5",
+    "node-fetch": "^2.7.0",
     "react": "18.3.1",
     "react-dom": "18.3.1",
     "react-hook-form": "^7.54.2",
