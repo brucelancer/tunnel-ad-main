@@ -21,7 +21,9 @@ import {
   ArrowDownRight, 
   DollarSign,
   ChevronDown,
-  Plus
+  Plus,
+  Heart,
+  MessageCircle
 } from 'lucide-react-native';
 import { useRouter } from 'expo-router';
 // Replace the import for usePoints with a local implementation
@@ -45,7 +47,7 @@ const usePoints = () => {
 
 const { width: SCREEN_WIDTH, height: SCREEN_HEIGHT } = Dimensions.get('window');
 
-type NotificationType = 'points' | 'system' | 'social';
+type NotificationType = 'points' | 'system' | 'social' | 'like' | 'comment';
 type TabType = 'notifications' | 'history' | 'withdraw';
 
 interface Notification {
@@ -53,7 +55,8 @@ interface Notification {
   type: NotificationType;
   title: string;
   message: string;
-  time: string;
+  time: string; // For backwards compatibility
+  timestamp: Date; // Actual timestamp
   read: boolean;
 }
 
@@ -73,6 +76,49 @@ interface WithdrawalMethod {
   processingTime: string;
 }
 
+// Format the timestamp into a readable format
+const formatTimestamp = (timestamp: Date): string => {
+  const now = new Date();
+  const diff = now.getTime() - timestamp.getTime();
+  
+  // Less than 24 hours - show time only
+  if (diff < 24 * 60 * 60 * 1000) {
+    return timestamp.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+  } 
+  // Less than a week - show day of week and time
+  else if (diff < 7 * 24 * 60 * 60 * 1000) {
+    return timestamp.toLocaleDateString([], { weekday: 'short' }) + ' ' + 
+           timestamp.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+  } 
+  // Older - show full date
+  else {
+    return timestamp.toLocaleDateString([], { 
+      month: 'short', 
+      day: 'numeric',
+      year: timestamp.getFullYear() !== now.getFullYear() ? 'numeric' : undefined
+    }) + ' ' + timestamp.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+  }
+};
+
+// Function to get time ago string (for backwards compatibility)
+const getTimeAgo = (timestamp: Date): string => {
+  const now = new Date();
+  const seconds = Math.floor((now.getTime() - timestamp.getTime()) / 1000);
+  
+  if (seconds < 60) return 'Just now';
+  
+  const minutes = Math.floor(seconds / 60);
+  if (minutes < 60) return `${minutes} ${minutes === 1 ? 'minute' : 'minutes'} ago`;
+  
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) return `${hours} ${hours === 1 ? 'hour' : 'hours'} ago`;
+  
+  const days = Math.floor(hours / 24);
+  if (days < 7) return `${days} ${days === 1 ? 'day' : 'days'} ago`;
+  
+  return `${Math.floor(days / 7)} weeks ago`;
+};
+
 export default function NotificationsScreen() {
   const [activeTab, setActiveTab] = useState<TabType>('notifications');
   const [expandedFaq, setExpandedFaq] = useState<number | null>(null);
@@ -88,6 +134,7 @@ export default function NotificationsScreen() {
       title: 'You earned 10 points!',
       message: 'You watched a video for more than 30 seconds.',
       time: '2 hours ago',
+      timestamp: new Date(Date.now() - 2 * 60 * 60 * 1000), // 2 hours ago
       read: false,
     },
     {
@@ -96,6 +143,7 @@ export default function NotificationsScreen() {
       title: 'New feature available',
       message: 'Check out our new tunnelling feature to create your own content.',
       time: '1 day ago',
+      timestamp: new Date(Date.now() - 24 * 60 * 60 * 1000), // 1 day ago
       read: true,
     },
     {
@@ -104,22 +152,25 @@ export default function NotificationsScreen() {
       title: 'Your friend joined Tunnel',
       message: 'John Doe just joined Tunnel. Say hello!',
       time: '2 days ago',
+      timestamp: new Date(Date.now() - 2 * 24 * 60 * 60 * 1000), // 2 days ago
       read: true,
     },
     {
       id: 4,
-      type: 'points',
-      title: 'Points redeemed',
-      message: 'You successfully redeemed 500 points for a $5 gift card.',
+      type: 'like',
+      title: 'Someone liked your video',
+      message: 'Alice Smith liked your video "Street Dance Performance"',
       time: '3 days ago',
+      timestamp: new Date(Date.now() - 3 * 24 * 60 * 60 * 1000), // 3 days ago
       read: true,
     },
     {
       id: 5,
-      type: 'system',
-      title: 'Account verified',
-      message: 'Your account has been successfully verified.',
+      type: 'comment',
+      title: 'New comment on your video',
+      message: 'Bob Johnson commented: "Amazing performance! How long did you practice?"',
       time: '1 week ago',
+      timestamp: new Date(Date.now() - 7 * 24 * 60 * 60 * 1000), // 1 week ago
       read: true,
     },
   ];
@@ -248,6 +299,24 @@ export default function NotificationsScreen() {
             style={styles.iconContainer}
           >
             <Text style={styles.iconText}>@</Text>
+          </LinearGradient>
+        );
+      case 'like':
+        return (
+          <LinearGradient
+            colors={['#FF3366', '#FF0066']}
+            style={styles.iconContainer}
+          >
+            <Heart size={16} color="white" />
+          </LinearGradient>
+        );
+      case 'comment':
+        return (
+          <LinearGradient
+            colors={['#1877F2', '#0A5DC2']}
+            style={styles.iconContainer}
+          >
+            <MessageCircle size={16} color="white" />
           </LinearGradient>
         );
       default:
@@ -424,7 +493,10 @@ export default function NotificationsScreen() {
                 <View style={styles.notificationContent}>
                   <Text style={styles.notificationTitle}>{item.title}</Text>
                   <Text style={styles.notificationMessage}>{item.message}</Text>
-                  <Text style={styles.notificationTime}>{item.time}</Text>
+                  <View style={styles.timeContainer}>
+                    <Text style={styles.notificationTime}>{formatTimestamp(item.timestamp)}</Text>
+                    <Text style={styles.relativeTime}>({getTimeAgo(item.timestamp)})</Text>
+                  </View>
                 </View>
                 {!item.read && <View style={styles.unreadDot} />}
               </View>
@@ -645,6 +717,17 @@ const styles = StyleSheet.create({
     color: '#888',
     fontSize: 12,
     fontFamily: 'Inter_400Regular',
+  },
+  timeContainer: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginTop: 4,
+  },
+  relativeTime: {
+    color: '#888',
+    fontSize: 12,
+    fontFamily: 'Inter_400Regular',
+    marginLeft: 6,
   },
   unreadDot: {
     width: 10,

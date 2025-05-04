@@ -1,26 +1,70 @@
-'use client';
-
-import Link from 'next/link';
+import { View, Text, StyleSheet, Pressable } from 'react-native';
+import { Link } from 'expo-router';
 
 export default function AdminIndexPage() {
   return (
-    <div className="container mx-auto px-4 py-8">
-      <h1 className="text-2xl font-bold mb-6">Admin Dashboard</h1>
+    <View style={styles.container}>
+      <Text style={styles.title}>Admin Dashboard</Text>
       
-      <div className="bg-white rounded-lg shadow p-6">
-        <h2 className="text-xl font-semibold mb-4">Admin Tools</h2>
+      <View style={styles.card}>
+        <Text style={styles.subtitle}>Admin Tools</Text>
         
-        <ul className="space-y-2">
-          <li>
-            <Link href="/admin/fix-points" className="text-blue-500 hover:underline">
-              Fix User Points
-            </Link>
-            <p className="text-sm text-gray-600 mt-1">
+        <View style={styles.list}>
+          <View style={styles.listItem}>
+            <Pressable onPress={() => {}}>
+              <Text style={styles.linkText}>Fix User Points</Text>
+            </Pressable>
+            <Text style={styles.description}>
               Update user points to correct discrepancies between app and Sanity
-            </p>
-          </li>
-        </ul>
-      </div>
-    </div>
+            </Text>
+          </View>
+        </View>
+      </View>
+    </View>
   );
-} 
+}
+
+const styles = StyleSheet.create({
+  container: {
+    flex: 1,
+    padding: 16,
+  },
+  title: {
+    fontSize: 24,
+    fontWeight: 'bold',
+    marginBottom: 16,
+  },
+  card: {
+    backgroundColor: 'white',
+    borderRadius: 8,
+    padding: 16,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.1,
+    shadowRadius: 4,
+    elevation: 2,
+  },
+  subtitle: {
+    fontSize: 18,
+    fontWeight: '600',
+    marginBottom: 12,
+  },
+  list: {
+    gap: 8,
+  },
+  listItem: {
+    marginBottom: 8,
+  },
+  link: {
+    marginTop: 4,
+    marginBottom: 4,
+  },
+  linkText: {
+    color: '#3b82f6',
+  },
+  description: {
+    fontSize: 14,
+    color: '#666',
+    marginTop: 4,
+  },
+}); 

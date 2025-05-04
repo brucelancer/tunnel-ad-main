@@ -973,7 +973,7 @@ const CommentsSection: React.FC<CommentsSectionProps> = ({
             )}
           </View>
           
-          {/* Input bar - TikTok style keyboard tracking */}
+          {/* Input bar -  style keyboard tracking */}
           <View style={{
             position: 'absolute',
             bottom: isKeyboardVisible ? keyboardHeight : (isFullScreen ? 10 : 90),
@@ -1288,6 +1288,14 @@ const VideoItemComponent = memo(({
   // Add fullscreen mode state (0: regular, 1: minimal UI, 2: video only)
   const [fullscreenMode, setFullscreenMode] = useState(0);
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
+  // Add state for video paused status
+  const [isPaused, setIsPaused] = useState<boolean>(false);
+  // Add state for play icon animation
+  const [showPlayIcon, setShowPlayIcon] = useState<boolean>(false);
+  // Add state for 2x playback speed
+  const [isSpeedUp, setIsSpeedUp] = useState<boolean>(false);
+  const [showSpeedUpIndicator, setShowSpeedUpIndicator] = useState<boolean>(false);
+  const speedUpIndicatorOpacity = useRef(new Animated.Value(0)).current;
   
   const videoRef = useRef<any>(null);
   const pointsAnimation = useRef(new Animated.Value(0)).current;
@@ -1295,6 +1303,8 @@ const VideoItemComponent = memo(({
   const hasShownAnimationRef = useRef(false);
   const lastPositionRef = useRef<number>(0);
   const slideAnim = useRef(new Animated.Value(SCREEN_HEIGHT)).current;
+  // Add fade animation for play icon
+  const playIconOpacity = useRef(new Animated.Value(0)).current;
   
   // Create pan responder for horizontal swiping
   const panResponder = useRef(
@@ -1794,14 +1804,6 @@ const VideoItemComponent = memo(({
       setViewCounted(false);
     }
     
-    // Check for showing playback controls
-    if (status?.isPlaying === false && lastPositionRef.current > 0) {
-      // Show buttons when video is paused by user (not on initial load)
-      setShowButtons(true);
-    } else {
-      setShowButtons(false);
-    }
-    
     // Track position for other functions to use
     lastPositionRef.current = status?.positionMillis || 0;
   };
@@ -1848,7 +1850,7 @@ const VideoItemComponent = memo(({
     
     if (isVertical) {
       // For vertical videos, use COVER to fill the entire screen
-      // This is how TikTok and YouTube Shorts display videos
+     
         return {
         width: SCREEN_WIDTH,
         height: SCREEN_HEIGHT,
@@ -2235,6 +2237,100 @@ const VideoItemComponent = memo(({
     return null;
   };
 
+  // Add function to toggle play/pause
+  const togglePlayPause = async () => {
+    try {
+      if (!videoRef.current) return;
+      
+      // Get current status
+      const videoStatus = await videoRef.current.getStatusAsync();
+      
+      // Toggle the paused state
+      if (videoStatus.isPlaying) {
+        await videoRef.current.pauseAsync();
+        setIsPaused(true);
+      } else {
+        await videoRef.current.playAsync();
+        setIsPaused(false);
+      }
+      
+      // Provide haptic feedback
+      Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+      
+      // Show play icon immediately
+      setShowPlayIcon(true);
+      
+      // Animate the play icon's opacity without using the callback to update state
+      Animated.sequence([
+        Animated.timing(playIconOpacity, {
+          toValue: 1,
+          duration: 150,
+          useNativeDriver: true,
+        }),
+        Animated.timing(playIconOpacity, {
+          toValue: 0,
+          duration: 850,
+          delay: 500,
+          useNativeDriver: true,
+        }),
+      ]).start();
+      
+      // Use setTimeout instead of animation callback to update state
+      setTimeout(() => {
+        setShowPlayIcon(false);
+      }, 1500); // Total animation time (150 + 500 + 850)
+      
+    } catch (error) {
+      console.error('Error toggling play/pause:', error);
+    }
+  };
+
+  // Create longPressTimeout for 2x speed function
+  const longPressTimeout = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  // Add function to handle 2x speed
+  const handleSpeedChange = async (speed: number) => {
+    if (!videoRef.current) return;
+    
+    try {
+      // Get current status to maintain the play state
+      const status = await videoRef.current.getStatusAsync();
+      
+      // Set the rate (speed) of the video
+      await videoRef.current.setRateAsync(speed, status.shouldPlay);
+      
+      // Update state to track if we're in speed up mode
+      setIsSpeedUp(speed > 1);
+      
+      // Provide haptic feedback
+      Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+      
+      // Show the speed indicator
+      if (speed > 1) {
+        setShowSpeedUpIndicator(true);
+        
+        // Animate the indicator
+        Animated.sequence([
+          Animated.timing(speedUpIndicatorOpacity, {
+            toValue: 1,
+            duration: 150,
+            useNativeDriver: true,
+          }),
+          Animated.timing(speedUpIndicatorOpacity, {
+            toValue: 0,
+            duration: 850,
+            delay: 1000,
+            useNativeDriver: true,
+          }),
+        ]).start(() => {
+          setShowSpeedUpIndicator(false);
+        });
+      }
+    } catch (error) {
+      console.error('Error changing video speed:', error);
+    }
+  };
+
   return (
     <View style={[
       styles.videoContainer,
@@ -2259,99 +2355,162 @@ const VideoItemComponent = memo(({
             onPlaybackStatusUpdate={handlePlaybackStatusUpdate}
             onLoad={onLoad}
             useNativeControls={false}
-            shouldPlay={isCurrentVideo && isTabActive && !isLocked && !showPremiumAd && isTabFocused}
+            shouldPlay={isCurrentVideo && isTabActive && !isLocked && !showPremiumAd && isTabFocused && !isPaused}
             isMuted={!isCurrentVideo || !isTabActive || isLocked || !isTabFocused}
             volume={1.0}
             progressUpdateIntervalMillis={500}
           />
+          
+          {/* Add play/pause touch overlay */}
+          {isCurrentVideo && !isLocked && !showPremiumAd && (
+            <>
+              {/* Left half for play/pause */}
+              <Pressable 
+                style={[styles.videoTouchOverlay, styles.leftHalfTouchOverlay]}
+                onPress={togglePlayPause}
+              />
+              
+              {/* Right half for 2x speed on long press */}
+              <Pressable 
+                style={[styles.videoTouchOverlay, styles.rightHalfTouchOverlay]}
+                onPress={togglePlayPause}
+                onLongPress={() => {
+                  // Set timeout to handle long press
+                  longPressTimeout.current = setTimeout(() => {
+                    // Enable 2x speed
+                    handleSpeedChange(2.0);
+                  }, 200); // 200ms threshold for long press
+                }}
+                onPressOut={() => {
+                  // Clear the timeout if press ends before threshold
+                  if (longPressTimeout.current) {
+                    clearTimeout(longPressTimeout.current);
+                    longPressTimeout.current = null;
+                  }
+                  
+                  // If currently in speed up mode, revert to normal speed
+                  if (isSpeedUp) {
+                    handleSpeedChange(1.0);
+                  }
+                }}
+              >
+                {/* Show the speed up indicator when active */}
+                {showSpeedUpIndicator && (
+                  <Animated.View style={[
+                    styles.speedUpIconContainer,
+                    { opacity: speedUpIndicatorOpacity }
+                  ]}>
+                    <Text style={styles.speedUpText}>2x</Text>
+                  </Animated.View>
+                )}
+              </Pressable>
+              
+              {/* Centered play/pause icon */}
+              {showPlayIcon && (
+                <Animated.View style={[
+                  styles.playIconContainer,
+                  styles.centeredPlayIcon,
+                  { opacity: playIconOpacity }
+                ]}>
+                  <Play 
+                    color="white" 
+                    size={SCREEN_WIDTH * 0.15}
+                    style={styles.playIcon} 
+                    fill={isPaused ? "white" : "transparent"}
+                  />
+                </Animated.View>
+              )}
+            </>
+          )}
         </View>
       
-        {/* UI Overlay with SafeAreaView for better positioning */}
-        <SafeAreaView style={[
-        styles.overlay,
-          item.type === 'vertical' ? styles.verticalOverlay : styles.horizontalOverlay
-      ]}>
+        {/* UI Overlay with SafeAreaView for better positioning - Only show when not in 2x speed mode */}
+        {!isSpeedUp && (
+          <SafeAreaView style={[
+            styles.overlay,
+            item.type === 'vertical' ? styles.verticalOverlay : styles.horizontalOverlay
+          ]}>
           {/* Show author info and description only in mode 0 when fullscreen */}
           {(!isFullScreen || (isFullScreen && fullscreenMode === 0)) && (
-        <View style={[styles.videoInfo, videoInfoStyle]}>
-            {/* Author info */}
-          <View style={styles.authorContainer}>
-              {item.authorAvatar ? (
-                <Image 
-                  source={{ uri: item.authorAvatar }} 
-                  style={styles.authorAvatar} 
-                />
-              ) : (
-                <View style={styles.authorAvatarPlaceholder} />
-              )}
-              <View style={styles.authorNameContainer}>
-                <Text 
-                  style={[
-                    styles.author,
-                    // Enhance text visibility in fullscreen mode
-                    isFullScreen && {
-                      fontSize: SCREEN_WIDTH * 0.05,
-                      textShadowColor: 'rgba(0,0,0,0.7)',
-                      textShadowRadius: 5
-                    }
-                  ]} 
-                  numberOfLines={1} 
-                  ellipsizeMode="tail"
-                >
-              {item.author}
-            </Text>
-                {/* Show verification badge if applicable */}
-                {(item.isVerified || item.isBlueVerified) && (
-                  <View style={styles.authorVerifiedBadge}>
-                    {item.isBlueVerified ? (
-                      <TunnelBlueVerifiedMark size={Math.max(15, SCREEN_WIDTH * 0.04)} />
-                    ) : (
-                      <TunnelVerifiedMark size={Math.max(12, SCREEN_WIDTH * 0.03)} />
-                    )}
+            <View style={[styles.videoInfo, videoInfoStyle]}>
+              {/* Author info */}
+              <View style={styles.authorContainer}>
+                {item.authorAvatar ? (
+                  <Image 
+                    source={{ uri: item.authorAvatar }} 
+                    style={styles.authorAvatar} 
+                  />
+                ) : (
+                  <View style={styles.authorAvatarPlaceholder} />
+                )}
+                <View style={styles.authorNameContainer}>
+                  <Text 
+                    style={[
+                      styles.author,
+                      // Enhance text visibility in fullscreen mode
+                      isFullScreen && {
+                        fontSize: SCREEN_WIDTH * 0.05,
+                        textShadowColor: 'rgba(0,0,0,0.7)',
+                        textShadowRadius: 5
+                      }
+                    ]} 
+                    numberOfLines={1} 
+                    ellipsizeMode="tail"
+                  >
+                    {item.author}
+                  </Text>
+                  {/* Show verification badge if applicable */}
+                  {(item.isVerified || item.isBlueVerified) && (
+                    <View style={styles.authorVerifiedBadge}>
+                      {item.isBlueVerified ? (
+                        <TunnelBlueVerifiedMark size={Math.max(15, SCREEN_WIDTH * 0.04)} />
+                      ) : (
+                        <TunnelVerifiedMark size={Math.max(12, SCREEN_WIDTH * 0.03)} />
+                      )}
+                    </View>
+                  )}
+                </View>
+                {remainingTime && !hasEarnedPoints && !(user && item.authorId === user._id) && (
+                  <View style={styles.countdownWrapper}>
+                    <View style={styles.countdownDot} />
+                    <Text style={styles.inlineCountdown}>
+                      <Text style={styles.countdownLabel}>WATCH </Text>
+                      {remainingTime}
+                    </Text>
                   </View>
                 )}
               </View>
-            {remainingTime && !hasEarnedPoints && !(user && item.authorId === user._id) && (
-              <View style={styles.countdownWrapper}>
-                <View style={styles.countdownDot} />
-                <Text style={styles.inlineCountdown}>
-                  <Text style={styles.countdownLabel}>WATCH </Text>
-                  {remainingTime}
-                </Text>
-              </View>
-            )}
-          </View>
-            
-            {/* Video description with enhanced visibility in fullscreen */}
-            <Text 
-              style={[
-                styles.description,
-                isFullScreen && {
-                  fontSize: SCREEN_WIDTH * 0.04,
-                  textShadowColor: 'rgba(0,0,0,0.7)',
-                  textShadowRadius: 5
-                }
-              ]}
-              numberOfLines={isFullScreen ? 3 : 2} 
-              ellipsizeMode="tail"
-            >
-            {item.description}
-          </Text>
-                
+              
+              {/* Video description with enhanced visibility in fullscreen */}
+              <Text 
+                style={[
+                  styles.description,
+                  isFullScreen && {
+                    fontSize: SCREEN_WIDTH * 0.04,
+                    textShadowColor: 'rgba(0,0,0,0.7)',
+                    textShadowRadius: 5
+                  }
+                ]}
+                numberOfLines={isFullScreen ? 3 : 2} 
+                ellipsizeMode="tail"
+              >
+                {item.description}
+              </Text>
+              
               {/* Always show fullscreen button */}
-            <View style={styles.buttonRow}>
+              <View style={styles.buttonRow}>
                 {(!isFullScreen || fullscreenMode === 0) && (
                   <>
-              <View style={styles.statsContainer}>
-                <Eye 
-                  color="white" 
-                  size={SCREEN_WIDTH * 0.04} 
-                  opacity={0.9}
-                />
-                <Text style={styles.viewCountText}>
-                  {formatCount(item.views || 0)}
-                </Text>
-              </View>
+                    <View style={styles.statsContainer}>
+                      <Eye 
+                        color="white" 
+                        size={SCREEN_WIDTH * 0.04} 
+                        opacity={0.9}
+                      />
+                      <Text style={styles.viewCountText}>
+                        {formatCount(item.views || 0)}
+                      </Text>
+                    </View>
                     
                     {/* Add "Your Post" indicator for user's own videos */}
                     {isOwnVideo && (
@@ -2385,9 +2544,9 @@ const VideoItemComponent = memo(({
                       </Pressable>
                     )}
                     
-              <Pressable style={styles.watchFullIconButton} onPress={handleWatchFull}>
-                <ExternalLink color="white" size={SCREEN_WIDTH * 0.05} opacity={0.9} />
-              </Pressable>
+                    <Pressable style={styles.watchFullIconButton} onPress={handleWatchFull}>
+                      <ExternalLink color="white" size={SCREEN_WIDTH * 0.05} opacity={0.9} />
+                    </Pressable>
                   </>
                 )}
                 <Pressable 
@@ -2403,106 +2562,106 @@ const VideoItemComponent = memo(({
                     }
                   }}
                 >
-                {isFullScreen ? 
-                  <Minimize color="white" size={SCREEN_WIDTH * 0.05} /> : 
-                  <Maximize color="white" size={SCREEN_WIDTH * 0.05} />
-                }
-              </Pressable>
+                  {isFullScreen ? 
+                    <Minimize color="white" size={SCREEN_WIDTH * 0.05} /> : 
+                    <Maximize color="white" size={SCREEN_WIDTH * 0.05} />
+                  }
+                </Pressable>
+              </View>
             </View>
-          </View>
           )}
           
           {/* Show action buttons only in mode 0 when fullscreen */}
           {(!isFullScreen || (isFullScreen && fullscreenMode === 0)) && (
-          <View style={[
-            styles.actionButtons, 
-            actionButtonsStyle,
-            isFullScreen && {
-              bottom: Platform.OS === 'ios' ? 20 : 10,
-              gap: SCREEN_HEIGHT * 0.035
-            }
-          ]}>
-          <View style={styles.likeContainer}>
-            {/* Like button */}
-            <Pressable onPress={handleLike} style={styles.actionButton}>
-              <ThumbsUp 
-                color={reactions.userAction === 'like' ? '#1877F2' : 'white'} 
-                fill={reactions.userAction === 'like' ? '#1877F2' : 'transparent'}
-                size={Math.max(Math.min(videoSize.height * 0.06, SCREEN_WIDTH * 0.08), 24)} 
-              />
-              <Text style={[styles.actionCount, reactions.userAction === 'like' && styles.activeCount]}>
-                {reactions.likes}
-              </Text>
-            </Pressable>
-
-            {/* Comment button */}
-            <View style={styles.commentButtonContainer}>
-              <Pressable 
-                onPress={() => {
-                  setHasDiscoveredComments(true);
-                  Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
-                  openComments();
-                }}
-                style={styles.commentButton}
-              >
-                <View style={styles.commentIconContainer}>
-                  <MessageCircle 
-                    color="white" 
-                    size={Math.max(Math.min(videoSize.height * 0.055, SCREEN_WIDTH * 0.08), 24)} 
+            <View style={[
+              styles.actionButtons, 
+              actionButtonsStyle,
+              isFullScreen && {
+                bottom: Platform.OS === 'ios' ? 20 : 10,
+                gap: SCREEN_HEIGHT * 0.035
+              }
+            ]}>
+              <View style={styles.likeContainer}>
+                {/* Like button */}
+                <Pressable onPress={handleLike} style={styles.actionButton}>
+                  <ThumbsUp 
+                    color={reactions.userAction === 'like' ? '#1877F2' : 'white'} 
+                    fill={reactions.userAction === 'like' ? '#1877F2' : 'transparent'}
+                    size={Math.max(Math.min(videoSize.height * 0.06, SCREEN_WIDTH * 0.08), 24)} 
                   />
+                  <Text style={[styles.actionCount, reactions.userAction === 'like' && styles.activeCount]}>
+                    {reactions.likes}
+                  </Text>
+                </Pressable>
+
+                {/* Comment button */}
+                <View style={styles.commentButtonContainer}>
+                  <Pressable 
+                    onPress={() => {
+                      setHasDiscoveredComments(true);
+                      Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+                      openComments();
+                    }}
+                    style={styles.commentButton}
+                  >
+                    <View style={styles.commentIconContainer}>
+                      <MessageCircle 
+                        color="white" 
+                        size={Math.max(Math.min(videoSize.height * 0.055, SCREEN_WIDTH * 0.08), 24)} 
+                      />
+                    </View>
+                    <Text style={styles.actionCount}>{commentCount || '0'}</Text>
+                  </Pressable>
+                  {!hasDiscoveredComments && (
+                    <View style={styles.discoveryDot} />
+                  )}
                 </View>
-                <Text style={styles.actionCount}>{commentCount || '0'}</Text>
-            </Pressable>
-              {!hasDiscoveredComments && (
-                <View style={styles.discoveryDot} />
-              )}
-            </View>
-            
-            {/* Auto-scroll button */}
-              <Pressable 
-                style={[
-                styles.autoScrollButton,
-                autoScroll && styles.autoScrollButtonActive
-                ]} 
-                onPress={toggleAutoScroll}
-              >
-                <PlayCircle 
-                color={autoScroll ? '#1877F2' : 'white'} 
-                fill={autoScroll ? 'rgba(24, 119, 242, 0.3)' : 'transparent'}
-                size={Math.max(Math.min(videoSize.height * 0.06, SCREEN_WIDTH * 0.08), 24)} 
-                />
-                <Text style={[
-                styles.actionCount, 
-                autoScroll ? styles.activeCount : null
-                ]}>
-                Auto
-                </Text>
-              </Pressable>
-          
-            {/* Share button */}
-          <Pressable onPress={onShare} style={styles.shareButton}>
-              <Share2 
-                color="white" 
-                size={Math.max(Math.min(videoSize.height * 0.06, SCREEN_WIDTH * 0.08), 24)} 
-              />
-              </Pressable>
-          </View>
-          
-          <View style={styles.watchedContainer}>
-            {/* Restore the original check mark icon */}
-            {hasEarnedPoints && <CheckCircle color="#00ff00" size={SCREEN_WIDTH * 0.06} />}
-            
-            {/* Show points animation if active */}
-            {renderPointsDisplay()}
-            
-            {/* Show static countdown if needed */}
-            {showStaticPoints && !showPointsAnimation && !hasEarnedPoints && (
-              <View style={styles.staticPoints}>
-                <Text style={styles.staticPointsText}>+{item.points} P</Text>
+                
+                {/* Auto-scroll button */}
+                <Pressable 
+                  style={[
+                    styles.autoScrollButton,
+                    autoScroll && styles.autoScrollButtonActive
+                  ]} 
+                  onPress={toggleAutoScroll}
+                >
+                  <PlayCircle 
+                    color={autoScroll ? '#1877F2' : 'white'} 
+                    fill={autoScroll ? 'rgba(24, 119, 242, 0.3)' : 'transparent'}
+                    size={Math.max(Math.min(videoSize.height * 0.06, SCREEN_WIDTH * 0.08), 24)} 
+                  />
+                  <Text style={[
+                    styles.actionCount, 
+                    autoScroll ? styles.activeCount : null
+                  ]}>
+                    Auto
+                  </Text>
+                </Pressable>
+                
+                {/* Share button */}
+                <Pressable onPress={onShare} style={styles.shareButton}>
+                  <Share2 
+                    color="white" 
+                    size={Math.max(Math.min(videoSize.height * 0.06, SCREEN_WIDTH * 0.08), 24)} 
+                  />
+                </Pressable>
               </View>
-            )}
-          </View>
-        </View>
+              
+              <View style={styles.watchedContainer}>
+                {/* Restore the original check mark icon */}
+                {hasEarnedPoints && <CheckCircle color="#00ff00" size={SCREEN_WIDTH * 0.06} />}
+                
+                {/* Show points animation if active */}
+                {renderPointsDisplay()}
+                
+                {/* Show static countdown if needed */}
+                {showStaticPoints && !showPointsAnimation && !hasEarnedPoints && (
+                  <View style={styles.staticPoints}>
+                    <Text style={styles.staticPointsText}>+{item.points} P</Text>
+                  </View>
+                )}
+              </View>
+            </View>
           )}
           
           {/* Fullscreen mode 1: Minimal UI - Only show the fullscreen button at the bottom right */}
@@ -2526,18 +2685,18 @@ const VideoItemComponent = memo(({
             </View>
           )}
         </SafeAreaView>
-        
-        {showButtons && (
-          <View style={styles.buttonPopup}>
-            <Text style={styles.popupHeader}>Video paused ⏸️</Text>
-            <Pressable style={styles.replayButton} onPress={onReplay}>
-              <Text style={styles.replayButtonText}>Re-play</Text>
-            </Pressable>
-          </View>
-        )}
-      </Animated.View>
+      )}
       
-      {/* Comments section */}
+      {/* When 2x speed is active, show ONLY the 2x indicator */}
+      {isSpeedUp && (
+        <View style={styles.speedModeContainer}>
+          <Text style={styles.speedModeText}>2x</Text>
+        </View>
+      )}
+    </Animated.View>
+    
+    {/* Comments section - only show if not in 2x speed mode */}
+    {!isSpeedUp && (
       <CommentsSection 
         videoId={item.id}
         visible={showComments}
@@ -2548,15 +2707,16 @@ const VideoItemComponent = memo(({
         videoAuthorId={item.authorId}
         onCommentCountChange={loadCommentCount}
       />
-      
-      {/* Lock overlay when premium alert is shown */}
-      {isLocked && isCurrentVideo && (
-        <View style={styles.lockOverlay}>
-          <Lock color="white" size={SCREEN_WIDTH * 0.1} />
-        </View>
-      )}
-    </View>
-  );
+    )}
+    
+    {/* Lock overlay when premium alert is shown */}
+    {isLocked && isCurrentVideo && (
+      <View style={styles.lockOverlay}>
+        <Lock color="white" size={SCREEN_WIDTH * 0.1} />
+      </View>
+    )}
+  </View>
+);
 });
 
 // Add interface for TopHeader props
@@ -4643,4 +4803,95 @@ const styles = StyleSheet.create({
     fontSize: 12,
     fontWeight: 'bold',
   },
+  videoTouchOverlay: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
+    bottom: 0,
+    justifyContent: 'center',
+    alignItems: 'center',
+    zIndex: 5,
+  },
+  
+  playIconContainer: {
+    width: 80,
+    height: 80,
+    borderRadius: 40,
+    backgroundColor: 'rgba(0, 0, 0, 0.4)',
+    justifyContent: 'center',
+    alignItems: 'center',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.5,
+    shadowRadius: 4,
+    elevation: 5,
+  },
+  
+  playIcon: {
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.8,
+    shadowRadius: 2,
+  },
+  
+  // Add left half overlay style
+  leftHalfTouchOverlay: {
+    right: SCREEN_WIDTH / 2,
+    zIndex: 5,
+  } as any,
+  
+  // Add right half overlay style
+  rightHalfTouchOverlay: {
+    left: SCREEN_WIDTH / 2,
+    zIndex: 5,
+  } as any,
+  
+  // Add speedup indicator
+  speedUpIconContainer: {
+    width: 60,
+    height: 60,
+    borderRadius: 30,
+    backgroundColor: 'rgba(0, 0, 0, 0.4)',
+    justifyContent: 'center',
+    alignItems: 'center',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.5,
+    shadowRadius: 4,
+    elevation: 5,
+  } as any,
+  
+  speedUpText: {
+    color: 'white',
+    fontSize: 24,
+    fontWeight: 'bold',
+    textShadowColor: 'rgba(0,0,0,0.7)',
+    textShadowRadius: 3
+  } as any,
+  
+  // Add centered play icon style
+  centeredPlayIcon: {
+    position: 'absolute',
+    top: '50%',
+    left: '50%',
+    marginLeft: -40,
+    marginTop: -40,
+    zIndex: 10,
+  } as any,
+  speedModeContainer: {
+    position: 'absolute',
+    bottom: 20,
+    right: 20,
+    backgroundColor: 'rgba(0, 0, 0, 0.6)',
+    borderRadius: 25,
+    padding: 10,
+    zIndex: 20,
+  } as any,
+  
+  speedModeText: {
+    color: 'white',
+    fontSize: 20,
+    fontWeight: 'bold',
+  } as any,
 });

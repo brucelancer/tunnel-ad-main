@@ -14,6 +14,8 @@ import {
   Modal,
   TextInput,
   Easing,
+  DeviceEventEmitter,
+  ActivityIndicator,
 } from 'react-native';
 import { BlurView } from 'expo-blur';
 import { usePoints } from '@/hooks/usePoints';
@@ -29,10 +31,13 @@ import {
   Star,
   Heart,
   ArrowDownUp,
+  RefreshCw,
 } from 'lucide-react-native';
 import ScreenContainer from '../components/ScreenContainer';
 import { useRouter } from 'expo-router';
 import { LinearGradient } from 'expo-linear-gradient';
+import { useSanityAuth } from '../hooks/useSanityAuth';
+import { createClient } from '@sanity/client';
 
 const { width: SCREEN_WIDTH, height: SCREEN_HEIGHT } = Dimensions.get('window');
 
@@ -98,9 +103,11 @@ const SUBSCRIPTION_PLANS = [
 ];
 
 export default function PointsAboutScreen() {
-  const { points, dailyPoints } = usePoints();
+  const { points: localPoints, dailyPoints } = usePoints();
+  const [displayPoints, setDisplayPoints] = useState(localPoints);
+  const [pointsLoading, setPointsLoading] = useState(false);
   const scrollY = useRef(new Animated.Value(0)).current;
-  const cashAvailable = (points / EXCHANGE_RATE).toFixed(2);
+  const cashAvailable = (displayPoints / EXCHANGE_RATE).toFixed(2);
   const router = useRouter();
   const unreadNotifications = 3; // This would normally come from a notifications context or API
   
@@ -117,6 +124,9 @@ export default function PointsAboutScreen() {
   const animatedValue = useRef(new Animated.Value(0)).current;
   const waveAnimatedValue = useRef(new Animated.Value(0)).current;
 
+  // Get user data from Sanity auth hook
+  const { user } = useSanityAuth();
+
   // Calculate max points for chart scaling
   const maxPoints = Math.max(...dailyPoints.map(day => day.points), 100); // minimum 100 for scale
 
@@ -132,6 +142,115 @@ export default function PointsAboutScreen() {
     outputRange: [0, 0, 1],
     extrapolate: 'clamp',
   });
+
+  // Function to fetch live points data from Sanity with forced refreshing
+  const fetchLivePointsData = async (force = false) => {
+    if (!user?._id) return;
+
+    setPointsLoading(true);
+    
+    try {
+      console.log("PointsAbout: Fetching live points data from Sanity...");
+      
+      // Create Sanity client with no caching
+      const client = createClient({
+        projectId: '21is7976',
+        dataset: 'production',
+        useCdn: false, // Disable CDN to get real-time data
+        apiVersion: '2023-03-01',
+      });
+      
+      // Use a timestamp to prevent any caching
+      const timestamp = new Date().getTime();
+      
+      // Query with a timestamp parameter to force a new request
+      const userData = await client.fetch(
+        '*[_type == "user" && _id == $userId][0] { _id, points }',
+        { userId: user._id, timestamp }
+      );
+      
+      if (userData?.points !== undefined) {
+        console.log(`PointsAbout: (LIVE) Fetched points from Sanity: ${userData.points}`);
+        
+        // Always update the display points, even if they seem the same
+        setDisplayPoints(userData.points);
+        
+        // If the points in user state don't match the fetched points, update the user state
+        if (user.points !== userData.points) {
+          console.log(`PointsAbout: Points mismatch: local ${user.points}, Sanity ${userData.points}. Updating local state.`);
+          
+          // Emit event to update user object in auth context
+          DeviceEventEmitter.emit('USER_POINTS_UPDATED', {
+            points: userData.points
+          });
+        }
+      }
+    } catch (error) {
+      console.error("PointsAbout: Error fetching live points:", error);
+    } finally {
+      setPointsLoading(false);
+    }
+  };
+
+  // Add periodic points refresh and initial fetch
+  useEffect(() => {
+    // Initial fetch
+    fetchLivePointsData(true);
+    
+    // Set up interval to fetch points regularly
+    const pointsRefreshInterval = setInterval(() => {
+      console.log("PointsAbout: Running periodic points refresh...");
+      fetchLivePointsData();
+    }, 30000); // 30 seconds
+
+    return () => {
+      clearInterval(pointsRefreshInterval);
+    };
+  }, [user?._id]);
+
+  // Listen for point update events
+  useEffect(() => {
+    // Listen for POINTS_EARNED events
+    const pointsEarnedSubscription = DeviceEventEmitter.addListener('POINTS_EARNED', (event) => {
+      console.log('PointsAbout: received POINTS_EARNED event:', event);
+      
+      if (event.verifiedFromSanity && event.newTotal !== undefined) {
+        // Update with the exact total from Sanity
+        console.log(`PointsAbout: Setting points to ${event.newTotal} (verified from Sanity)`);
+        setDisplayPoints(event.newTotal);
+      } else if (event.amount) {
+        // Also fetch from Sanity to ensure accuracy
+        fetchLivePointsData();
+      }
+    });
+    
+    // Listen for USER_POINTS_UPDATED events
+    const userPointsUpdatedSubscription = DeviceEventEmitter.addListener('USER_POINTS_UPDATED', (event) => {
+      console.log('PointsAbout: received USER_POINTS_UPDATED event:', event);
+      
+      if (event.points !== undefined) {
+        // Update with the new points total
+        setDisplayPoints(event.points);
+      }
+    });
+
+    return () => {
+      pointsEarnedSubscription.remove();
+      userPointsUpdatedSubscription.remove();
+    };
+  }, []);
+
+  // Force refresh points function
+  const refreshPoints = () => {
+    fetchLivePointsData(true);
+  };
+
+  // Update when user data changes
+  useEffect(() => {
+    if (user?.points !== undefined) {
+      setDisplayPoints(user.points);
+    }
+  }, [user]);
 
   // Handlers for points converter
   const handleCashAmountChange = (value: string) => {
@@ -248,39 +367,21 @@ export default function PointsAboutScreen() {
           return (
             <View key={data.date} style={styles.barContainer}>
               <View style={styles.barWrapper}>
-                <Animated.View 
+                <Animated.View
                   style={[
-                    styles.bar, 
-                    { 
+                    styles.bar,
+                    {
                       height: barHeight,
-                      backgroundColor: isToday ? '#00ff00' : '#1877F2',
-                    }
+                      backgroundColor: isToday ? '#1877F2' : 'rgba(255, 255, 255, 0.3)',
+                    },
                   ]}
-                >
-                  <Text style={styles.barValue}>{data.points}</Text>
-                </Animated.View>
-                {isToday && <View style={styles.todayIndicator} />}
+                />
               </View>
-              <Text style={[
-                styles.barLabel,
-                isToday && styles.todayLabel
-              ]}>
-                {formatDate(data.date)}
-              </Text>
+              <Text style={styles.barLabel}>{formatDate(data.date)}</Text>
+              <Text style={styles.barValue}>{data.points}</Text>
             </View>
           );
         })}
-      </View>
-      <View style={styles.chartGrid}>
-        {[0, 1, 2, 3].map((line) => (
-          <View 
-            key={line} 
-            style={[
-              styles.gridLine,
-              { bottom: (line * 150) / 3 }
-            ]} 
-          />
-        ))}
       </View>
     </View>
   );
@@ -495,19 +596,19 @@ export default function PointsAboutScreen() {
       <View style={styles.pointsCapacityContainer}>
         <View style={styles.pointsCapacityHeader}>
           <Text style={styles.pointsCapacityLabel}>Points Capacity</Text>
-          <Text style={styles.pointsCapacityValue}>{points}/1000</Text>
+          <Text style={styles.pointsCapacityValue}>{displayPoints}/1000</Text>
         </View>
         <View style={styles.pointsCapacityBar}>
           <View 
             style={[
               styles.pointsCapacityFill, 
-              { width: `${Math.min(100, (points / 1000) * 100)}%` },
-              points > 800 && styles.pointsCapacityHighFill
+              { width: `${Math.min(100, (displayPoints / 1000) * 100)}%` },
+              displayPoints > 800 && styles.pointsCapacityHighFill
             ]} 
           />
         </View>
         <Text style={styles.pointsCapacityInfo}>
-          {points >= 1000 ? 'Max capacity reached! Redeem now' : `${1000 - points} more points until full capacity`}
+          {displayPoints >= 1000 ? 'Max capacity reached! Redeem now' : `${1000 - displayPoints} more points until full capacity`}
         </Text>
       </View>
       
@@ -610,12 +711,12 @@ export default function PointsAboutScreen() {
               
               <View style={styles.pointsGuideTotalContainer}>
                 <Text style={styles.pointsGuideTotalLabel}>Your Current Points</Text>
-                <Text style={styles.pointsGuideTotalValue}>{points}</Text>
+                <Text style={styles.pointsGuideTotalValue}>{displayPoints}</Text>
                 <View style={styles.pointsGuideValueBar}>
-                  <View style={[styles.pointsGuideValueFill, { width: `${Math.min(100, (points / 1000) * 100)}%` }]} />
+                  <View style={[styles.pointsGuideValueFill, { width: `${Math.min(100, (displayPoints / 1000) * 100)}%` }]} />
                 </View>
                 <Text style={styles.pointsGuideNextMilestone}>
-                  {points < 1000 ? `${1000 - points} points until next milestone` : 'Milestone reached!'}
+                  {displayPoints < 1000 ? `${1000 - displayPoints} points until next milestone` : 'Milestone reached!'}
                 </Text>
               </View>
             </LinearGradient>
@@ -929,11 +1030,23 @@ export default function PointsAboutScreen() {
         <View style={styles.balanceSection}>
           <Text style={styles.balanceLabel}>Available Points</Text>
           <View style={styles.balanceRow}>
-            <Text style={styles.balanceValue}>{points}</Text>
+            <Text style={styles.balanceValue}>{displayPoints}</Text>
             <Image
               source={require('@/assets/images/tunnel-coin-4.png')}
-             
+              style={styles.balanceCoinIcon}
             />
+            {/* Refresh button for points */}
+            <TouchableOpacity 
+              style={styles.refreshButton} 
+              onPress={refreshPoints}
+              disabled={pointsLoading}
+            >
+              {pointsLoading ? (
+                <ActivityIndicator size="small" color="#1877F2" />
+              ) : (
+                <RefreshCw size={20} color="#1877F2" />
+              )}
+            </TouchableOpacity>
           </View>
           
           <Pressable 
@@ -1037,7 +1150,7 @@ const styles = StyleSheet.create({
     fontFamily: 'Inter_700Bold',
     marginRight: 10,
   },
-  tunnelIcon: {
+  balanceCoinIcon: {
     width: 40,
     height: 40,
     marginLeft: 8,
@@ -1965,5 +2078,10 @@ const styles = StyleSheet.create({
     fontSize: 16,
     fontFamily: 'Inter_500Medium',
     padding: 0,
+  },
+  refreshButton: {
+    padding: 8,
+    borderRadius: 12,
+    backgroundColor: 'rgba(255, 255, 255, 0.1)',
   },
 }); 

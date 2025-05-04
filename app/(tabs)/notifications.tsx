@@ -1,12 +1,14 @@
-import React, { useEffect } from 'react';
-import { View, Text, StyleSheet, TouchableOpacity, FlatList, Image, ActivityIndicator, RefreshControl } from 'react-native';
-import { Heart, MessageCircle, Bell, AlertCircle, User, Video } from 'lucide-react-native';
-import { useRouter } from 'expo-router';
+import React, { useEffect, useState, useRef } from 'react';
+import { View, Text, StyleSheet, TouchableOpacity, FlatList, Image, ActivityIndicator, RefreshControl, DeviceEventEmitter } from 'react-native';
+import { Heart, MessageCircle, Bell, AlertCircle, User, Video, Users } from 'lucide-react-native';
+import { useRouter, useFocusEffect } from 'expo-router';
 import ScreenContainer from '../components/ScreenContainer';
 import { useNotifications } from '../hooks/useNotifications';
+import { useSanityAuth } from '../hooks/useSanityAuth';
 
 export default function NotificationsScreen() {
   const router = useRouter();
+  const { user } = useSanityAuth();
   const { 
     notifications, 
     loading, 
@@ -16,10 +18,95 @@ export default function NotificationsScreen() {
     markAllAsRead,
     unreadCount
   } = useNotifications();
+  
+  // Local backup of read notification IDs
+  const [localReadIds, setLocalReadIds] = useState<Record<string, boolean>>({});
+  const notificationsRef = useRef(notifications);
+  
+  // Track if a forced refresh is in progress
+  const [forcedRefreshing, setForcedRefreshing] = useState(false);
+  
+  // Track the current user ID to detect changes
+  const currentUserIdRef = useRef<string | null>(user?._id || null);
+  
+  // Update our ref when notifications change
+  useEffect(() => {
+    notificationsRef.current = notifications;
+  }, [notifications]);
 
+  // Listen for authentication state changes
+  useEffect(() => {
+    console.log('Notifications: Setting up AUTH_STATE_CHANGED listener');
+    
+    const authSubscription = DeviceEventEmitter.addListener(
+      'AUTH_STATE_CHANGED', 
+      async (event) => {
+        console.log('Notifications: AUTH_STATE_CHANGED event received:', 
+          event.userData ? `User ID: ${event.userData._id}` : 'No user data'
+        );
+        
+        const newUserId = event.userData?._id || null;
+        const previousUserId = currentUserIdRef.current;
+        
+        // Update the current user ID reference
+        currentUserIdRef.current = newUserId;
+        
+        // If user ID changed, refresh notifications
+        if (newUserId !== previousUserId) {
+          console.log('Notifications: User changed, refreshing notifications');
+          setLocalReadIds({}); // Reset local read IDs for new user
+          
+          // Only fetch if authenticated
+          if (newUserId) {
+            await forceRefreshNotifications();
+          }
+        }
+      }
+    );
+    
+    // Clean up subscription
+    return () => {
+      authSubscription.remove();
+    };
+  }, []);
+  
+  // When this screen comes into focus, refresh notifications
+  useFocusEffect(
+    React.useCallback(() => {
+      console.log('Notifications: Screen focused, refreshing data');
+      
+      if (user?._id) {
+        // Use regular refresh if not forced
+        handleRefresh();
+      }
+      
+      return () => {
+        // Cleanup (if needed)
+      };
+    }, [user?._id])
+  );
+
+  // Force refresh notifications (for use when user changes)
+  const forceRefreshNotifications = async () => {
+    try {
+      setForcedRefreshing(true);
+      await fetchNotifications();
+    } catch (error) {
+      console.error('Error forcing refresh of notifications:', error);
+    } finally {
+      setForcedRefreshing(false);
+    }
+  };
+  
   // Mark notifications as read when opened
   const handleNotificationPress = async (notification: any) => {
     try {
+      // Mark in local state immediately
+      setLocalReadIds(prev => ({
+        ...prev,
+        [notification.id]: true
+      }));
+      
       // Mark this notification as read
       await markAsRead(notification.id);
       
@@ -40,8 +127,34 @@ export default function NotificationsScreen() {
   };
   
   // Handle refreshing notifications
-  const handleRefresh = () => {
-    fetchNotifications();
+  const handleRefresh = async () => {
+    // Preserve previous read status for notifications that remain
+    const oldReadState = {...localReadIds};
+    
+    // Get current notifications for comparison
+    const currentNotifications = notificationsRef.current;
+    
+    // Fetch the new notifications
+    await fetchNotifications();
+    
+    // After fetch, preserve read status from localReadIds and from previously read notifications
+    for (const notification of notificationsRef.current) {
+      // If notification was previously read according to our local state, keep it as read
+      if (oldReadState[notification.id]) {
+        setLocalReadIds(prev => ({
+          ...prev,
+          [notification.id]: true
+        }));
+      }
+      
+      // If notification was already marked as read from server, add it to local read IDs
+      if (notification.read) {
+        setLocalReadIds(prev => ({
+          ...prev,
+          [notification.id]: true
+        }));
+      }
+    }
   };
 
   // Function to render notification icon based on type
@@ -56,7 +169,7 @@ export default function NotificationsScreen() {
       case 'comment':
         return (
           <View style={[styles.iconContainer, styles.commentIconContainer]}>
-            <MessageCircle size={22} color="#FFF" />
+            <MessageCircle size={22} color="#FFF" fill="#FFF" />
           </View>
         );
       case 'follow':
@@ -87,60 +200,190 @@ export default function NotificationsScreen() {
     }
   };
 
-  // Render a notification item with detailed user info and content
-  const renderNotification = ({ item }: { item: any }) => (
-    <TouchableOpacity
-      style={[
-        styles.notificationItem,
-        !item.read && styles.unreadNotification
-      ]}
-      onPress={() => handleNotificationPress(item)}
-    >
-      {/* User avatar if available */}
-      {item.avatar ? (
-        <Image source={{ uri: item.avatar }} style={styles.userAvatar} />
-      ) : (
-        renderNotificationIcon(item.type, item.isVerified, item.isBlueVerified)
-      )}
+  // Render user avatar group (for multiple interactions)
+  const renderAvatarGroup = (notification: any) => {
+    // Check if this is a group notification (has groupMembers)
+    if (notification.groupMembers && notification.groupMembers.length > 0) {
+      // Get members for display
+      const members = notification.groupMembers;
+      const totalMembers = members.length;
       
-      <View style={styles.notificationContent}>
-        <Text style={styles.notificationTitle}>
-          {item.title}
-          {(item.isVerified || item.isBlueVerified) && (
-            <Text style={styles.verifiedBadge}> ✓</Text>
+      return (
+        <View style={styles.avatarGroup}>
+          {/* For 1 member, just show regular avatar */}
+          {totalMembers === 1 && (
+            <Image 
+              source={{ uri: members[0].avatar }} 
+              style={styles.singleAvatar}
+              defaultSource={require('../../assets/images/default-user.png')}
+            />
           )}
-        </Text>
+          
+          {/* For 2 members, show them side by side slightly overlapping */}
+          {totalMembers === 2 && (
+            <>
+              <Image 
+                source={{ uri: members[0].avatar }} 
+                style={[styles.doubleAvatar, { left: 0, zIndex: 2 }]}
+                defaultSource={require('../../assets/images/default-user.png')}
+              />
+              <Image 
+                source={{ uri: members[1].avatar }} 
+                style={[styles.doubleAvatar, { left: 22, zIndex: 1 }]}
+                defaultSource={require('../../assets/images/default-user.png')}
+              />
+            </>
+          )}
+          
+          {/* For 3 or more members, create clustered layout like in the image */}
+          {totalMembers >= 3 && (
+            <>
+              {/* Top avatar */}
+              <Image 
+                source={{ uri: members[0].avatar }} 
+                style={[styles.clusterAvatar, { top: 0, left: 10, zIndex: 3 }]}
+                defaultSource={require('../../assets/images/default-user.png')}
+              />
+              {/* Bottom left avatar */}
+              <Image 
+                source={{ uri: members[1].avatar }} 
+                style={[styles.clusterAvatar, { top: 18, left: 0, zIndex: 2 }]}
+                defaultSource={require('../../assets/images/default-user.png')}
+              />
+              {/* Bottom right avatar */}
+              <Image 
+                source={{ uri: members[2].avatar }} 
+                style={[styles.clusterAvatar, { top: 18, left: 20, zIndex: 1 }]}
+                defaultSource={require('../../assets/images/default-user.png')}
+              />
+              
+              {/* Show +X for additional members beyond 3 */}
+              {totalMembers > 3 && (
+                <View style={styles.moreCountContainer}>
+                  <Text style={styles.moreCountText}>+{totalMembers - 3}</Text>
+                </View>
+              )}
+            </>
+          )}
+        </View>
+      );
+    }
+    
+    // Regular single avatar display
+    if (notification.avatar && notification.avatar.length > 0) {
+      return (
+        <Image 
+          source={{ uri: notification.avatar }} 
+          style={styles.userAvatar} 
+          defaultSource={require('../../assets/images/default-user.png')}
+        />
+      );
+    }
+    
+    // Fallback to icon
+    return renderNotificationIcon(notification.type, notification.isVerified, notification.isBlueVerified);
+  };
+
+  // Handler for marking all as read
+  const handleMarkAllAsRead = async () => {
+    // Update local state immediately
+    const newLocalReadIds = { ...localReadIds };
+    for (const notification of notifications) {
+      newLocalReadIds[notification.id] = true;
+    }
+    setLocalReadIds(newLocalReadIds);
+    
+    // Call the API to mark all as read
+    await markAllAsRead();
+  };
+
+  // Render a notification item with detailed user info and content
+  const renderNotification = ({ item }: { item: any }) => {
+    // Check if read based on Sanity data or local state
+    const isRead = item.read || localReadIds[item.id] || false;
+    
+    return (
+      <TouchableOpacity
+        style={[
+          styles.notificationItem,
+          !isRead && styles.unreadNotification
+        ]}
+        onPress={() => handleNotificationPress(item)}
+      >
+        {/* Render avatar or avatar group */}
+        {renderAvatarGroup(item)}
         
-        <Text style={styles.notificationMessage}>{item.message}</Text>
+        <View style={styles.notificationContent}>
+          <Text style={styles.notificationTitle}>
+            {item.title}
+            {(item.isVerified || item.isBlueVerified) && (
+              <Text style={styles.verifiedBadge}> ✓</Text>
+            )}
+          </Text>
+          
+          <Text style={styles.notificationMessage}>{item.message}</Text>
+          
+          {/* If it's a video notification, show the video title */}
+          {item.contentType === 'video' && item.videoTitle && (
+            <View style={styles.contentInfoContainer}>
+              <Video size={14} color="#999" style={styles.contentTypeIcon} />
+              <Text style={styles.contentInfo} numberOfLines={1} ellipsizeMode="tail">
+                {item.videoTitle}
+              </Text>
+            </View>
+          )}
+          
+          {/* If it's a post notification with a snippet, show part of the post content */}
+          {item.contentType === 'post' && item.contentSnippet && (
+            <View style={styles.contentInfoContainer}>
+              <Text style={styles.contentInfo} numberOfLines={1} ellipsizeMode="tail">
+                "{item.contentSnippet}..."
+              </Text>
+            </View>
+          )}
+          
+          <Text style={styles.notificationTime}>{item.time}</Text>
+        </View>
         
-        {/* If it's a video notification, show the video title */}
-        {item.contentType === 'video' && item.videoTitle && (
-          <View style={styles.contentInfoContainer}>
-            <Video size={14} color="#999" style={styles.contentTypeIcon} />
-            <Text style={styles.contentInfo} numberOfLines={1} ellipsizeMode="tail">
-              {item.videoTitle}
-            </Text>
-          </View>
+        {/* Preview thumbnail for videos or posts with images */}
+        {item.contentImage && (
+          <Image 
+            source={{ uri: item.contentImage }} 
+            style={styles.contentThumbnail}
+          />
         )}
-        
-        {/* If it's a post notification with a snippet, show part of the post content */}
-        {item.contentType === 'post' && item.contentSnippet && (
-          <View style={styles.contentInfoContainer}>
-            <Text style={styles.contentInfo} numberOfLines={1} ellipsizeMode="tail">
-              "{item.contentSnippet}..."
-            </Text>
+      </TouchableOpacity>
+    );
+  };
+
+  // Calculate real unread count based on server data and local state
+  const realUnreadCount = notifications.filter(n => !n.read && !localReadIds[n.id]).length;
+
+  // Show logged out or loading state if no user
+  if (!user) {
+    return (
+      <ScreenContainer>
+        <View style={styles.container}>
+          <View style={styles.header}>
+            <Text style={styles.headerTitle}>Notifications</Text>
           </View>
-        )}
-        
-        <Text style={styles.notificationTime}>{item.time}</Text>
-      </View>
-      
-      {/* Preview thumbnail for videos or posts with images */}
-      {item.contentImage && (
-        <Image source={{ uri: item.contentImage }} style={styles.contentThumbnail} />
-      )}
-    </TouchableOpacity>
-  );
+          <View style={styles.emptyContainer}>
+            <Bell size={80} color="#333" />
+            <Text style={styles.emptyText}>Please Sign In</Text>
+            <Text style={styles.emptySubtext}>
+              Sign in to view your notifications
+            </Text>
+            <TouchableOpacity 
+              style={styles.retryButton}
+              onPress={() => router.push('/screens/login' as any)}
+            >
+              <Text style={styles.retryButtonText}>Sign In</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      </ScreenContainer>
+    );
+  }
 
   return (
     <ScreenContainer>
@@ -148,17 +391,17 @@ export default function NotificationsScreen() {
         <View style={styles.header}>
           <Text style={styles.headerTitle}>Notifications</Text>
           
-          {unreadCount > 0 && (
+          {realUnreadCount > 0 && (
             <TouchableOpacity 
               style={styles.markAllReadButton}
-              onPress={markAllAsRead}
+              onPress={handleMarkAllAsRead}
             >
               <Text style={styles.markAllReadText}>Mark all as read</Text>
             </TouchableOpacity>
           )}
         </View>
 
-        {loading && notifications.length === 0 ? (
+        {(loading || forcedRefreshing) && notifications.length === 0 ? (
           <View style={styles.loadingContainer}>
             <ActivityIndicator size="large" color="#0070F3" />
             <Text style={styles.loadingText}>Loading notifications...</Text>
@@ -191,7 +434,7 @@ export default function NotificationsScreen() {
             showsVerticalScrollIndicator={false}
             refreshControl={
               <RefreshControl
-                refreshing={loading}
+                refreshing={loading || forcedRefreshing}
                 onRefresh={handleRefresh}
                 tintColor="#0070F3"
                 colors={["#0070F3"]}
@@ -255,6 +498,33 @@ const styles = StyleSheet.create({
     borderRadius: 24,
     backgroundColor: '#333',
     marginRight: 16,
+  },
+  // Avatar Group styles
+  avatarGroup: {
+    position: 'relative',
+    width: 48,
+    height: 48,
+    marginRight: 16,
+  },
+  singleAvatar: {
+    width: 48,
+    height: 48,
+    borderRadius: 24,
+    backgroundColor: '#333',
+  },
+  doubleAvatar: {
+    width: 32,
+    height: 32,
+    borderRadius: 16,
+    backgroundColor: '#333',
+    position: 'absolute',
+  },
+  clusterAvatar: {
+    width: 28,
+    height: 28,
+    borderRadius: 14,
+    backgroundColor: '#333',
+    position: 'absolute',
   },
   iconContainer: {
     width: 48,
@@ -377,5 +647,23 @@ const styles = StyleSheet.create({
     color: '#FFF',
     fontSize: 16,
     fontFamily: 'Inter_500Medium',
+  },
+  moreCountContainer: {
+    position: 'absolute',
+    top: 18,
+    right: -10,
+    backgroundColor: '#1877F2', // Facebook blue
+    width: 22,
+    height: 22,
+    borderRadius: 11,
+    justifyContent: 'center',
+    alignItems: 'center',
+    zIndex: 4,
+  },
+  moreCountText: {
+    color: '#FFF',
+    fontSize: 10,
+    fontFamily: 'Inter_600SemiBold',
+    fontWeight: 'bold',
   },
 }); 

@@ -1235,28 +1235,7 @@ export default function Feed() {
       // Use local refresh for demo
       setRefreshing(true);
       setTimeout(() => {
-        // Simulate fetching new content
-        const newPost = {
-          id: `refresh-${Date.now()}`,
-          user: {
-            id: 'user5',
-            name: 'Taylor Swift',
-            username: '@taylorswift',
-            avatar: 'https://randomuser.me/api/portraits/women/90.jpg',
-            isVerified: true
-          },
-          content: "Just dropped a new song! Check it out on my profile. #NewMusic #SwiftiesForever",
-          images: ['https://images.unsplash.com/photo-1514320291840-2e0a9bf2a9ae'],
-          location: 'Recording Studio',
-          timeAgo: 'Just now',
-          likes: 0,
-          comments: 0,
-          points: 0,
-          hasLiked: false,
-          hasSaved: false
-        };
-        
-        setPosts([newPost, ...posts]);
+        // Just finish refreshing without adding random posts
         setRefreshing(false);
       }, 1500);
     }
@@ -1410,18 +1389,36 @@ export default function Feed() {
         { cancelable: true }
       );
     } else {
-      // Use local state for demo purposes
-      setPosts(currentPosts => 
-        currentPosts.map(post => {
-          if (post.id === id) {
-            return {
-              ...post,
-              points: post.points + points
-            };
-          }
-          return post;
-        })
-      );
+      // Check if this is a video ID
+      const isVideoId = id.includes('video-') || videos.some(video => video.id === id);
+      
+      if (isVideoId) {
+        // For videos
+        setVideos(currentVideos => 
+          currentVideos.map(video => {
+            if (video.id === id) {
+              return {
+                ...video,
+                points: (video.points || 0) + points
+              };
+            }
+            return video;
+          })
+        );
+      } else {
+        // For posts
+        setPosts(currentPosts => 
+          currentPosts.map(post => {
+            if (post.id === id) {
+              return {
+                ...post,
+                points: post.points + points
+              };
+            }
+            return post;
+          })
+        );
+      }
       
       // Subtract points from user
       addPoints(-points);
@@ -1537,38 +1534,16 @@ export default function Feed() {
         console.log('Authenticated user, refreshing posts from Sanity');
         handleSanityRefresh();
       } else {
-        console.log('Demo mode, refreshing with mock data');
-        // For demo mode, manually trigger refresh
+        console.log('Demo mode, refreshing');
+        // For demo mode, just trigger the refresh without adding temp posts
         setRefreshing(true);
-        
-        // Create a temporary post to show immediate feedback
-        const tempPost = {
-          id: `new-post-${Date.now()}`,
-          user: {
-            id: 'currentUser',
-            name: 'You',
-            username: '@me',
-            avatar: 'https://randomuser.me/api/portraits/men/85.jpg',
-            isVerified: false,
-            isBlueVerified: false
-          },
-          content: "Just posted new content!",
-          images: [],
-          location: '',
-          timeAgo: 'Just now',
-          likes: 0,
-          comments: 0,
-          points: 0,
-          hasLiked: false,
-          hasSaved: false
-        };
-        
-        // Add the temporary post until real data loads
-        setPosts(current => [tempPost, ...current]);
+        setTimeout(() => {
+          setRefreshing(false);
+        }, 1500);
       }
       
-      // Trigger visual refresh
-      handleRefresh();
+      // Refresh videos
+      fetchVideos();
     };
 
     console.log('Setting up REFRESH_FEED event listener');
@@ -1578,7 +1553,7 @@ export default function Feed() {
       console.log('Removing REFRESH_FEED event listener');
       DeviceEventEmitter.removeAllListeners('REFRESH_FEED');
     };
-  }, [user, handleSanityRefresh, handleRefresh]);
+  }, [user, handleSanityRefresh, fetchVideos]);
 
   // Handle post menu
   const handleShowMenu = (postId: string) => {
@@ -1821,7 +1796,7 @@ export default function Feed() {
             <View style={styles.pointsBadgeContainer}>
               <View style={styles.pointsBadge}>
                 <Award size={14} color="#FFD700" />
-                <Text style={styles.pointsText}>{item.points} pts</Text>
+                <Text style={styles.pointsText}>{item.points || 0} pts</Text>
               </View>
             </View>
           </View>
@@ -1892,6 +1867,7 @@ export default function Feed() {
               hitSlop={{top: 10, bottom: 10, left: 10, right: 10}}
             >
               <Award size={20} color="#FFD700" />
+              <Text style={[styles.actionText, {color: '#FFD700'}]}>{item.points || 0} pts</Text>
             </Pressable>
             )}
             
@@ -2072,6 +2048,14 @@ export default function Feed() {
               </View>
             </>
           )}
+          
+          {/* Add points badge */}
+          <View style={styles.pointsBadgeContainer}>
+            <View style={styles.pointsBadge}>
+              <Award size={14} color="#FFD700" />
+              <Text style={styles.pointsText}>{item.points || 0} pts</Text>
+            </View>
+          </View>
         </View>
         
         {/* Video title and description - clickable to navigate to detail page */}
@@ -2112,6 +2096,18 @@ export default function Feed() {
                 <Text style={[styles.actionText, { color: '#1877F2' }]}>Play</Text>
               </Pressable>
             )}
+          </View>
+          
+          <View style={styles.actionGroup}>
+            {/* Add award points button */}
+            <Pressable 
+              style={styles.actionButton} 
+              onPress={() => handleAwardPoints(item.id, 1)}
+              hitSlop={{top: 10, bottom: 10, left: 10, right: 10}}
+            >
+              <Award size={20} color="#FFD700" />
+              <Text style={[styles.actionText, {color: '#FFD700'}]}>{item.points || 0} pts</Text>
+            </Pressable>
           </View>
         </View>
       </View>

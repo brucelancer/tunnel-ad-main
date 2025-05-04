@@ -1,4 +1,6 @@
 import { createClient } from '@sanity/client';
+import imageUrlBuilder from '@sanity/image-url';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 
 // Create a Sanity client directly
 const projectId = process.env.SANITY_PROJECT_ID || '21is7976';
@@ -14,6 +16,82 @@ const client = createClient({
   token
 });
 
+// Storage keys
+const READ_NOTIFICATIONS_KEY = 'tunnel_read_notifications';
+const USER_DATA_KEY = 'tunnel_user_data';
+
+// Helper for image URLs
+const builder = imageUrlBuilder(client);
+export const urlFor = (source) => {
+  return builder.image(source).url();
+};
+
+// Helper function to get image URL from a Sanity image object or direct URI
+const getImageUrl = (imageData) => {
+  // If it's already a string URI, use it directly
+  if (typeof imageData === 'string') {
+    return imageData;
+  }
+  // If it's a Sanity image object with an asset, convert it to URL
+  else if (imageData && imageData.asset) {
+    return urlFor(imageData);
+  }
+  return null;
+};
+
+// Object to keep track of read notifications
+let readNotificationsCache = {};
+
+// Helper to get current user ID
+const getCurrentUserId = async () => {
+  try {
+    // Try different storage keys for user data
+    const storageKeys = [USER_DATA_KEY, 'userData', 'user', 'sanityUser'];
+    let userData = null;
+    
+    for (const key of storageKeys) {
+      try {
+        const data = await AsyncStorage.getItem(key);
+        if (data) {
+          userData = JSON.parse(data);
+          if (userData && userData._id) {
+            console.log(`[NotifService] Found user ID in storage key: ${key}`, userData._id);
+            return userData._id;
+          }
+        }
+      } catch (e) {
+        console.log(`[NotifService] Error reading from key ${key}:`, e);
+      }
+    }
+    
+    console.warn('[NotifService] Could not find user ID in any storage location');
+    return null;
+  } catch (error) {
+    console.error('[NotifService] Error getting current user ID:', error);
+    return null;
+  }
+};
+
+// Load read notifications on initialization
+const initializeReadNotifications = async () => {
+  try {
+    console.log('[NotifService] Initializing read notifications cache');
+    const savedReadNotifications = await AsyncStorage.getItem(READ_NOTIFICATIONS_KEY);
+    
+    if (savedReadNotifications) {
+      readNotificationsCache = JSON.parse(savedReadNotifications);
+      console.log('[NotifService] Loaded read notifications from storage, count:', Object.keys(readNotificationsCache).length);
+    } else {
+      console.log('[NotifService] No saved read notifications found');
+    }
+  } catch (error) {
+    console.error('[NotifService] Error loading read notifications from storage:', error);
+  }
+};
+
+// Run initialization
+initializeReadNotifications();
+
 /**
  * Fetch notifications for a specific user
  * @param {string} userId - The user ID to fetch notifications for
@@ -22,8 +100,21 @@ const client = createClient({
 export const fetchUserNotifications = async (userId) => {
   try {
     if (!userId) {
-      console.error('No userId provided to fetchUserNotifications');
+      console.error('[NotifService] No userId provided to fetchUserNotifications');
       return [];
+    }
+    
+    console.log(`[NotifService] Fetching notifications for user: ${userId}`);
+    
+    // Try to refresh the cache from AsyncStorage
+    try {
+      const savedReadNotifications = await AsyncStorage.getItem(READ_NOTIFICATIONS_KEY);
+      if (savedReadNotifications) {
+        readNotificationsCache = JSON.parse(savedReadNotifications);
+        console.log('[NotifService] Refreshed read notifications cache, count:', Object.keys(readNotificationsCache).length);
+      }
+    } catch (error) {
+      console.error('[NotifService] Error refreshing notification cache:', error);
     }
 
     // Calculate the date for "last 30 days"
@@ -110,148 +201,336 @@ export const fetchUserNotifications = async (userId) => {
     }`;
 
     const results = await client.fetch(query, { userId });
+    console.log('[NotifService] Fetched notification data from Sanity');
     
     // Process and combine all notification types
     let notifications = [];
     
+    // Helper function to generate notification ID
+    const generateNotificationId = (type, contentId, userId, key) => {
+      return `${type}-${contentId}-${userId || 'unknown'}-${key || 'unknown'}`;
+    };
+
     // Process post likes
     if (results.postLikes) {
+      // Group likes by post to show multiple likers in one notification
+      const postLikesMap = new Map(); // Map of postId -> notification data
+      
       results.postLikes.forEach(post => {
         if (post.likedByUsers && post.likedByUsers.length > 0) {
-          post.likedByUsers.forEach(user => {
+          // Get all likes for this post
+          const likers = post.likedByUsers.map(user => {
             // Find the corresponding like entry with the key and creation date
             const likeEntry = post.likedBy.find(like => like._ref === user._id);
-            if (likeEntry) {
-              notifications.push({
-                id: `post-like-${post._id}-${user._id}-${likeEntry._key}`,
-                type: 'like',
-                title: 'New like on your post',
-                message: `${user.firstName || user.username || 'Someone'} liked your post`,
-                contentSnippet: post.snippet || post.content || 'Your post',
-                contentId: post._id,
-                contentType: 'post',
-                senderId: user._id,
-                senderName: user.firstName && user.lastName ? 
-                  `${user.firstName} ${user.lastName}` : user.username || 'Unknown User',
-                username: user.username || 'user',
-                avatar: user.avatar,
-                time: formatTimeAgo(likeEntry._createdAt || new Date()),
-                createdAt: likeEntry._createdAt || new Date().toISOString(),
-                read: false,
-                isVerified: user.isVerified || false,
-                isBlueVerified: user.isBlueVerified || false
-              });
-            }
+            
+            // Process avatar URL
+            const avatarUrl = getImageUrl(user.avatar);
+            
+            return {
+              userId: user._id,
+              username: user.username,
+              firstName: user.firstName,
+              lastName: user.lastName,
+              avatar: avatarUrl,
+              createdAt: likeEntry?._createdAt || new Date().toISOString(),
+              key: likeEntry?._key,
+              isVerified: user.isVerified || false,
+              isBlueVerified: user.isBlueVerified || false
+            };
+          });
+          
+          // Sort by most recent first
+          likers.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+          
+          // Create or update group notification
+          const notificationId = `post-likes-group-${post._id}`;
+          const latestLiker = likers[0];
+          
+          postLikesMap.set(notificationId, {
+            id: notificationId,
+            type: 'like',
+            title: likers.length > 1 ? 'Multiple likes on your post' : 'New like on your post',
+            message: likers.length > 1 
+              ? `${latestLiker.firstName || latestLiker.username || 'Someone'} and ${likers.length - 1} others liked your post`
+              : `${latestLiker.firstName || latestLiker.username || 'Someone'} liked your post`,
+            contentSnippet: post.snippet || post.content || 'Your post',
+            contentId: post._id,
+            contentType: 'post',
+            senderId: latestLiker.userId,
+            senderName: latestLiker.firstName && latestLiker.lastName ? 
+              `${latestLiker.firstName} ${latestLiker.lastName}` : latestLiker.username || 'Unknown User',
+            username: latestLiker.username || 'user',
+            avatar: latestLiker.avatar,
+            time: formatTimeAgo(latestLiker.createdAt || new Date()),
+            createdAt: latestLiker.createdAt || new Date().toISOString(),
+            read: false,
+            isVerified: latestLiker.isVerified || false,
+            isBlueVerified: latestLiker.isBlueVerified || false,
+            groupMembers: likers.map(liker => ({
+              id: liker.userId,
+              name: liker.firstName && liker.lastName ? 
+                `${liker.firstName} ${liker.lastName}` : liker.username || 'Unknown User',
+              username: liker.username || 'user',
+              avatar: liker.avatar,
+              isVerified: liker.isVerified || false,
+              isBlueVerified: liker.isBlueVerified || false
+            }))
           });
         }
       });
+      
+      // Add all grouped post like notifications
+      notifications = [...notifications, ...Array.from(postLikesMap.values())];
     }
     
     // Process post comments
     if (results.postComments) {
+      // Group comments by post to show multiple commenters in one notification
+      const postCommentsMap = new Map(); // Map of postId -> notification data
+      
       results.postComments.forEach(post => {
         if (post.comments && post.comments.length > 0) {
-          post.comments.forEach(comment => {
-            if (comment.author) {
-              notifications.push({
-                id: `post-comment-${post._id}-${comment._key}`,
-                type: 'comment',
-                title: 'New comment on your post',
-                message: `${comment.author.firstName || comment.author.username || 'Someone'} commented: "${comment.text.substring(0, 50)}${comment.text.length > 50 ? '...' : ''}"`,
-                contentSnippet: post.snippet || post.content || 'Your post',
-                contentId: post._id,
-                contentType: 'post',
-                senderId: comment.author._id,
-                senderName: comment.author.firstName && comment.author.lastName ? 
-                  `${comment.author.firstName} ${comment.author.lastName}` : comment.author.username || 'Unknown User',
-                username: comment.author.username || 'user',
-                avatar: comment.author.avatar,
-                time: formatTimeAgo(comment._createdAt || new Date()),
-                createdAt: comment._createdAt || new Date().toISOString(),
-                read: false,
-                isVerified: comment.author.isVerified || false,
-                isBlueVerified: comment.author.isBlueVerified || false
-              });
-            }
+          // Get all commenters for this post
+          const commenters = post.comments.map(comment => {
+            if (!comment.author) return null;
+            
+            // Process avatar URL
+            const avatarUrl = getImageUrl(comment.author.avatar);
+            
+            return {
+              userId: comment.author._id,
+              username: comment.author.username,
+              firstName: comment.author.firstName,
+              lastName: comment.author.lastName,
+              avatar: avatarUrl,
+              text: comment.text,
+              createdAt: comment._createdAt || new Date().toISOString(),
+              key: comment._key,
+              isVerified: comment.author.isVerified || false,
+              isBlueVerified: comment.author.isBlueVerified || false
+            };
+          }).filter(c => c !== null);
+          
+          // Sort by most recent first
+          commenters.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+          
+          // Create or update group notification
+          const notificationId = `post-comments-group-${post._id}`;
+          const latestCommenter = commenters[0];
+          
+          postCommentsMap.set(notificationId, {
+            id: notificationId,
+            type: 'comment',
+            title: commenters.length > 1 ? 'Multiple comments on your post' : 'New comment on your post',
+            message: commenters.length > 1 
+              ? `${latestCommenter.firstName || latestCommenter.username || 'Someone'} and ${commenters.length - 1} others commented on your post`
+              : `${latestCommenter.firstName || latestCommenter.username || 'Someone'} commented: "${latestCommenter.text.substring(0, 50)}${latestCommenter.text.length > 50 ? '...' : ''}"`,
+            contentSnippet: post.snippet || post.content || 'Your post',
+            contentId: post._id,
+            contentType: 'post',
+            senderId: latestCommenter.userId,
+            senderName: latestCommenter.firstName && latestCommenter.lastName ? 
+              `${latestCommenter.firstName} ${latestCommenter.lastName}` : latestCommenter.username || 'Unknown User',
+            username: latestCommenter.username || 'user',
+            avatar: latestCommenter.avatar,
+            time: formatTimeAgo(latestCommenter.createdAt || new Date()),
+            createdAt: latestCommenter.createdAt || new Date().toISOString(),
+            read: false,
+            isVerified: latestCommenter.isVerified || false,
+            isBlueVerified: latestCommenter.isBlueVerified || false,
+            groupMembers: commenters.map(commenter => ({
+              id: commenter.userId,
+              name: commenter.firstName && commenter.lastName ? 
+                `${commenter.firstName} ${commenter.lastName}` : commenter.username || 'Unknown User',
+              username: commenter.username || 'user',
+              avatar: commenter.avatar,
+              isVerified: commenter.isVerified || false,
+              isBlueVerified: commenter.isBlueVerified || false
+            }))
           });
         }
       });
+      
+      // Add all grouped post comment notifications
+      notifications = [...notifications, ...Array.from(postCommentsMap.values())];
     }
     
     // Process video likes
     if (results.videoLikes) {
+      // Group likes by video to show multiple likers in one notification
+      const videoLikesMap = new Map(); // Map of videoId -> notification data
+      
       results.videoLikes.forEach(video => {
         if (video.likedByUsers && video.likedByUsers.length > 0) {
-          video.likedByUsers.forEach(user => {
+          // Get all likes for this video
+          const likers = video.likedByUsers.map(user => {
             // Find the corresponding like entry with the key and creation date
             const likeEntry = video.likedBy.find(like => like._ref === user._id);
-            if (likeEntry) {
-              notifications.push({
-                id: `video-like-${video._id}-${user._id}-${likeEntry._key}`,
-                type: 'like',
-                title: 'New like on your video',
-                message: `${user.firstName || user.username || 'Someone'} liked your video`,
-                contentImage: video.thumbnail,
-                videoTitle: video.title || 'Your video',
-                contentId: video._id,
-                contentType: 'video',
-                senderId: user._id,
-                senderName: user.firstName && user.lastName ? 
-                  `${user.firstName} ${user.lastName}` : user.username || 'Unknown User',
-                username: user.username || 'user',
-                avatar: user.avatar,
-                time: formatTimeAgo(likeEntry._createdAt || new Date()),
-                createdAt: likeEntry._createdAt || new Date().toISOString(),
-                read: false,
-                isVerified: user.isVerified || false,
-                isBlueVerified: user.isBlueVerified || false
-              });
-            }
+            
+            // Process avatar URL
+            const avatarUrl = getImageUrl(user.avatar);
+            
+            return {
+              userId: user._id,
+              username: user.username,
+              firstName: user.firstName,
+              lastName: user.lastName,
+              avatar: avatarUrl,
+              createdAt: likeEntry?._createdAt || new Date().toISOString(),
+              key: likeEntry?._key,
+              isVerified: user.isVerified || false,
+              isBlueVerified: user.isBlueVerified || false
+            };
+          });
+          
+          // Sort by most recent first
+          likers.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+          
+          // Create or update group notification
+          const notificationId = `video-likes-group-${video._id}`;
+          const latestLiker = likers[0];
+          
+          // Process thumbnail URL if it's a Sanity reference
+          const thumbnailUrl = getImageUrl(video.thumbnail);
+          
+          videoLikesMap.set(notificationId, {
+            id: notificationId,
+            type: 'like',
+            title: likers.length > 1 ? 'Multiple likes on your video' : 'New like on your video',
+            message: likers.length > 1 
+              ? `${latestLiker.firstName || latestLiker.username || 'Someone'} and ${likers.length - 1} others liked your video`
+              : `${latestLiker.firstName || latestLiker.username || 'Someone'} liked your video`,
+            contentImage: thumbnailUrl,
+            videoTitle: video.title || 'Your video',
+            contentId: video._id,
+            contentType: 'video',
+            senderId: latestLiker.userId,
+            senderName: latestLiker.firstName && latestLiker.lastName ? 
+              `${latestLiker.firstName} ${latestLiker.lastName}` : latestLiker.username || 'Unknown User',
+            username: latestLiker.username || 'user',
+            avatar: latestLiker.avatar,
+            time: formatTimeAgo(latestLiker.createdAt || new Date()),
+            createdAt: latestLiker.createdAt || new Date().toISOString(),
+            read: false,
+            isVerified: latestLiker.isVerified || false,
+            isBlueVerified: latestLiker.isBlueVerified || false,
+            groupMembers: likers.map(liker => ({
+              id: liker.userId,
+              name: liker.firstName && liker.lastName ? 
+                `${liker.firstName} ${liker.lastName}` : liker.username || 'Unknown User',
+              username: liker.username || 'user',
+              avatar: liker.avatar,
+              isVerified: liker.isVerified || false,
+              isBlueVerified: liker.isBlueVerified || false
+            }))
           });
         }
       });
+      
+      // Add all grouped video like notifications
+      notifications = [...notifications, ...Array.from(videoLikesMap.values())];
     }
     
     // Process video comments
     if (results.videoComments) {
+      // Group comments by video to show multiple commenters in one notification
+      const videoCommentsMap = new Map(); // Map of videoId -> notification data
+      
       results.videoComments.forEach(video => {
         if (video.comments && video.comments.length > 0) {
-          video.comments.forEach(comment => {
-            if (comment.author) {
-              notifications.push({
-                id: `video-comment-${video._id}-${comment._key}`,
-                type: 'comment',
-                title: 'New comment on your video',
-                message: `${comment.author.firstName || comment.author.username || 'Someone'} commented: "${comment.text.substring(0, 50)}${comment.text.length > 50 ? '...' : ''}"`,
-                contentImage: video.thumbnail,
-                videoTitle: video.title || 'Your video',
-                contentId: video._id,
-                contentType: 'video',
-                senderId: comment.author._id,
-                senderName: comment.author.firstName && comment.author.lastName ? 
-                  `${comment.author.firstName} ${comment.author.lastName}` : comment.author.username || 'Unknown User',
-                username: comment.author.username || 'user',
-                avatar: comment.author.avatar,
-                time: formatTimeAgo(comment._createdAt || new Date()),
-                createdAt: comment._createdAt || new Date().toISOString(),
-                read: false,
-                isVerified: comment.author.isVerified || false,
-                isBlueVerified: comment.author.isBlueVerified || false
-              });
-            }
+          // Get all commenters for this video
+          const commenters = video.comments.map(comment => {
+            if (!comment.author) return null;
+            
+            // Process avatar URL
+            const avatarUrl = getImageUrl(comment.author.avatar);
+            
+            return {
+              userId: comment.author._id,
+              username: comment.author.username,
+              firstName: comment.author.firstName,
+              lastName: comment.author.lastName,
+              avatar: avatarUrl,
+              text: comment.text,
+              createdAt: comment._createdAt || new Date().toISOString(),
+              key: comment._key,
+              isVerified: comment.author.isVerified || false,
+              isBlueVerified: comment.author.isBlueVerified || false
+            };
+          }).filter(c => c !== null);
+          
+          // Sort by most recent first
+          commenters.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+          
+          // Create or update group notification
+          const notificationId = `video-comments-group-${video._id}`;
+          const latestCommenter = commenters[0];
+          
+          // Process thumbnail URL if it's a Sanity reference
+          const thumbnailUrl = getImageUrl(video.thumbnail);
+          
+          videoCommentsMap.set(notificationId, {
+            id: notificationId,
+            type: 'comment',
+            title: commenters.length > 1 ? 'Multiple comments on your video' : 'New comment on your video',
+            message: commenters.length > 1 
+              ? `${latestCommenter.firstName || latestCommenter.username || 'Someone'} and ${commenters.length - 1} others commented on your video`
+              : `${latestCommenter.firstName || latestCommenter.username || 'Someone'} commented: "${latestCommenter.text.substring(0, 50)}${latestCommenter.text.length > 50 ? '...' : ''}"`,
+            contentImage: thumbnailUrl,
+            videoTitle: video.title || 'Your video',
+            contentId: video._id,
+            contentType: 'video',
+            senderId: latestCommenter.userId,
+            senderName: latestCommenter.firstName && latestCommenter.lastName ? 
+              `${latestCommenter.firstName} ${latestCommenter.lastName}` : latestCommenter.username || 'Unknown User',
+            username: latestCommenter.username || 'user',
+            avatar: latestCommenter.avatar,
+            time: formatTimeAgo(latestCommenter.createdAt || new Date()),
+            createdAt: latestCommenter.createdAt || new Date().toISOString(),
+            read: false,
+            isVerified: latestCommenter.isVerified || false,
+            isBlueVerified: latestCommenter.isBlueVerified || false,
+            groupMembers: commenters.map(commenter => ({
+              id: commenter.userId,
+              name: commenter.firstName && commenter.lastName ? 
+                `${commenter.firstName} ${commenter.lastName}` : commenter.username || 'Unknown User',
+              username: commenter.username || 'user',
+              avatar: commenter.avatar,
+              isVerified: commenter.isVerified || false,
+              isBlueVerified: commenter.isBlueVerified || false
+            }))
           });
         }
       });
+      
+      // Add all grouped video comment notifications
+      notifications = [...notifications, ...Array.from(videoCommentsMap.values())];
     }
+
+    console.log(`[NotifService] Total notifications before read check: ${notifications.length}`);
     
+    // Check read status from cache for each notification
+    notifications = notifications.map(notification => {
+      const userReadKey = `${userId}_${notification.id}`;
+      const isRead = !!readNotificationsCache[userReadKey];
+      if (isRead) {
+        console.log(`[NotifService] Notification marked as read: ${notification.id}`);
+      }
+      return {
+        ...notification,
+        read: isRead
+      };
+    });
+
     // Sort notifications by date (newest first)
     notifications.sort((a, b) => 
       new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
     );
     
+    console.log(`[NotifService] Returning ${notifications.length} notifications, unread count: ${notifications.filter(n => !n.read).length}`);
     return notifications;
   } catch (error) {
-    console.error('Error fetching user notifications:', error);
+    console.error('[NotifService] Error fetching user notifications:', error);
     return [];
   }
 };
@@ -262,9 +541,44 @@ export const fetchUserNotifications = async (userId) => {
  * @returns {Promise<boolean>} - Success status
  */
 export const markNotificationAsRead = async (notificationId) => {
-  // In a real implementation, this would update read status in Sanity
-  // For now, we'll just return success
-  return true;
+  try {
+    console.log(`[NotifService] Marking notification as read: ${notificationId}`);
+    
+    // Get current user ID
+    const userId = await getCurrentUserId();
+    
+    if (!userId) {
+      console.warn('[NotifService] No user ID found, cannot mark notification as read');
+      return false;
+    }
+    
+    // Create a key that includes user ID to avoid conflicts
+    const userReadKey = `${userId}_${notificationId}`;
+    console.log(`[NotifService] Generated user read key: ${userReadKey}`);
+    
+    // Save the read status to cache
+    readNotificationsCache[userReadKey] = true;
+    
+    // Save to AsyncStorage
+    try {
+      await AsyncStorage.setItem(READ_NOTIFICATIONS_KEY, JSON.stringify(readNotificationsCache));
+      console.log(`[NotifService] Saved read status to AsyncStorage, cache size: ${Object.keys(readNotificationsCache).length}`);
+      
+      // Debug: verify the data was saved
+      const savedData = await AsyncStorage.getItem(READ_NOTIFICATIONS_KEY);
+      if (savedData) {
+        const parsedData = JSON.parse(savedData);
+        console.log(`[NotifService] Verified read notifications in storage: ${Object.keys(parsedData).length} items, has key: ${!!parsedData[userReadKey]}`);
+      }
+    } catch (error) {
+      console.error('[NotifService] Error saving read notifications to storage:', error);
+    }
+    
+    return true;
+  } catch (error) {
+    console.error('[NotifService] Error marking notification as read:', error);
+    return false;
+  }
 };
 
 /**
@@ -273,9 +587,41 @@ export const markNotificationAsRead = async (notificationId) => {
  * @returns {Promise<boolean>} - Success status
  */
 export const markAllNotificationsAsRead = async (userId) => {
-  // In a real implementation, this would update read status for all notifications in Sanity
-  // For now, we'll just return success
-  return true;
+  try {
+    if (!userId) {
+      // Try to get userId if not provided
+      userId = await getCurrentUserId();
+      if (!userId) {
+        console.warn('[NotifService] No user ID provided or found, cannot mark all notifications as read');
+        return false;
+      }
+    }
+    
+    console.log(`[NotifService] Marking all notifications as read for user: ${userId}`);
+    
+    // Fetch all notifications for this user
+    const notifications = await fetchUserNotifications(userId);
+    console.log(`[NotifService] Found ${notifications.length} notifications to mark as read`);
+    
+    // Mark each notification as read
+    for (const notification of notifications) {
+      const userReadKey = `${userId}_${notification.id}`;
+      readNotificationsCache[userReadKey] = true;
+    }
+    
+    // Save to AsyncStorage
+    try {
+      await AsyncStorage.setItem(READ_NOTIFICATIONS_KEY, JSON.stringify(readNotificationsCache));
+      console.log(`[NotifService] Saved all read statuses to AsyncStorage, cache size: ${Object.keys(readNotificationsCache).length}`);
+    } catch (error) {
+      console.error('[NotifService] Error saving read notifications to storage:', error);
+    }
+    
+    return true;
+  } catch (error) {
+    console.error('[NotifService] Error marking all notifications as read:', error);
+    return false;
+  }
 };
 
 /**
