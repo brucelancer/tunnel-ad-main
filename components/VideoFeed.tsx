@@ -1265,7 +1265,7 @@ const VideoItemComponent = memo(({
   onCommentsOpened,
   onCommentsClosed,
   updateUserPoints
-}: VideoItemProps): JSX.Element => {
+}: VideoItemProps): React.ReactElement => {
   const { addPoints, hasWatchedVideo } = usePoints();
   const { getVideoReactions, updateReaction, loadReactions } = useReactions();
   const { user } = useSanityAuth();  // Add this line to get the current user
@@ -2364,15 +2364,8 @@ const VideoItemComponent = memo(({
           {/* Add play/pause touch overlay */}
           {isCurrentVideo && !isLocked && !showPremiumAd && (
             <>
-              {/* Left half for play/pause */}
               <Pressable 
-                style={[styles.videoTouchOverlay, styles.leftHalfTouchOverlay]}
-                onPress={togglePlayPause}
-              />
-              
-              {/* Right half for 2x speed on long press */}
-              <Pressable 
-                style={[styles.videoTouchOverlay, styles.rightHalfTouchOverlay]}
+                style={styles.videoTouchOverlay}
                 onPress={togglePlayPause}
                 onLongPress={() => {
                   // Set timeout to handle long press
@@ -2393,17 +2386,18 @@ const VideoItemComponent = memo(({
                     handleSpeedChange(1.0);
                   }
                 }}
-              >
-                {/* Show the speed up indicator when active */}
-                {showSpeedUpIndicator && (
-                  <Animated.View style={[
-                    styles.speedUpIconContainer,
-                    { opacity: speedUpIndicatorOpacity }
-                  ]}>
-                    <Text style={styles.speedUpText}>2x</Text>
-                  </Animated.View>
-                )}
-              </Pressable>
+                delayLongPress={200}
+              />
+              
+              {/* Show the speed up indicator when active */}
+              {showSpeedUpIndicator && (
+                <Animated.View style={[
+                  styles.speedUpIconContainer,
+                  { opacity: speedUpIndicatorOpacity }
+                ]}>
+                  <Text style={styles.speedUpText}>2x</Text>
+                </Animated.View>
+              )}
               
               {/* Centered play/pause icon */}
               {showPlayIcon && (
@@ -2414,7 +2408,7 @@ const VideoItemComponent = memo(({
                 ]}>
                   <Play 
                     color="white" 
-                    size={SCREEN_WIDTH * 0.15}
+                    size={Math.min(80, Math.max(40, SCREEN_WIDTH * 0.12))} // Responsive size between 40-80
                     style={styles.playIcon} 
                     fill={isPaused ? "white" : "transparent"}
                   />
@@ -4243,6 +4237,7 @@ const styles = StyleSheet.create({
     bottom: SCREEN_HEIGHT * 0.15,
     alignItems: 'center',
     gap: SCREEN_HEIGHT * 0.035,
+    zIndex: 10, // Ensure action buttons appear above the video touch overlay
   },
   likeContainer: {
     alignItems: 'center',
@@ -4807,17 +4802,17 @@ const styles = StyleSheet.create({
     position: 'absolute',
     top: 0,
     left: 0,
-    right: 0,
-    bottom: 0,
+    width: SCREEN_WIDTH * 0.8, // Only cover 80% of the screen width, leaving 20% for action buttons
+    height: '75%', // Only cover top 75% of screen height, leaving bottom 25% for social icons
     justifyContent: 'center',
     alignItems: 'center',
     zIndex: 5,
   },
   
   playIconContainer: {
-    width: 80,
-    height: 80,
-    borderRadius: 40,
+    width: Math.min(90, Math.max(50, SCREEN_WIDTH * 0.15)), // Responsive width
+    height: Math.min(90, Math.max(50, SCREEN_WIDTH * 0.15)), // Responsive height
+    borderRadius: Math.min(45, Math.max(25, SCREEN_WIDTH * 0.075)), // Half of width/height
     backgroundColor: 'rgba(0, 0, 0, 0.4)',
     justifyContent: 'center',
     alignItems: 'center',
@@ -4835,20 +4830,25 @@ const styles = StyleSheet.create({
     shadowRadius: 2,
   },
   
-  // Add left half overlay style
+  // Remove the left/right half overlay styles since we're using a different approach
   leftHalfTouchOverlay: {
-    right: SCREEN_WIDTH / 2,
-    zIndex: 5,
+    // Removed - no longer splitting screen in halves
   } as any,
   
-  // Add right half overlay style
+  // Remove the right half overlay styles since we're using a different approach
   rightHalfTouchOverlay: {
-    left: SCREEN_WIDTH / 2,
-    zIndex: 5,
+    // Removed - no longer splitting screen in halves
   } as any,
   
   // Add speedup indicator
   speedUpIconContainer: {
+    position: 'absolute',
+    top: '50%',  // Center vertically
+    left: '50%', // Center horizontally
+    transform: [
+      { translateX: -30 }, // Half of the width (60/2)
+      { translateY: -30 }  // Half of the height (60/2)
+    ],
     width: 60,
     height: 60,
     borderRadius: 30,
@@ -4860,6 +4860,7 @@ const styles = StyleSheet.create({
     shadowOpacity: 0.5,
     shadowRadius: 4,
     elevation: 5,
+    zIndex: 20,
   } as any,
   
   speedUpText: {
@@ -4873,11 +4874,13 @@ const styles = StyleSheet.create({
   // Add centered play icon style
   centeredPlayIcon: {
     position: 'absolute',
-    top: '50%',
-    left: '50%',
-    marginLeft: -40,
-    marginTop: -40,
-    zIndex: 10,
+    top: '50%',  // Center vertically
+    left: '50%', // Center horizontally
+    transform: [
+      { translateX: -40 }, // Use a fixed value that works well across devices
+      { translateY: -40 }  // Use a fixed value that works well across devices
+    ],
+    zIndex: 20, // Make sure it appears above other elements
   } as any,
   speedModeContainer: {
     position: 'absolute',
