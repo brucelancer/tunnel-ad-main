@@ -1585,6 +1585,13 @@ export default function Feed() {
       return;
     }
     
+    // Get the selected post
+    const selectedPost = posts.find(post => post.id === selectedPostId);
+    if (!selectedPost) {
+      console.error('Selected post not found in state');
+      return;
+    }
+    
     // Confirm deletion
     Alert.alert(
       'Delete Post',
@@ -1596,29 +1603,68 @@ export default function Feed() {
           style: 'destructive', 
           onPress: async () => {
             try {
-              const selectedPost = posts.find(post => post.id === selectedPostId);
-              if (!selectedPost) return;
-              
               if (getSanityClient && user) {
                 const client = getSanityClient();
                 
-                // Delete the post from Sanity - selectedPostId is now a string
-                await client.delete(selectedPostId);
-                
-                // Update the local state to remove the post
-                setPosts(currentPosts => 
-                  currentPosts.filter(post => post.id !== selectedPostId)
+                // First check for references to this post
+                const references = await client.fetch(
+                  `*[references($postId)]{ _id, _type }`,
+                  { postId: selectedPostId }
                 );
                 
+                console.log(`Found ${references.length} references to post ${selectedPostId}`);
+                
+                // Handle each reference before deleting the post
+                if (references.length > 0) {
+                  // Delete all point transactions that reference this post
+                  for (const ref of references) {
+                    if (ref._type === 'pointTransaction') {
+                      console.log(`Deleting pointTransaction ${ref._id} that references post ${selectedPostId}`);
+                      await client.delete(ref._id);
+                    }
+                  }
+                }
+                
+                // Reset points to zero (this helps with constraints that might be based on points)
+                await client
+                  .patch(selectedPostId)
+                  .set({ points: 0 })
+                  .commit();
+                
+                // Now delete the post
+                await client.delete(selectedPostId);
+                
+                // Create a brand new array for posts to avoid reference issues
+                // This is safer than using filter which might keep references intact
+                const updatedPosts = posts.reduce((acc, post) => {
+                  // Skip the deleted post
+                  if (post.id !== selectedPostId) {
+                    // Add each non-deleted post with its original points value preserved
+                    acc.push({...post}); // Create a shallow copy of each post
+                  }
+                  return acc;
+                }, [] as typeof FEED_POSTS);
+                
+                // Update state with the new array
+                setPosts(updatedPosts);
+                
                 // Refresh the feed to make sure it's updated
-                handleSanityRefresh();
+                // We need to use a timeout to ensure the UI updates first
+                setTimeout(() => {
+                  handleSanityRefresh();
+                }, 100);
                 
                 Alert.alert('Success', 'Your post has been deleted.');
               } else {
-                // Demo mode
-                setPosts(currentPosts => 
-                  currentPosts.filter(post => post.id !== selectedPostId)
-                );
+                // Demo mode - same approach for local state
+                const updatedPosts = posts.reduce((acc, post) => {
+                  if (post.id !== selectedPostId) {
+                    acc.push({...post});
+                  }
+                  return acc;
+                }, [] as typeof FEED_POSTS);
+                
+                setPosts(updatedPosts);
                 
                 Alert.alert('Post Deleted (Demo)', 'In the full app, this post would be removed from the database.');
               }
@@ -1690,7 +1736,9 @@ export default function Feed() {
         {item.location ? (
           <View style={styles.locationContainer}>
             <MapPin size={12} color="#888" />
-            <Text style={styles.locationText}>{item.location}</Text>
+            <Text style={styles.locationText}>
+              {cleanContentText(item.location)}
+            </Text>
           </View>
         ) : null}
         
@@ -2204,6 +2252,11 @@ export default function Feed() {
       },
       (error) => {
         console.error('Error getting image size:', error);
+        // Set fallback dimensions on error
+        setImageDimensions(prev => ({
+          ...prev,
+          [imageUri]: { width: 1, height: 1 } // Default 1:1 ratio
+        }));
       }
     );
     
@@ -2220,19 +2273,29 @@ export default function Feed() {
       return 300; // Default height
     }
     
-    // Calculate height while preserving aspect ratio and setting reasonable bounds
+    // Calculate height while preserving aspect ratio
     const { width, height } = dimensions;
     const aspectRatio = width / height;
     
     let calculatedHeight = containerWidth / aspectRatio;
     
-    // Set bounds to prevent extremely tall or short images
-    calculatedHeight = Math.min(calculatedHeight, 500); // Max height
-    calculatedHeight = Math.max(calculatedHeight, 200); // Min height
+    // Set more flexible bounds to prevent extremely tall or short images
+    const maxHeight = Math.min(500, SCREEN_HEIGHT * 0.6); // Max height is 60% of screen or 500px
+    const minHeight = 150; // Min height
+    
+    calculatedHeight = Math.min(calculatedHeight, maxHeight); // Max height
+    calculatedHeight = Math.max(calculatedHeight, minHeight); // Min height
     
     return calculatedHeight;
-  }, [imageDimensions, measureImage]);
+  }, [imageDimensions, measureImage, SCREEN_HEIGHT]);
 
+  // Add a utility function to clean text content of HTML comments
+  const cleanContentText = (text: string): string => {
+    if (!text) return '';
+    // Remove any HTML comments from the text
+    return text.replace(/<!--[\s\S]*?-->/g, '').trim();
+  };
+  
   // Function to toggle text expansion for a post
   const toggleTextExpansion = (postId: string) => {
     setExpandedPosts(prev => ({
@@ -2243,7 +2306,10 @@ export default function Feed() {
   
   // Function to truncate text and add "See More" button if needed
   const getTruncatedText = (text: string, postId: string) => {
-    const wordCount = text.split(/\s+/).length;
+    // Clean the text first to remove any HTML comments
+    const cleanedText = cleanContentText(text);
+    
+    const wordCount = cleanedText.split(/\s+/).length;
     const isExpanded = expandedPosts[postId];
     
     // Get the post from the feed data to check if it has images
@@ -2251,7 +2317,7 @@ export default function Feed() {
     const hasImages = post && post.images && post.images.length > 0;
     
     // Check if text contains non-Latin characters (like Myanmar script)
-    const hasNonLatinChars = /[^\u0000-\u007F]/.test(text);
+    const hasNonLatinChars = /[^\u0000-\u007F]/.test(cleanedText);
     
     // Set different word count thresholds based on post type and character set
     // Reduce threshold for non-Latin scripts as they may need more space
@@ -2262,7 +2328,7 @@ export default function Feed() {
     if (wordCount <= wordCountThreshold || isExpanded) {
       return (
         <>
-          <Text style={styles.postContent}>{text}</Text>
+          <Text style={styles.postContent}>{cleanedText}</Text>
           {wordCount > wordCountThreshold && (
             <Pressable onPress={() => toggleTextExpansion(postId)}>
               <Text style={styles.seeMoreLessText}>See Less</Text>
@@ -2273,7 +2339,7 @@ export default function Feed() {
     }
     
     // Otherwise truncate text
-    const truncated = text.split(/\s+/).slice(0, wordCountThreshold).join(' ') + '...';
+    const truncated = cleanedText.split(/\s+/).slice(0, wordCountThreshold).join(' ') + '...';
     return (
       <>
         <Text style={styles.postContent}>{truncated}</Text>
@@ -2779,8 +2845,7 @@ const styles = StyleSheet.create({
   },
   image: {
     width: '100%',
-    height: undefined,
-    aspectRatio: 1,
+    height: undefined, // Height will be set dynamically
     resizeMode: 'contain',
     borderRadius: 16,
     backgroundColor: '#111',

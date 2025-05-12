@@ -60,6 +60,7 @@ import {
   Eye,
   ExternalLink,
   BarChart2,
+  Pause,
 } from 'lucide-react-native';
 import { usePoints } from '../hooks/usePoints';
 import { useReactions } from '../hooks/useReactions';
@@ -1271,12 +1272,9 @@ const VideoItemComponent = memo(({
   const { user } = useSanityAuth();  // Add this line to get the current user
   
   // Add state variables here
-  const [hasEarnedPoints, setHasEarnedPoints] = useState(false);
-  const [showPointsAnimation, setShowPointsAnimation] = useState(false);
+  // Points-related states removed
   const [showButtons, setShowButtons] = useState(false);
-  const [showStaticPoints, setShowStaticPoints] = useState(true);
   const [videoSize, setVideoSize] = useState({ width: 0, height: 0 });
-  const [remainingTime, setRemainingTime] = useState<string | null>('');
   const [showComments, setShowComments] = useState(false);
   const [isTabActive, setIsTabActive] = useState(true);
   const [reactions, setReactions] = useState({ likes: 0, dislikes: 0, userAction: null as null | 'like' | 'dislike' });
@@ -1289,17 +1287,16 @@ const VideoItemComponent = memo(({
   const [fullscreenMode, setFullscreenMode] = useState(0);
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
   // Add state for video paused status
-  const [isPaused, setIsPaused] = useState<boolean>(false);
+  const [isPaused, setIsPaused] = useState(false);
   // Add state for play icon animation
-  const [showPlayIcon, setShowPlayIcon] = useState<boolean>(false);
+  const [showPlayIcon, setShowPlayIcon] = useState(false);
   // Add state for 2x playback speed
   const [isSpeedUp, setIsSpeedUp] = useState<boolean>(false);
   const [showSpeedUpIndicator, setShowSpeedUpIndicator] = useState<boolean>(false);
   const speedUpIndicatorOpacity = useRef(new Animated.Value(0)).current;
   
   const videoRef = useRef<any>(null);
-  const pointsAnimation = useRef(new Animated.Value(0)).current;
-  const pointsScale = useRef(new Animated.Value(1)).current;
+  // Points-related refs removed
   const hasShownAnimationRef = useRef(false);
   const lastPositionRef = useRef<number>(0);
   const slideAnim = useRef(new Animated.Value(SCREEN_HEIGHT)).current;
@@ -1440,14 +1437,8 @@ const VideoItemComponent = memo(({
     };
   }, [item.id, getVideoReactions]);
 
-  // Reset state when points are updated (including reset)
+  // Reset state when needed
   const resetState = () => {
-    setHasEarnedPoints(false);
-    setShowPointsAnimation(false);
-    setShowStaticPoints(false);
-    pointsAnimation.setValue(0);
-    pointsScale.setValue(1);
-    hasShownAnimationRef.current = false;
     // Reset video progress
     if (videoRef.current) {
       videoRef.current.setPositionAsync(0);
@@ -1456,10 +1447,7 @@ const VideoItemComponent = memo(({
 
   // Check watched status whenever it might change
   useEffect(() => {
-    const isWatched = hasWatchedVideo(item.id);
-    setHasEarnedPoints(isWatched);
-    // Show static points only if not watched yet
-    setShowStaticPoints(!isWatched);
+    // No longer need to track watched status for points
   }, [hasWatchedVideo, item.id]);
 
   useEffect(() => {
@@ -1606,8 +1594,8 @@ const VideoItemComponent = memo(({
           const result = await videoService.checkVideoWatched(item.id, user._id);
           if (result.hasWatched) {
             console.log(`User has already watched video ${item.id}`);
-            setHasEarnedPoints(true);
-            setShowStaticPoints(false);
+            // Set viewCounted to true to prevent counting the view again
+            setViewCounted(true);
           }
         }
       } catch (error) {
@@ -1618,13 +1606,30 @@ const VideoItemComponent = memo(({
     checkIfVideoWatched();
   }, [user?._id, item.id]);
 
-  // Update the handlePlaybackStatusUpdate function to trigger animation at countdown zero
+  // Update the handlePlaybackStatusUpdate function for faster view count updates
   const handlePlaybackStatusUpdate = async (status: any) => {
     setStatus(status);
     
     // Skip processing if video isn't loaded
     if (!status.isLoaded) {
       return;
+    }
+    
+    // Always check if premium ad is showing and pause if needed
+    if (showPremiumAd && status.isPlaying && videoRef.current) {
+      try {
+        // Use Promise-based approach with proper error handling
+        videoRef.current.pauseAsync()
+          .then(() => {
+            console.log('Paused video because premium ad is showing');
+          })
+          .catch((error: unknown) => {
+            console.error('Error pausing video for premium ad:', error);
+          });
+      } catch (error) {
+        console.error('Error attempting to pause video:', error);
+      }
+      return; // Don't process further if premium ad is showing
     }
     
     // Track video position for progress
@@ -1634,156 +1639,74 @@ const VideoItemComponent = memo(({
     // Check if this video was uploaded by the current user
     const isOwnVideo = user && item.authorId === user._id;
     
-    // Track view count and trigger animation when countdown reaches zero
-    if (status.positionMillis && 
-        status.durationMillis && 
-        isCurrentVideo && 
-        !viewCounted && 
-        !hasEarnedPoints &&
-        !isOwnVideo && 
-        user) { // Skip points for own videos and non-authenticated users
+    // Detect video completion - enable auto-scroll while still looping
+    if (status.didJustFinish) {
+      console.log('Video finished, autoScroll:', autoScroll, 'isCurrentVideo:', isCurrentVideo, 'showPremiumAd:', showPremiumAd);
       
-      // Calculate remaining time to 50% point (halfway mark)
-      const halfwayPoint = status.durationMillis * 0.5;
-      const remaining = Math.max(0, halfwayPoint - status.positionMillis);
-      const seconds = Math.ceil(remaining / 1000);
-      
-      // Show countdown when approaching points threshold (less than 30 seconds)
-      if (seconds <= 30) {
-        setShowStaticPoints(true);
-        
-        // Update countdown display
-        if (seconds > 0) {
-          setRemainingTime(`${seconds}s`);
-        } else {
-          setRemainingTime(null);
-        }
-      }
-      
-      // Check if we've reached the halfway point
-      const hasReachedHalfway = status.positionMillis >= halfwayPoint;
-      
-      if (hasReachedHalfway) {
+      // Count view when video completes (only once per user)
+      if (isCurrentVideo && !viewCounted && !isOwnVideo && user) {
         // Mark this view as counted to prevent duplicate counts
         setViewCounted(true);
         
-        // Hide the countdown immediately
-        setRemainingTime(null);
-        setShowStaticPoints(false);
+        // Optimistically update the UI immediately for better UX
+        const currentViews = item.views || 0;
+        item.views = currentViews + 1;
+        
+        // Force a re-render to show the updated count
+        // Using a small state update to trigger re-render
+        setVideoSize({...videoSize});
         
         try {
-          // If user is authenticated, proceed with points
+          // If user is authenticated, proceed with view count
           const currentUserId = user._id;
           
-          // Show points animation IMMEDIATELY when countdown reaches zero
-          setHasEarnedPoints(true);
-          setShowPointsAnimation(true);
-          
-          // Provide haptic feedback for immediate notification
-          if (Platform.OS === 'ios' || Platform.OS === 'android') {
-            try {
-              // @ts-ignore: TS complains about the parameter type but this works
-              Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
-              
-              if (Platform.OS === 'android') {
-                Vibration.vibrate(100);
-              }
-            } catch (e) {
-              console.log('Haptics not supported');
-              Vibration.vibrate(100);
-            }
-          }
-          
-          // Start animation right away
-          animatePoints();
-          
-          // Update view count and points in Sanity
+          // Update view count in Sanity
           const result = await videoService.updateVideoStats(
             item.id, 
             { 
               views: 1,
-              points: true // Flag to indicate we want to award points
+              points: false // Flag to indicate we don't want to award points
             },
             // Use type assertion to satisfy TypeScript
             currentUserId as any
           );
           
-          // Update local count for immediate UI feedback
-          item.views = (item.views || 0) + 1;
+          // Emit event to update view count across the app
+          DeviceEventEmitter.emit('VIEW_COUNT_UPDATED', { 
+            videoId: item.id, 
+            newCount: currentViews + 1 
+          });
           
-          // If this is a first-time watch and points were earned
-          if (result.success && result.firstTimeWatch && result.pointsEarned) {
-            console.log(`User earned ${result.pointsEarned} points for watching video ${item.id}`);
-            
-            // Check if we have the accurate updated points total from Sanity
-            if (result.newTotalPoints !== undefined) {
-              console.log(`Updating header with verified points total from Sanity: ${result.newTotalPoints}`);
-              
-              // Update the header display immediately with the confirmed value
-              if (updateUserPoints) {
-                updateUserPoints(result.newTotalPoints);
-              }
-              
-              // Also emit event for other components that might be listening
-              DeviceEventEmitter.emit('POINTS_EARNED', { 
-                amount: result.pointsEarned, 
-                newTotal: result.newTotalPoints,
-                source: 'video', 
-                videoId: item.id,
-                verifiedFromSanity: true
-              });
-              
-              // Update the user object's points for immediate UI updates
-              if (user) {
-                user.points = result.newTotalPoints;
-              }
-            }
-          } else if (result.success && !result.firstTimeWatch) {
-            console.log('User already earned points for this video (verified in Sanity)');
-            // Make sure UI shows already watched state
-            setHasEarnedPoints(true);
-            setShowPointsAnimation(false);
-            setShowStaticPoints(false);
-          } else {
-            console.log('Video view counted but no points earned:', result);
-          }
+          console.log('Video view counted on completion');
+          
         } catch (error) {
-          console.error('Failed to update view count or points in Sanity:', error);
+          console.error('Failed to update view count in Sanity:', error);
+          // Revert the optimistic update if the server call fails
+          item.views = currentViews;
+          // Force a re-render to show the original count
+          setVideoSize({...videoSize});
+        }
+      } else if (isCurrentVideo && !viewCounted && isOwnVideo) {
+        // For user's own videos, don't update the view count but mark as viewed
+        setViewCounted(true);
+        console.log('Own video completed, not counting view');
+      } else if (isCurrentVideo && !viewCounted && !user) {
+        // For non-authenticated users, don't count views but mark as viewed
+        setViewCounted(true);
+        console.log('Video completed by non-authenticated user, not counting view');
+      }
+      
+      // Only restart if premium ad is not showing
+      if (videoRef.current && isCurrentVideo && !showPremiumAd) {
+        try {
+          // Reset position to beginning and ensure playback continues
+          videoRef.current.setPositionAsync(0)
+            .then(() => videoRef.current.playAsync())
+            .catch(() => console.log('Error restarting video after finish'));
+        } catch (error) {
+          console.log('Error handling video finish:', error);
         }
       }
-    } else if (status.positionMillis && 
-               status.durationMillis && 
-               isCurrentVideo && 
-               !viewCounted && 
-               isOwnVideo) {
-      // For user's own videos, don't update the view count at all
-      const halfwayPoint = status.durationMillis * 0.5;
-      const hasReachedHalfway = status.positionMillis >= halfwayPoint;
-      
-      if (hasReachedHalfway) {
-        // Just mark as viewed to prevent rechecking
-        setViewCounted(true);
-        console.log('Own video viewed, not counting view');
-      }
-    } else if (status.positionMillis && 
-              status.durationMillis && 
-              isCurrentVideo && 
-              !viewCounted && 
-              !user) {
-      // For non-authenticated users, also don't count views
-      const halfwayPoint = status.durationMillis * 0.5;
-      const hasReachedHalfway = status.positionMillis >= halfwayPoint;
-      
-      if (hasReachedHalfway) {
-        // Just mark as viewed to prevent rechecking
-        setViewCounted(true);
-        console.log('Video viewed by non-authenticated user, not counting view');
-      }
-    }
-    
-    // Detect video completion - enable auto-scroll while still looping
-    if (status.didJustFinish) {
-      console.log('Video finished, autoScroll:', autoScroll, 'isCurrentVideo:', isCurrentVideo, 'showPremiumAd:', showPremiumAd);
       
       // Emit event that video has ended - always emit this regardless of previous watch status
       DeviceEventEmitter.emit('VIDEO_ENDED', { videoId: item.id });
@@ -1799,50 +1722,16 @@ const VideoItemComponent = memo(({
         }, 100);
       }
       
-      // When video ends completely, we'll reset the viewCounted state
-      // This allows the view to be counted again if they replay the video
-      setViewCounted(false);
+      // Don't reset viewCounted state to ensure one view per user
+      // viewCounted will stay true until component unmounts
     }
     
     // Track position for other functions to use
     lastPositionRef.current = status?.positionMillis || 0;
   };
 
-  // Animation for showing points earned
-  const animatePoints = () => {
-    pointsAnimation.setValue(0);
-    pointsScale.setValue(1);
+  // Animation for showing points earned - removed
 
-    // Use faster animation durations for more immediate feedback
-    Animated.sequence([
-      Animated.timing(pointsAnimation, {
-        toValue: 1,
-        duration: 400, // Reduced from 800ms for faster animation
-        useNativeDriver: true,
-        easing: Easing.out(Easing.cubic)
-      }),
-        Animated.timing(pointsScale, {
-        toValue: 1.3, // Slightly larger scale for more impact
-        duration: 150, // Reduced from 200ms
-          useNativeDriver: true,
-        easing: Easing.bezier(0.175, 0.885, 0.32, 1.275) // Bounce effect
-      })
-    ]).start(() => {
-      // Keep the animation visible longer for better visibility
-      setTimeout(() => {
-        // Create a fade out animation
-        Animated.timing(pointsAnimation, {
-          toValue: 0,
-          duration: 300,
-          useNativeDriver: true,
-          easing: Easing.in(Easing.cubic)
-        }).start(() => {
-          setShowPointsAnimation(false);
-        });
-      }, 800); // Increased from 500ms for more visibility
-    });
-  };
-  
   // Modify the calculateVideoDimensions function to use this constant
   const calculateVideoDimensions = () => {
     const isVertical = item.type === 'vertical';
@@ -2170,70 +2059,16 @@ const VideoItemComponent = memo(({
 
   // Effect to hide points UI for own videos
   useEffect(() => {
-    // Check if this video was uploaded by the current user
-    const isOwnVideo = user && item.authorId === user._id;
-    
-    if (isOwnVideo) {
+    if (user && item.authorId === user._id) {
       // Hide all points-related UI for own videos
-      setHasEarnedPoints(false);
-      setShowStaticPoints(false);
-      setShowPointsAnimation(false);
-      // Reset remaining time to prevent points countdown
-      setRemainingTime(null);
+      setShowButtons(false);
+      // Points countdown removed
     }
   }, [user, item.authorId]);
 
   // Function to render points display with different states
   const renderPointsDisplay = () => {
-    // Check if this video was uploaded by the current user
-    const isOwnVideo = user && item.authorId === user._id;
-    
-    // Don't show points UI for own videos or unauthenticated users
-    if (isOwnVideo || !user) {
-      return null;
-    }
-    
-    // Only show the countdown text if not yet earned points
-    if (!hasEarnedPoints && showStaticPoints && !showPointsAnimation) {
-      return (
-        <View style={styles.staticPoints}>
-          <Text style={styles.staticPointsText}>+{item.points} P</Text>
-          {remainingTime && (
-            <Text style={styles.staticPointsText}>{remainingTime}</Text>
-          )}
-        </View>
-      );
-    } 
-    
-    // Show the points animation if currently displaying
-    if (showPointsAnimation) {
-      return (
-        <Animated.View
-          style={[
-            styles.pointsEarned,
-            {
-              transform: [
-                { translateY: pointsAnimation.interpolate({
-                  inputRange: [0, 75, 150],
-                  outputRange: [0, -75, -150],
-                  extrapolate: 'clamp'
-                })},
-                { scale: pointsScale }
-              ],
-              opacity: pointsAnimation.interpolate({
-                inputRange: [0, 75, 150],
-                outputRange: [1, 1, 0],
-                extrapolate: 'clamp'
-              })
-            }
-          ]}
-        >
-          <Text style={styles.earnedPointsText}>+{item.points} 🎉</Text>
-        </Animated.View>
-      );
-    }
-    
-    // Return null for all other states
+    // This function is no longer needed - returning null
     return null;
   };
 
@@ -2331,6 +2166,23 @@ const VideoItemComponent = memo(({
     }
   };
 
+  // Listen for view count updates from other instances of the same video
+  useEffect(() => {
+    const viewCountUpdateSubscription = DeviceEventEmitter.addListener('VIEW_COUNT_UPDATED', (event) => {
+      if (event?.videoId === item.id) {
+        // Update this instance's view count to match
+        item.views = event.newCount;
+        // Force a re-render to show the updated count
+        setVideoSize({...videoSize});
+      }
+    });
+    
+    // Clean up event listener
+    return () => {
+      viewCountUpdateSubscription.remove();
+    };
+  }, [item.id]);
+
   return (
     <View style={[
       styles.videoContainer,
@@ -2406,12 +2258,19 @@ const VideoItemComponent = memo(({
                   styles.centeredPlayIcon,
                   { opacity: playIconOpacity }
                 ]}>
-                  <Play 
-                    color="white" 
-                    size={Math.min(80, Math.max(40, SCREEN_WIDTH * 0.12))} // Responsive size between 40-80
-                    style={styles.playIcon} 
-                    fill={isPaused ? "white" : "transparent"}
-                  />
+                  {isPaused ? (
+                    <Pause 
+                      color="white" 
+                      size={Math.min(80, Math.max(40, SCREEN_WIDTH * 0.12))} // Responsive size between 40-80
+                      style={styles.playIcon} 
+                    />
+                  ) : (
+                    <Play 
+                      color="white" 
+                      size={Math.min(80, Math.max(40, SCREEN_WIDTH * 0.12))} // Responsive size between 40-80
+                      style={styles.playIcon} 
+                    />
+                  )}
                 </Animated.View>
               )}
             </>
@@ -2464,15 +2323,7 @@ const VideoItemComponent = memo(({
                     </View>
                   )}
                 </View>
-                {remainingTime && !hasEarnedPoints && !(user && item.authorId === user._id) && (
-                  <View style={styles.countdownWrapper}>
-                    <View style={styles.countdownDot} />
-                    <Text style={styles.inlineCountdown}>
-                      <Text style={styles.countdownLabel}>WATCH </Text>
-                      {remainingTime}
-                    </Text>
-                  </View>
-                )}
+                {/* Countdown UI removed */}
               </View>
               
               {/* Video description with enhanced visibility in fullscreen */}
@@ -2642,18 +2493,7 @@ const VideoItemComponent = memo(({
               </View>
               
               <View style={styles.watchedContainer}>
-                {/* Restore the original check mark icon */}
-                {hasEarnedPoints && <CheckCircle color="#00ff00" size={SCREEN_WIDTH * 0.06} />}
-                
-                {/* Show points animation if active */}
-                {renderPointsDisplay()}
-                
-                {/* Show static countdown if needed */}
-                {showStaticPoints && !showPointsAnimation && !hasEarnedPoints && (
-                  <View style={styles.staticPoints}>
-                    <Text style={styles.staticPointsText}>+{item.points} P</Text>
-                  </View>
-                )}
+                {/* Points-related UI elements removed */}
               </View>
             </View>
           )}
@@ -2718,7 +2558,6 @@ interface TopHeaderProps {
   activeTab: number;
   onTabPress: (tab: string, index: number) => void;
   isFullScreen: boolean;
-  points?: number;
   onAddPress: () => void;
   onSearchPress: () => void;
 }
@@ -2728,7 +2567,6 @@ const TopHeader: React.FC<TopHeaderProps> = ({
   activeTab, 
   onTabPress, 
   isFullScreen,
-  points = 0,
   onAddPress,
   onSearchPress
 }) => {
@@ -2759,15 +2597,6 @@ const TopHeader: React.FC<TopHeaderProps> = ({
             onPress={onSearchPress}
           >
             <Search size={24} color="#1877F2" />
-          </Pressable>
-          
-          {/* Points display */}
-          <Pressable
-            style={styles.pointsButton}
-            onPress={() => onTabPress('Points', 2)}
-          >
-            <Coins size={20} color="#FFD700" />
-            <Text style={styles.pointsText}>{points}</Text>
           </Pressable>
         </View>
       </View>
@@ -3273,10 +3102,26 @@ export default function VideoFeed() {
             console.log('Temporarily suspending auto-scroll while premium ad is showing');
           }
           
-          // Pause all videos
+          // Pause all videos - enhanced with proper error handling
           Object.values(videoRefs.current).forEach(videoRef => {
             if (videoRef && videoRef.current) {
-              videoRef.current.pauseAsync().catch(() => {});
+              try {
+                // First check if the video is loaded before attempting to pause it
+                videoRef.current.getStatusAsync()
+                  .then(status => {
+                    if (status && status.isLoaded) {
+                      // Video is loaded, safe to pause
+                      return videoRef.current.setVolumeAsync(0)
+                        .then(() => videoRef.current.pauseAsync());
+                    } else {
+                      console.log('Video not loaded yet, skipping pause operation');
+                      return Promise.resolve();
+                    }
+                  })
+                  .catch((error: unknown) => console.error('Error checking video status:', error));
+              } catch (error: unknown) {
+                console.error('Error handling video when premium ad shows:', error);
+              }
             }
           });
           
@@ -3615,9 +3460,21 @@ export default function VideoFeed() {
         }
       } else {
         // Resume current video after ad is closed
-      const currentVideo = videos[currentVideoIndex];
-      if (currentVideo && videoRefs.current[currentVideo.id] && videoRefs.current[currentVideo.id].current) {
-        videoRefs.current[currentVideo.id].current.playAsync().catch(() => {});
+        const currentVideo = videos[currentVideoIndex];
+        if (currentVideo && videoRefs.current[currentVideo.id] && videoRefs.current[currentVideo.id].current) {
+          // First reset the video to the beginning to ensure it plays from start
+          videoRefs.current[currentVideo.id].current.setPositionAsync(0)
+            .then(() => {
+              // Then play the video
+              videoRefs.current[currentVideo.id].current.playAsync()
+                .catch(() => console.log('Error replaying current video after premium ad'));
+            })
+            .catch(() => {
+              // Fallback approach if the first method fails
+              videoRefs.current[currentVideo.id].current.stopAsync()
+                .then(() => videoRefs.current[currentVideo.id].current.playAsync())
+                .catch(() => console.log('Error with fallback replay approach'));
+            });
         }
       }
     });
@@ -3747,7 +3604,6 @@ export default function VideoFeed() {
         activeTab={activeHeaderTab} 
         onTabPress={handleTabPress} 
         isFullScreen={isFullScreen}
-        points={userPoints}
         onAddPress={handleAddPress}
         onSearchPress={handleSearchPress}
       />

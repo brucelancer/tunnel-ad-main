@@ -9,11 +9,10 @@ import {
 } from 'react-native';
 import { useRouter } from 'expo-router';
 import {
-  Bell,
   MessageSquare,
   Plus,
   X,
-  BarChart2,
+  Search,
 } from 'lucide-react-native';
 
 const { width: SCREEN_WIDTH } = Dimensions.get('window');
@@ -130,19 +129,14 @@ export default function FloatingActionButton() {
     setMessageCount(0);
   };
 
-  const navigateToNotifications = () => {
+  const navigateToSearch = () => {
     setIsOpen(false);
-    router.push("/notifications" as any);
+    router.push("/search" as any);
   };
 
   const navigateToCreatePost = () => {
     setIsOpen(false);
     router.push("/newsfeed-upload" as any);
-  };
-
-  const navigateToFeedInsights = () => {
-    setIsOpen(false);
-    router.push("/feed-insights" as any);
   };
 
   const rotate = rotateAnim.interpolate({
@@ -153,7 +147,7 @@ export default function FloatingActionButton() {
   const translateY = (index: number) => {
     // Calculate position in a circle pattern
     const radius = 80; // Radius of the circle
-    const angle = (Math.PI / 2) + (index * (Math.PI / 4)); // Distribute items in a semi-circle
+    const angle = (Math.PI / 2) + (index * (Math.PI / 3)); // Distribute items in a semi-circle (adjusted angle for 3 items)
     
     const x = radius * Math.cos(angle);
     const y = -radius * Math.sin(angle); // Negative to go upward
@@ -223,14 +217,8 @@ export default function FloatingActionButton() {
       )}
 
       {renderActionButton(
-        <BarChart2 color="#FFFFFF" size={22} />,
-        navigateToFeedInsights,
-        3
-      )}
-
-      {renderActionButton(
-        <Bell color="#FFFFFF" size={22} />,
-        navigateToNotifications,
+        <Search color="#FFFFFF" size={22} />,
+        navigateToSearch,
         2
       )}
 

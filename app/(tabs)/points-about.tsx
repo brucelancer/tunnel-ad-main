@@ -1032,7 +1032,7 @@ export default function PointsAboutScreen() {
           <View style={styles.balanceRow}>
             <Text style={styles.balanceValue}>{displayPoints}</Text>
             <Image
-              source={require('@/assets/images/tunnel-coin-4.png')}
+              source={require('@/assets/images/tunnel-coin.jpeg')}
               style={styles.balanceCoinIcon}
             />
             {/* Refresh button for points */}

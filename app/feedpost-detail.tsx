@@ -182,6 +182,13 @@ export default function PostDetailScreen() {
   const { user, loading, updateUserData } = useSanityAuth();
   const { getPost } = usePostFeed();
   
+  // Helper function to clean text content by removing HTML comments
+  const cleanContentText = (text: string): string => {
+    if (!text) return '';
+    // Remove any HTML comments from the text
+    return text.replace(/<!--[\s\S]*?-->/g, '').trim();
+  };
+  
   // Debug authentication state
   useEffect(() => {
     console.log('Auth Debug - PostDetailScreen:', {
@@ -1816,13 +1823,13 @@ export default function PostDetailScreen() {
               </Pressable>
               
               {/* Post content */}
-              <Text style={styles.postContent}>{post.content}</Text>
+              <Text style={styles.postContent}>{cleanContentText(post.content)}</Text>
               
               {/* Location */}
               {post.location ? (
                 <View style={styles.locationContainer}>
                   <MapPin size={12} color="#888" />
-                  <Text style={styles.locationText}>{post.location}</Text>
+                  <Text style={styles.locationText}>{cleanContentText(post.location)}</Text>
                 </View>
               ) : null}
               

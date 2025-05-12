@@ -15,7 +15,10 @@ import {
   ActivityIndicator,
   Alert,
   BackHandler,
-  DeviceEventEmitter
+  DeviceEventEmitter,
+  Modal,
+  TouchableOpacity,
+  Dimensions
 } from 'react-native';
 import { useRouter, useFocusEffect } from 'expo-router';
 import { usePreventRemove } from '@react-navigation/native';
@@ -42,6 +45,34 @@ import { usePostFeed } from '@/app/hooks/usePostFeed';
 import { useSanityAuth } from '@/app/hooks/useSanityAuth';
 import AuthScreen from './components/AuthScreen';
 import * as sanityAuthService from '../tunnel-ad-main/services/sanityAuthService';
+import Svg, { Path } from 'react-native-svg';
+
+const { width: SCREEN_WIDTH } = Dimensions.get('window');
+
+// Add the blue verified mark component
+const TunnelBlueVerifiedMark = ({ size = 10 }) => {
+  // Calculate a responsive size based on screen width
+  const responsiveSize = SCREEN_WIDTH * 0.03 > 12 ? SCREEN_WIDTH * 0.03 : 12;
+  
+  return (
+    <Svg 
+      width={responsiveSize * 1.8} 
+      height={responsiveSize * 1.8} 
+      viewBox="0 0 24 24" 
+      fill="none"
+    >
+      <Path 
+        d="M12 2L14 5.1L17.5 3.5L17 7.3L21 8L18.9 11L21 14L17 14.7L17.5 18.5L14 16.9L12 20L10 16.9L6.5 18.5L7 14.7L3 14L5.1 11L3 8L7 7.3L6.5 3.5L10 5.1L12 2Z" 
+        fill="#1877F2" 
+      />
+      <Path 
+        d="M10 13.17l-2.59-2.58L6 12l4 4 8-8-1.41-1.42L10 13.17z" 
+        fill="#FFFFFF" 
+        strokeWidth="0"
+      />
+    </Svg>
+  );
+};
 
 export default function NewsfeedUpload() {
   const router = useRouter();
@@ -54,6 +85,11 @@ export default function NewsfeedUpload() {
   const [isGettingLocation, setIsGettingLocation] = useState(false);
   const [userAvatarUri, setUserAvatarUri] = useState<string | null>(null);
   const [layoutMode, setLayoutMode] = useState<'slide' | 'grid'>('slide');
+  
+  // Add state for image viewer modal
+  const [imageViewerVisible, setImageViewerVisible] = useState(false);
+  const [currentImage, setCurrentImage] = useState<string | null>(null);
+  const [currentImageIndex, setCurrentImageIndex] = useState(0);
   
   // Get Sanity hooks
   const { createPost } = usePostFeed();
@@ -95,17 +131,35 @@ export default function NewsfeedUpload() {
       return;
     }
     
+    // Check if we've already reached the maximum of 4 images
+    if (attachments.length >= 4) {
+      Alert.alert('Maximum Images', 'You can only upload a maximum of 4 images per post.');
+      return;
+    }
+    
     try {
+      const remainingSlots = 4 - attachments.length;
+      
       const result = await ImagePicker.launchImageLibraryAsync({
         mediaTypes: ImagePicker.MediaTypeOptions.Images,
         allowsEditing: false,
         quality: 1,
         allowsMultipleSelection: true,
-        selectionLimit: 4
+        selectionLimit: remainingSlots
       });
 
       if (!result.canceled && result.assets.length > 0) {
-        setAttachments([...attachments, ...result.assets.map(asset => asset.uri)]);
+        const newAttachments = [...attachments];
+        const availableSpace = 4 - newAttachments.length;
+        
+        // Only add up to the remaining slots
+        const assetsToAdd = result.assets.slice(0, availableSpace);
+        
+        if (assetsToAdd.length < result.assets.length) {
+          Alert.alert('Some images not added', `Only ${assetsToAdd.length} images were added. Maximum of 4 images reached.`);
+        }
+        
+        setAttachments([...newAttachments, ...assetsToAdd.map(asset => asset.uri)]);
       }
     } catch (error) {
       console.error('Error picking image:', error);
@@ -119,11 +173,17 @@ export default function NewsfeedUpload() {
       return;
     }
     
+    // Check if we've already reached the maximum of 4 images
+    if (attachments.length >= 4) {
+      Alert.alert('Maximum Images', 'You can only upload a maximum of 4 images per post.');
+      return;
+    }
+    
     try {
       const cameraPermission = await ImagePicker.requestCameraPermissionsAsync();
       
       if (cameraPermission.status !== 'granted') {
-        alert('Sorry, we need camera permissions to take a photo!');
+        Alert.alert('Permission denied', 'We need camera permissions to take a photo!');
         return;
       }
       
@@ -270,6 +330,7 @@ export default function NewsfeedUpload() {
           : postText;
         
         // Create the post with location data and layout preference in metadata
+        // Make sure to keep the layout metadata only in content, not in location
         await createPost(enhancedContent, location, attachments);
         
         // Clear form after successful upload immediately
@@ -377,12 +438,44 @@ export default function NewsfeedUpload() {
         <Text style={styles.previewTitle}>Grid View Preview</Text>
         <View style={styles.gridPreview}>
           <View style={styles.gridPreviewRow}>
-            <Image source={{ uri: attachments[0] }} style={styles.gridPreviewImage} />
-            <Image source={{ uri: attachments[1] }} style={styles.gridPreviewImage} />
+            <Pressable 
+              onPress={() => handleImagePress(attachments[0], 0)} 
+              style={({ pressed }) => [
+                styles.gridPreviewImageContainer,
+                pressed && styles.attachmentImagePressed
+              ]}
+            >
+              <Image source={{ uri: attachments[0] }} style={styles.gridPreviewImage} />
+            </Pressable>
+            <Pressable 
+              onPress={() => handleImagePress(attachments[1], 1)} 
+              style={({ pressed }) => [
+                styles.gridPreviewImageContainer,
+                pressed && styles.attachmentImagePressed
+              ]}
+            >
+              <Image source={{ uri: attachments[1] }} style={styles.gridPreviewImage} />
+            </Pressable>
           </View>
           <View style={styles.gridPreviewRow}>
-            <Image source={{ uri: attachments[2] }} style={styles.gridPreviewImage} />
-            <Image source={{ uri: attachments[3] }} style={styles.gridPreviewImage} />
+            <Pressable 
+              onPress={() => handleImagePress(attachments[2], 2)} 
+              style={({ pressed }) => [
+                styles.gridPreviewImageContainer,
+                pressed && styles.attachmentImagePressed
+              ]}
+            >
+              <Image source={{ uri: attachments[2] }} style={styles.gridPreviewImage} />
+            </Pressable>
+            <Pressable 
+              onPress={() => handleImagePress(attachments[3], 3)} 
+              style={({ pressed }) => [
+                styles.gridPreviewImageContainer,
+                pressed && styles.attachmentImagePressed
+              ]}
+            >
+              <Image source={{ uri: attachments[3] }} style={styles.gridPreviewImage} />
+            </Pressable>
           </View>
         </View>
         <Text style={styles.previewNote}>
@@ -454,6 +547,34 @@ export default function NewsfeedUpload() {
     return () => backHandler.remove();
   }, [hasUnsavedContent]);
 
+  // Add function to handle image press
+  const handleImagePress = (uri: string, index: number) => {
+    setCurrentImage(uri);
+    setCurrentImageIndex(index);
+    setImageViewerVisible(true);
+  };
+  
+  // Navigate to next image
+  const handleNextImage = () => {
+    if (currentImageIndex < attachments.length - 1) {
+      setCurrentImageIndex(currentImageIndex + 1);
+      setCurrentImage(attachments[currentImageIndex + 1]);
+    }
+  };
+  
+  // Navigate to previous image
+  const handlePrevImage = () => {
+    if (currentImageIndex > 0) {
+      setCurrentImageIndex(currentImageIndex - 1);
+      setCurrentImage(attachments[currentImageIndex - 1]);
+    }
+  };
+  
+  // Close image viewer
+  const closeImageViewer = () => {
+    setImageViewerVisible(false);
+  };
+
   // If auth overlay is shown, display the AuthScreen
   if (showAuthOverlay) {
     return <AuthScreen onAuthenticated={handleAuthenticated} />;
@@ -498,7 +619,7 @@ export default function NewsfeedUpload() {
           {loading ? (
             <ActivityIndicator size="small" color="#fff" />
           ) : (
-            <Send size={20} color="#fff" />
+            <Send size={24} color="#fff" />
           )}
         </Pressable>
       </View>
@@ -528,7 +649,14 @@ export default function NewsfeedUpload() {
               </View>
             )}
             <View style={styles.userTextContainer}>
-              <Text style={styles.userName}>{user ? (user.firstName && user.lastName ? `${user.firstName} ${user.lastName}` : user.username) : 'You'}</Text>
+              <View style={styles.usernameContainer}>
+                <Text style={styles.userName}>{user ? user.username || '@user' : 'You'}</Text>
+                {user?.isBlueVerified && (
+                  <View style={styles.blueVerifiedBadge}>
+                    <TunnelBlueVerifiedMark size={14} />
+                  </View>
+                )}
+              </View>
               <View style={styles.privacySelector}>
                 <Text style={styles.privacyText}>Public</Text>
               </View>
@@ -556,10 +684,26 @@ export default function NewsfeedUpload() {
           {/* Attachments preview */}
           {attachments.length > 0 && (
             <View style={styles.attachmentsContainer}>
+              {/* Add counter for selected images */}
+              <View style={styles.attachmentsCounter}>
+                <Text style={styles.attachmentsCounterText}>
+                  {attachments.length}/4 images selected
+                  {attachments.length === 4 && ' (maximum)'}
+                </Text>
+              </View>
+              
               {/* Only render standard preview if not in grid preview mode */}
               {!(attachments.length === 4 && layoutMode === 'grid') && attachments.map((uri, index) => (
                 <View key={index} style={styles.attachmentWrapper}>
-                  <Image source={{ uri }} style={styles.attachmentImage} />
+                  <Pressable 
+                    onPress={() => handleImagePress(uri, index)}
+                    style={({ pressed }) => [
+                      styles.attachmentImageContainer,
+                      pressed && styles.attachmentImagePressed
+                    ]}
+                  >
+                    <Image source={{ uri }} style={styles.attachmentImage} />
+                  </Pressable>
                   <Pressable 
                     style={styles.removeAttachmentButton}
                     onPress={() => handleRemoveAttachment(index)}
@@ -580,6 +724,9 @@ export default function NewsfeedUpload() {
                   onPress={handlePickImage}
                 >
                   <Plus size={24} color="#0070F3" />
+                  <Text style={styles.addMoreButtonText}>
+                    Add {attachments.length === 3 ? 'one more' : 'more'}
+                  </Text>
                 </Pressable>
               )}
             </View>
@@ -614,32 +761,63 @@ export default function NewsfeedUpload() {
           
           {/* Attachment buttons */}
           <View style={styles.actionButtonsContainer}>
-            <Text style={styles.actionSectionTitle}>Add to your post</Text>
+            <View style={styles.actionHeaderRow}>
+              <Text style={styles.actionSectionTitle}>Add to your post</Text>
+              <Text style={styles.imageCountInfo}>
+                {attachments.length > 0 ? 
+                  `${attachments.length}/4 images` : 
+                  'Up to 4 images allowed'}
+              </Text>
+            </View>
             
             <ScrollView horizontal showsHorizontalScrollIndicator={false}>
               <Pressable 
-                style={styles.actionButton}
+                style={[
+                  styles.actionButton,
+                  attachments.length >= 4 && styles.actionButtonDisabled
+                ]}
                 onPress={handlePickImage}
+                disabled={attachments.length >= 4}
               >
                 <LinearGradient
-                  colors={['rgba(0,112,243,0.1)', 'rgba(0,112,243,0.2)']}
+                  colors={[
+                    attachments.length >= 4 ? 'rgba(150,150,150,0.1)' : 'rgba(0,112,243,0.1)', 
+                    attachments.length >= 4 ? 'rgba(150,150,150,0.2)' : 'rgba(0,112,243,0.2)'
+                  ]}
                   style={styles.actionButtonGradient}
                 >
-                  <ImageIcon size={24} color="#0070F3" />
-                  <Text style={styles.actionButtonText}>Photo</Text>
+                  <ImageIcon size={24} color={attachments.length >= 4 ? '#888' : '#0070F3'} />
+                  <Text style={[
+                    styles.actionButtonText, 
+                    attachments.length >= 4 && styles.actionButtonTextDisabled
+                  ]}>
+                    Photo {attachments.length >= 4 ? '(4/4)' : ''}
+                  </Text>
                 </LinearGradient>
               </Pressable>
               
               <Pressable 
-                style={styles.actionButton}
+                style={[
+                  styles.actionButton,
+                  attachments.length >= 4 && styles.actionButtonDisabled
+                ]}
                 onPress={handleTakePhoto}
+                disabled={attachments.length >= 4}
               >
                 <LinearGradient
-                  colors={['rgba(255,59,48,0.1)', 'rgba(255,59,48,0.2)']}
+                  colors={[
+                    attachments.length >= 4 ? 'rgba(150,150,150,0.1)' : 'rgba(255,59,48,0.1)', 
+                    attachments.length >= 4 ? 'rgba(150,150,150,0.2)' : 'rgba(255,59,48,0.2)'
+                  ]}
                   style={styles.actionButtonGradient}
                 >
-                  <Camera size={24} color="#FF3B30" />
-                  <Text style={[styles.actionButtonText, { color: '#FF3B30' }]}>Camera</Text>
+                  <Camera size={24} color={attachments.length >= 4 ? '#888' : '#FF3B30'} />
+                  <Text style={[
+                    styles.actionButtonText, 
+                    { color: attachments.length >= 4 ? '#888' : '#FF3B30' }
+                  ]}>
+                    Camera {attachments.length >= 4 ? '(4/4)' : ''}
+                  </Text>
                 </LinearGradient>
               </Pressable>
               
@@ -666,6 +844,74 @@ export default function NewsfeedUpload() {
           </View>
         </ScrollView>
       </KeyboardAvoidingView>
+      
+      {/* Image Viewer Modal */}
+      <Modal
+        visible={imageViewerVisible}
+        transparent={true}
+        onRequestClose={closeImageViewer}
+        animationType="fade"
+      >
+        <Pressable 
+          style={styles.modalContainer} 
+          onPress={closeImageViewer}
+        >
+          <View style={styles.modalBackdrop} />
+          <Pressable 
+            style={styles.imageViewerContent}
+            onPress={(e) => e.stopPropagation()} // Prevent taps on image from closing modal
+          >
+            {/* Close button */}
+            <TouchableOpacity 
+              style={styles.closeButton} 
+              onPress={closeImageViewer}
+            >
+              <X size={24} color="#fff" />
+            </TouchableOpacity>
+            
+            {/* Image counter */}
+            {attachments.length > 1 && (
+              <View style={styles.imageCounter}>
+                <Text style={styles.imageCounterText}>
+                  {currentImageIndex + 1} / {attachments.length}
+                </Text>
+              </View>
+            )}
+            
+            {/* Main image */}
+            {currentImage && (
+              <Image 
+                source={{ uri: currentImage }} 
+                style={styles.fullScreenImage}
+                resizeMode="contain"
+              />
+            )}
+            
+            {/* Navigation buttons (only show if more than one image) */}
+            {attachments.length > 1 && (
+              <>
+                {currentImageIndex > 0 && (
+                  <TouchableOpacity 
+                    style={[styles.navButton, styles.leftNavButton]}
+                    onPress={handlePrevImage}
+                  >
+                    <ArrowLeft size={24} color="#fff" />
+                  </TouchableOpacity>
+                )}
+                
+                {currentImageIndex < attachments.length - 1 && (
+                  <TouchableOpacity 
+                    style={[styles.navButton, styles.rightNavButton]}
+                    onPress={handleNextImage}
+                  >
+                    <ArrowLeft size={24} color="#fff" style={{ transform: [{ rotate: '180deg' }] }} />
+                  </TouchableOpacity>
+                )}
+              </>
+            )}
+          </Pressable>
+        </Pressable>
+      </Modal>
     </SafeAreaView>
   );
 };
@@ -724,10 +970,17 @@ const styles = StyleSheet.create({
   userTextContainer: {
     marginLeft: 12,
   },
+  usernameContainer: {
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
   userName: {
     color: 'white',
     fontSize: 16,
     fontFamily: 'Inter_600SemiBold',
+  },
+  blueVerifiedBadge: {
+    marginLeft: 5,
   },
   privacySelector: {
     flexDirection: 'row',
@@ -766,10 +1019,18 @@ const styles = StyleSheet.create({
     overflow: 'hidden',
     position: 'relative',
   },
+  attachmentImageContainer: {
+    overflow: 'hidden',
+    borderRadius: 8,
+  },
+  attachmentImagePressed: {
+    opacity: 0.8,
+  },
   attachmentImage: {
     width: '100%',
-    height: '100%',
-    resizeMode: 'cover',
+    height: undefined,
+    aspectRatio: 1,
+    borderRadius: 8,
   },
   removeAttachmentButton: {
     position: 'absolute',
@@ -843,11 +1104,21 @@ const styles = StyleSheet.create({
   actionButtonsContainer: {
     marginTop: 8,
   },
+  actionHeaderRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginBottom: 12,
+  },
   actionSectionTitle: {
     color: 'white',
     fontSize: 16,
     fontFamily: 'Inter_600SemiBold',
-    marginBottom: 12,
+  },
+  imageCountInfo: {
+    color: '#777',
+    fontSize: 14,
+    fontFamily: 'Inter_400Regular',
   },
   actionButton: {
     marginRight: 10,
@@ -975,5 +1246,99 @@ const styles = StyleSheet.create({
     fontSize: 14,
     fontFamily: 'Inter_400Regular',
     marginTop: 8,
+  },
+  modalContainer: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  modalBackdrop: {
+    ...StyleSheet.absoluteFillObject,
+    backgroundColor: 'rgba(0, 0, 0, 0.9)',
+  },
+  imageViewerContent: {
+    width: '100%',
+    height: '100%',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  fullScreenImage: {
+    width: Dimensions.get('window').width,
+    height: Dimensions.get('window').height * 0.7,
+  },
+  closeButton: {
+    position: 'absolute',
+    top: Platform.OS === 'ios' ? 50 : 20,
+    right: 20,
+    zIndex: 10,
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    backgroundColor: 'rgba(0, 0, 0, 0.5)',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  imageCounter: {
+    position: 'absolute',
+    top: Platform.OS === 'ios' ? 50 : 20,
+    alignSelf: 'center',
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    backgroundColor: 'rgba(0, 0, 0, 0.5)',
+    borderRadius: 15,
+  },
+  imageCounterText: {
+    color: 'white',
+    fontSize: 14,
+    fontFamily: 'Inter_500Medium',
+  },
+  navButton: {
+    position: 'absolute',
+    top: '50%',
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    backgroundColor: 'rgba(0, 0, 0, 0.5)',
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginTop: -20,
+  },
+  leftNavButton: {
+    left: 20,
+  },
+  rightNavButton: {
+    right: 20,
+  },
+  gridPreviewImageContainer: {
+    flex: 1,
+    borderWidth: 1,
+    borderColor: 'rgba(0,0,0,0.1)',
+    borderRadius: 2,
+  },
+  attachmentsCounter: {
+    width: '100%',
+    paddingHorizontal: 8,
+    paddingVertical: 8,
+    marginBottom: 8,
+    backgroundColor: 'rgba(0, 70, 250, 0.1)',
+    borderRadius: 8,
+    alignItems: 'center',
+  },
+  attachmentsCounterText: {
+    color: '#0070F3',
+    fontSize: 14,
+    fontFamily: 'Inter_500Medium',
+  },
+  addMoreButtonText: {
+    color: '#0070F3',
+    fontSize: 14,
+    fontFamily: 'Inter_500Medium',
+    marginLeft: 8,
+  },
+  actionButtonDisabled: {
+    opacity: 0.5,
+  },
+  actionButtonTextDisabled: {
+    color: '#888',
   },
 }); 
