@@ -1647,6 +1647,8 @@ const VideoItemComponent = memo(({
       if (isCurrentVideo && !viewCounted && !isOwnVideo && user) {
         // Mark this view as counted to prevent duplicate counts
         setViewCounted(true);
+        // Save to local storage to persist between app reloads
+        saveViewedVideo(item.id);
         
         // Optimistically update the UI immediately for better UX
         const currentViews = item.views || 0;
@@ -1689,10 +1691,14 @@ const VideoItemComponent = memo(({
       } else if (isCurrentVideo && !viewCounted && isOwnVideo) {
         // For user's own videos, don't update the view count but mark as viewed
         setViewCounted(true);
+        // Also save to local storage
+        saveViewedVideo(item.id);
         console.log('Own video completed, not counting view');
       } else if (isCurrentVideo && !viewCounted && !user) {
         // For non-authenticated users, don't count views but mark as viewed
         setViewCounted(true);
+        // Save to local storage for non-authenticated users too
+        saveViewedVideo(item.id);
         console.log('Video completed by non-authenticated user, not counting view');
       }
       
@@ -1809,6 +1815,8 @@ const VideoItemComponent = memo(({
     // Increment view count
     try {
       await videoService.updateVideoStats(item.id, { views: 1 });
+      // Since we're counting a view, also save to AsyncStorage
+      saveViewedVideo(item.id);
     } catch (error) {
       console.error('Error incrementing view count:', error);
     }
@@ -2182,6 +2190,50 @@ const VideoItemComponent = memo(({
       viewCountUpdateSubscription.remove();
     };
   }, [item.id]);
+
+  // When component mounts, also check local storage for viewed videos
+  useEffect(() => {
+    // When component mounts, also check local storage for viewed videos
+    const checkLocalViewStatus = async () => {
+      try {
+        if (!item.id) return;
+        
+        // Get the viewed videos array from AsyncStorage
+        const viewedVideosJson = await AsyncStorage.getItem('viewedVideos');
+        if (viewedVideosJson) {
+          const viewedVideos = JSON.parse(viewedVideosJson);
+          if (Array.isArray(viewedVideos) && viewedVideos.includes(item.id)) {
+            console.log(`Video ${item.id} found in local viewed cache`);
+            setViewCounted(true);
+          }
+        }
+      } catch (error) {
+        console.error('Error checking local view status:', error);
+      }
+    };
+    
+    checkLocalViewStatus();
+  }, [item.id]);
+
+  // Add a helper function to save viewed video IDs
+  const saveViewedVideo = async (videoId: string) => {
+    try {
+      const viewedVideosJson = await AsyncStorage.getItem('viewedVideos');
+      let viewedVideos = viewedVideosJson ? JSON.parse(viewedVideosJson) : [];
+      
+      // Ensure it's an array
+      if (!Array.isArray(viewedVideos)) viewedVideos = [];
+      
+      // Only add if not already in the list
+      if (!viewedVideos.includes(videoId)) {
+        viewedVideos.push(videoId);
+        await AsyncStorage.setItem('viewedVideos', JSON.stringify(viewedVideos));
+        console.log(`Added video ${videoId} to viewed cache`);
+      }
+    } catch (error) {
+      console.error('Error saving viewed video to AsyncStorage:', error);
+    }
+  };
 
   return (
     <View style={[
@@ -3105,23 +3157,22 @@ export default function VideoFeed() {
           // Pause all videos - enhanced with proper error handling
           Object.values(videoRefs.current).forEach(videoRef => {
             if (videoRef && videoRef.current) {
-              try {
-                // First check if the video is loaded before attempting to pause it
-                videoRef.current.getStatusAsync()
-                  .then(status => {
-                    if (status && status.isLoaded) {
-                      // Video is loaded, safe to pause
-                      return videoRef.current.setVolumeAsync(0)
-                        .then(() => videoRef.current.pauseAsync());
-                    } else {
-                      console.log('Video not loaded yet, skipping pause operation');
-                      return Promise.resolve();
-                    }
-                  })
-                  .catch((error: unknown) => console.error('Error checking video status:', error));
-              } catch (error: unknown) {
-                console.error('Error handling video when premium ad shows:', error);
-              }
+              // Try to mute the video first - this prevents audio glitches
+              // if pause fails or takes time
+              videoRef.current.setIsMutedAsync(true).catch(() => {
+                console.log('Failed to mute video, but continuing');
+              });
+              
+              // Now try to pause without checking status first
+              Promise.resolve()
+                .then(() => videoRef.current.pauseAsync())
+                .then(() => {
+                  console.log('Successfully paused video for premium ad');
+                })
+                .catch(err => {
+                  // Just log the error, don't throw
+                  console.log('Could not pause video, but already muted: ', err.message);
+                });
             }
           });
           
