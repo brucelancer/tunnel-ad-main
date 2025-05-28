@@ -32,6 +32,10 @@ import {
   Heart,
   ArrowDownUp,
   RefreshCw,
+  Play,
+  Plus,
+  Video,
+  DollarSign as Money,
 } from 'lucide-react-native';
 import ScreenContainer from '../components/ScreenContainer';
 import { useRouter } from 'expo-router';
@@ -907,6 +911,63 @@ export default function PointsAboutScreen() {
                 </View>
               </View>
 
+              {/* AdMob section */}
+              <View style={styles.pointsGuideSection}>
+                <View style={styles.pointsGuideSectionHeader}>
+                  <View style={[styles.pointsGuideIconBg, { backgroundColor: '#8000AA' }]}>
+                    <Video size={20} color="white" />
+                  </View>
+                  <Text style={styles.pointsGuideSectionTitle}>Watch Advertisements</Text>
+                </View>
+                
+                <View style={styles.pointsGuideItemCard}>
+                  <View style={styles.pointsGuideItem}>
+                    <View style={styles.pointsGuideCheckCircle}>
+                      <Check color="#fff" size={16} />
+                    </View>
+                    <View style={styles.pointsGuideItemContent}>
+                      <View style={styles.pointsGuideItemHeader}>
+                        <Text style={styles.pointsGuideItemTitle}>Watch AdMob video</Text>
+                        <Text style={styles.pointsGuideItemPoints}>+20 points</Text>
+                      </View>
+                      <Text style={styles.pointsGuideItemDescription}>
+                        Complete a short 30-second video advertisement.
+                      </Text>
+                    </View>
+                  </View>
+                  
+                  <View style={styles.pointsGuideItem}>
+                    <View style={styles.pointsGuideCheckCircle}>
+                      <Check color="#fff" size={16} />
+                    </View>
+                    <View style={styles.pointsGuideItemContent}>
+                      <View style={styles.pointsGuideItemHeader}>
+                        <Text style={styles.pointsGuideItemTitle}>Daily ad limit</Text>
+                        <Text style={styles.pointsGuideItemPoints}>+200 points max</Text>
+                      </View>
+                      <Text style={styles.pointsGuideItemDescription}>
+                        Watch up to 10 ads per day to maximize your earnings.
+                      </Text>
+                    </View>
+                  </View>
+                  
+                  <View style={styles.pointsGuideItem}>
+                    <View style={[styles.pointsGuideCheckCircle, styles.pointsGuidePremiumCircle]}>
+                      <Star color="#FFD700" size={16} />
+                    </View>
+                    <View style={styles.pointsGuideItemContent}>
+                      <View style={styles.pointsGuideItemHeader}>
+                        <Text style={styles.pointsGuideItemTitle}>Premium bonus</Text>
+                        <Text style={[styles.pointsGuideItemPoints, styles.pointsGuidePremiumPoints]}>+40 points</Text>
+                      </View>
+                      <Text style={styles.pointsGuideItemDescription}>
+                        Premium users earn double points for watching ads!
+                      </Text>
+                    </View>
+                  </View>
+                </View>
+              </View>
+
               {/* Social activities section */}
               <View style={styles.pointsGuideSection}>
                 <View style={styles.pointsGuideSectionHeader}>
@@ -1004,6 +1065,314 @@ export default function PointsAboutScreen() {
     );
   };
 
+  // Function to render AdMob section
+  const renderAdMobSection = () => {
+    // State for cooldown timer and ad limit tracking would be defined at component level
+    const [adCooldown, setAdCooldown] = useState(0);
+    const [adsWatchedToday, setAdsWatchedToday] = useState(2); // Example initial value
+    const [isWatchingAd, setIsWatchingAd] = useState(false);
+    const [showSampleAd, setShowSampleAd] = useState(false);
+    const [adProgress, setAdProgress] = useState(0);
+    const maxAdsPerDay = 10;
+    const cooldownSeconds = 20;
+    
+    // Ref for the cooldown timer
+    const cooldownTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+    const adProgressRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
+    // Start ad watching
+    const handleWatchAd = () => {
+      if (adCooldown > 0 || adsWatchedToday >= maxAdsPerDay || isWatchingAd) {
+        return;
+      }
+      
+      setIsWatchingAd(true);
+      setShowSampleAd(true);
+      setAdProgress(0);
+      
+      // Start the ad progress animation
+      if (adProgressRef.current) {
+        clearInterval(adProgressRef.current);
+      }
+      
+      // Update progress every 100ms for 5 seconds (50 steps for smooth animation)
+      adProgressRef.current = setInterval(() => {
+        setAdProgress(prev => {
+          if (prev >= 100) {
+            if (adProgressRef.current) {
+              clearInterval(adProgressRef.current);
+              adProgressRef.current = null;
+            }
+            return 100;
+          }
+          return prev + 2; // Increment by 2% each time for 5 seconds total
+        });
+      }, 100);
+      
+      // Simulate ad completion after 5 seconds
+      setTimeout(() => {
+        // Update ads watched count
+        setAdsWatchedToday(prev => Math.min(prev + 1, maxAdsPerDay));
+        
+        // Add points (this would normally be done via backend)
+        DeviceEventEmitter.emit('POINTS_EARNED', {
+          amount: 20,
+          source: 'ad_watch',
+          verifiedFromSanity: false
+        });
+        
+        // Hide the sample ad
+        setShowSampleAd(false);
+        
+        // Start cooldown
+        setAdCooldown(cooldownSeconds);
+        setIsWatchingAd(false);
+        
+        // Start cooldown timer
+        if (cooldownTimerRef.current) {
+          clearInterval(cooldownTimerRef.current);
+        }
+        
+        cooldownTimerRef.current = setInterval(() => {
+          setAdCooldown(prev => {
+            if (prev <= 1) {
+              if (cooldownTimerRef.current) {
+                clearInterval(cooldownTimerRef.current);
+                cooldownTimerRef.current = null;
+              }
+              return 0;
+            }
+            return prev - 1;
+          });
+        }, 1000);
+      }, 5000);
+    };
+    
+    // Clean up timer on unmount
+    useEffect(() => {
+      return () => {
+        if (cooldownTimerRef.current) {
+          clearInterval(cooldownTimerRef.current);
+        }
+        if (adProgressRef.current) {
+          clearInterval(adProgressRef.current);
+        }
+      };
+    }, []);
+
+    return (
+      <View style={styles.adMobSection}>
+        <View style={styles.adMobSectionHeader}>
+          <Text style={styles.sectionTitle}>Earn with AdMob</Text>
+          <Text style={styles.sectionSubtitle}>Watch ads, earn points, get rewards</Text>
+        </View>
+
+        {/* Animated AdMob Card */}
+        <View style={styles.adMobCardContainer}>
+          <LinearGradient
+            colors={['#2E0052', '#5A0087', '#8000AA']}
+            start={{ x: 0, y: 0 }}
+            end={{ x: 1, y: 1 }}
+            style={styles.adMobCard}
+          >
+            {/* Decorative elements */}
+            <View style={styles.adMobDecorativeCircle1} />
+            <View style={styles.adMobDecorativeCircle2} />
+            
+            <View style={styles.adMobCardContent}>
+              <View style={styles.adMobIconContainer}>
+                <Video color="#fff" size={32} />
+              </View>
+              
+              <Text style={styles.adMobCardTitle}>AdMob Rewards</Text>
+              <Text style={styles.adMobCardDescription}>
+                Watch short video advertisements and earn points instantly
+              </Text>
+              
+              <View style={styles.adMobRewardsRow}>
+                <View style={styles.adMobRewardItem}>
+                  <View style={styles.adMobRewardIconContainer}>
+                    <Clock color="#ffffff" size={18} />
+                  </View>
+                  <Text style={styles.adMobRewardLabel}>30 sec</Text>
+                </View>
+                
+                <View style={styles.adMobRewardItem}>
+                  <View style={styles.adMobRewardIconContainer}>
+                    <Plus color="#ffffff" size={18} />
+                  </View>
+                  <Text style={styles.adMobRewardLabel}>+20 points</Text>
+                </View>
+                
+                <View style={styles.adMobRewardItem}>
+                  <View style={styles.adMobRewardIconContainer}>
+                    <Money color="#ffffff" size={18} />
+                  </View>
+                  <Text style={styles.adMobRewardLabel}>+$0.20</Text>
+                </View>
+              </View>
+              
+              {/* Ad Limit Progress Bar */}
+              <View style={styles.adLimitContainer}>
+                <View style={styles.adLimitHeader}>
+                  <Text style={styles.adLimitLabel}>Today's Ad Limit</Text>
+                  <Text style={styles.adLimitCounter}>{adsWatchedToday}/{maxAdsPerDay}</Text>
+                </View>
+                <View style={styles.adLimitProgressBar}>
+                  <View 
+                    style={[
+                      styles.adLimitProgressFill, 
+                      { width: `${(adsWatchedToday / maxAdsPerDay) * 100}%` },
+                      adsWatchedToday === maxAdsPerDay && styles.adLimitProgressFillComplete
+                    ]} 
+                  />
+                </View>
+              </View>
+              
+              {/* Watch Ad Button with different states */}
+              {isWatchingAd ? (
+                <View style={[styles.adMobWatchButton, styles.adMobWatchButtonLoading]}>
+                  <ActivityIndicator color="#5A0087" size="small" style={styles.adMobWatchButtonIcon} />
+                  <Text style={styles.adMobWatchButtonText}>Loading Ad...</Text>
+                </View>
+              ) : adCooldown > 0 ? (
+                <View style={[styles.adMobWatchButton, styles.adMobWatchButtonCooldown]}>
+                  <Clock color="#fff" size={20} style={styles.adMobWatchButtonIcon} />
+                  <Text style={[styles.adMobWatchButtonText, { color: '#fff' }]}>Wait {adCooldown}s</Text>
+                </View>
+              ) : adsWatchedToday >= maxAdsPerDay ? (
+                <View style={[styles.adMobWatchButton, styles.adMobWatchButtonDisabled]}>
+                  <Bell color="#999" size={20} style={styles.adMobWatchButtonIcon} />
+                  <Text style={[styles.adMobWatchButtonText, { color: '#999' }]}>Daily Limit Reached</Text>
+                </View>
+              ) : (
+                <TouchableOpacity 
+                  style={styles.adMobWatchButton}
+                  onPress={handleWatchAd}
+                >
+                  <Play color="#5A0087" size={20} style={styles.adMobWatchButtonIcon} />
+                  <Text style={styles.adMobWatchButtonText}>Watch Ad Now</Text>
+                </TouchableOpacity>
+              )}
+              
+              {/* Cooldown info */}
+              {adCooldown > 0 && (
+                <Text style={styles.adMobInfoText}>
+                  Cooldown: Wait {adCooldown}s before watching another ad
+                </Text>
+              )}
+              
+              {/* Daily limit reached message */}
+              {adsWatchedToday >= maxAdsPerDay && (
+                <Text style={styles.adMobInfoText}>
+                  You've reached your daily limit. Come back tomorrow!
+                </Text>
+              )}
+            </View>
+          </LinearGradient>
+        </View>
+
+        {/* Full-screen Video Ad Overlay */}
+        {showSampleAd && (
+          <View style={styles.videoAdOverlay}>
+            <View style={styles.videoAdContainer}>
+              {/* Video Ad Header */}
+              <View style={styles.videoAdHeader}>
+                <View style={styles.videoAdBadge}>
+                  <Text style={styles.videoAdBadgeText}>Ad</Text>
+                </View>
+                <Text style={styles.videoAdTitle}>Google AdMob Video</Text>
+                <Text style={styles.videoAdCounter}>{Math.floor(adProgress/20) + 1}/5</Text>
+              </View>
+              
+              {/* Video Ad Content */}
+              <View style={styles.videoAdContent}>
+                {/* "Video" Preview with play icon overlay */}
+                <View style={styles.videoPreviewContainer}>
+                  <Image
+                    source={require('@/assets/images/tunnel-coin.jpeg')}
+                    style={styles.videoPreviewImage}
+                    resizeMode="cover"
+                  />
+                  
+                  {/* Video controls overlay */}
+                  <View style={styles.videoPlayingIndicator}>
+                    {/* Animated play button that pulses */}
+                    <Animated.View style={{
+                      opacity: Math.sin(adProgress/5) * 0.3 + 0.7,
+                      transform: [{ scale: Math.sin(adProgress/10) * 0.2 + 1.1 }]
+                    }}>
+                      <View style={styles.videoPlayButton}>
+                        <Play color="#fff" size={32} />
+                      </View>
+                    </Animated.View>
+                  </View>
+                  
+                  {/* Product banner at bottom of video */}
+                  <Text style={styles.videoAdProductName}>Google Play Premium Bundle</Text>
+                </View>
+                
+                {/* Ad message */}
+                <View style={styles.videoAdMessageContainer}>
+                  <Text style={styles.videoAdMessage}>
+                    Discover amazing premium apps and games with exclusive limited-time offers!
+                  </Text>
+                  
+                  <View style={styles.videoAdRating}>
+                    <Star color="#FFD700" size={16} />
+                    <Star color="#FFD700" size={16} />
+                    <Star color="#FFD700" size={16} />
+                    <Star color="#FFD700" size={16} />
+                    <Star color="#FFD700" size={16} />
+                    <Text style={styles.videoAdRatingText}>5.0 (2.5k+ reviews)</Text>
+                  </View>
+                  
+                  <TouchableOpacity style={styles.videoAdButton} disabled={true}>
+                    <Text style={styles.videoAdButtonText}>Install Now</Text>
+                  </TouchableOpacity>
+                </View>
+              </View>
+              
+              {/* Video Ad Progress Bar */}
+              <View style={styles.videoAdProgressContainer}>
+                <View style={styles.videoAdProgressBar}>
+                  <View 
+                    style={[
+                      styles.videoAdProgressFill,
+                      { width: `${adProgress}%` }
+                    ]}
+                  />
+                </View>
+                <Text style={styles.videoAdProgressText}>
+                  Ad will close in {5 - Math.floor(adProgress/20)} seconds...
+                </Text>
+              </View>
+            </View>
+          </View>
+        )}
+
+        {/* Additional info cards */}
+        <View style={styles.adMobInfoCardsContainer}>
+          <View style={styles.adMobInfoCard}>
+            <View style={[styles.adMobInfoIconBg, { backgroundColor: '#0050B3' }]}>
+              <Clock size={20} color="#ffffff" />
+            </View>
+            <Text style={styles.adMobInfoTitle}>Cooldown Period</Text>
+            <Text style={styles.adMobInfoText}>20 second wait between ads</Text>
+          </View>
+          
+          <View style={styles.adMobInfoCard}>
+            <View style={[styles.adMobInfoIconBg, { backgroundColor: '#52C41A' }]}>
+              <Bell size={20} color="#ffffff" />
+            </View>
+            <Text style={styles.adMobInfoTitle}>Daily Refresh</Text>
+            <Text style={styles.adMobInfoText}>Limit resets at midnight</Text>
+          </View>
+        </View>
+      </View>
+    );
+  };
+
   return (
     <View style={styles.container}>
       <StatusBar barStyle="light-content" />
@@ -1083,6 +1452,9 @@ export default function PointsAboutScreen() {
 
         {/* Earnings Chart */}
         {renderEarningsChart()}
+
+        {/* AdMob Section */}
+        {renderAdMobSection()}
 
         {/* Additional Info */}
         <View style={styles.additionalInfo}>
@@ -2083,5 +2455,495 @@ const styles = StyleSheet.create({
     padding: 8,
     borderRadius: 12,
     backgroundColor: 'rgba(255, 255, 255, 0.1)',
+  },
+  // AdMob section styles
+  adMobSection: {
+    marginTop: 20,
+    marginBottom: 20,
+    paddingHorizontal: 20,
+  },
+  adMobSectionHeader: {
+    marginBottom: 15,
+  },
+  adMobCardContainer: {
+    marginBottom: 20,
+    borderRadius: 16,
+    overflow: 'hidden',
+    shadowColor: '#5A0087',
+    shadowOffset: { width: 0, height: 8 },
+    shadowOpacity: 0.3,
+    shadowRadius: 12,
+    elevation: 10,
+  },
+  adMobCard: {
+    padding: 20,
+    borderRadius: 16,
+    position: 'relative',
+    overflow: 'hidden',
+    minHeight: 220,
+  },
+  adMobDecorativeCircle1: {
+    position: 'absolute',
+    width: 120,
+    height: 120,
+    borderRadius: 60,
+    backgroundColor: 'rgba(255, 255, 255, 0.08)',
+    top: -20,
+    right: -30,
+  },
+  adMobDecorativeCircle2: {
+    position: 'absolute',
+    width: 80,
+    height: 80,
+    borderRadius: 40,
+    backgroundColor: 'rgba(255, 255, 255, 0.05)',
+    bottom: -15,
+    left: -15,
+  },
+  adMobCardContent: {
+    position: 'relative',
+    zIndex: 1,
+  },
+  adMobIconContainer: {
+    width: 60,
+    height: 60,
+    borderRadius: 30,
+    backgroundColor: 'rgba(255, 255, 255, 0.15)',
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginBottom: 15,
+    borderWidth: 1,
+    borderColor: 'rgba(255, 255, 255, 0.2)',
+  },
+  adMobCardTitle: {
+    color: 'white',
+    fontSize: 24,
+    fontFamily: 'Inter_700Bold',
+    marginBottom: 8,
+  },
+  adMobCardDescription: {
+    color: 'rgba(255, 255, 255, 0.85)',
+    fontSize: 16,
+    fontFamily: 'Inter_400Regular',
+    lineHeight: 22,
+    marginBottom: 20,
+    maxWidth: '90%',
+  },
+  adMobRewardsRow: {
+    flexDirection: 'row',
+    justifyContent: 'flex-start',
+    marginBottom: 25,
+    gap: 15,
+  },
+  adMobRewardItem: {
+    alignItems: 'center',
+    marginRight: 10,
+  },
+  adMobRewardIconContainer: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    backgroundColor: 'rgba(255, 255, 255, 0.15)',
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginBottom: 8,
+  },
+  adMobRewardLabel: {
+    color: 'white',
+    fontSize: 14,
+    fontFamily: 'Inter_600SemiBold',
+  },
+  adMobWatchButton: {
+    backgroundColor: 'white',
+    borderRadius: 30,
+    paddingVertical: 14,
+    paddingHorizontal: 20,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    alignSelf: 'flex-start',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.2,
+    shadowRadius: 6,
+    elevation: 8,
+    marginBottom: 15,
+  },
+  adMobWatchButtonIcon: {
+    marginRight: 8,
+  },
+  adMobWatchButtonText: {
+    color: '#5A0087',
+    fontSize: 16,
+    fontFamily: 'Inter_600SemiBold',
+  },
+  adMobInfoCardsContainer: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    marginBottom: 10,
+  },
+  adMobInfoCard: {
+    backgroundColor: '#1A1A1A',
+    borderRadius: 16,
+    padding: 15,
+    flex: 1,
+    marginHorizontal: 6,
+    borderWidth: 1,
+    borderColor: 'rgba(255, 255, 255, 0.08)',
+  },
+  adMobInfoIconBg: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginBottom: 12,
+  },
+  adMobInfoTitle: {
+    color: 'white',
+    fontSize: 16,
+    fontFamily: 'Inter_600SemiBold',
+    marginBottom: 6,
+  },
+  adMobInfoText: {
+    color: 'rgba(255, 255, 255, 0.7)',
+    fontSize: 14,
+    fontFamily: 'Inter_400Regular',
+    lineHeight: 18,
+    textAlign: 'center',
+    marginTop: 8,
+  },
+  adLimitContainer: {
+    marginBottom: 15,
+  },
+  adLimitHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 5,
+  },
+  adLimitLabel: {
+    color: 'white',
+    fontSize: 14,
+    fontFamily: 'Inter_500Medium',
+  },
+  adLimitCounter: {
+    color: '#00ff00',
+    fontSize: 14,
+    fontFamily: 'Inter_600SemiBold',
+  },
+  adLimitProgressBar: {
+    height: 8,
+    backgroundColor: 'rgba(255, 255, 255, 0.1)',
+    borderRadius: 4,
+    marginBottom: 5,
+    overflow: 'hidden',
+  },
+  adLimitProgressFill: {
+    height: '100%',
+    backgroundColor: '#00ff00',
+    borderRadius: 4,
+  },
+  adLimitProgressFillComplete: {
+    backgroundColor: '#FFA500',
+  },
+  adMobWatchButtonLoading: {
+    backgroundColor: 'rgba(255, 255, 255, 0.7)',
+    alignSelf: 'flex-start',
+  },
+  adMobWatchButtonCooldown: {
+    backgroundColor: '#8000AA',
+    alignSelf: 'flex-start',
+  },
+  adMobWatchButtonDisabled: {
+    backgroundColor: '#333',
+    borderWidth: 1,
+    borderColor: 'rgba(255, 255, 255, 0.1)',
+    alignSelf: 'flex-start',
+  },
+  adMobWatchButtonTextCooldown: {
+    color: 'white',
+    fontSize: 14,
+    fontFamily: 'Inter_500Medium',
+  },
+  adMobWatchButtonTextDisabled: {
+    color: '#999',
+    fontSize: 14,
+    fontFamily: 'Inter_500Medium',
+  },
+  adCooldownInfo: {
+    color: 'rgba(255, 255, 255, 0.7)',
+    fontSize: 12,
+    fontFamily: 'Inter_400Regular',
+    textAlign: 'center',
+  },
+  adDailyLimitInfo: {
+    color: 'rgba(255, 255, 255, 0.7)',
+    fontSize: 12,
+    fontFamily: 'Inter_400Regular',
+    textAlign: 'center',
+  },
+  // Sample Google Ad styles
+  sampleAdContainer: {
+    backgroundColor: 'white',
+    borderRadius: 12,
+    overflow: 'hidden',
+    marginBottom: 20,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.2,
+    shadowRadius: 5,
+    elevation: 5,
+  },
+  sampleAdHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    padding: 10,
+    borderBottomWidth: 1,
+    borderBottomColor: '#f0f0f0',
+  },
+  sampleAdBadge: {
+    backgroundColor: '#FFEB3B',
+    paddingVertical: 2,
+    paddingHorizontal: 6,
+    borderRadius: 4,
+    marginRight: 8,
+  },
+  sampleAdBadgeText: {
+    color: '#333',
+    fontSize: 10,
+    fontFamily: 'Inter_700Bold',
+  },
+  sampleAdHeaderText: {
+    flex: 1,
+    color: '#333',
+    fontSize: 14,
+    fontFamily: 'Inter_600SemiBold',
+  },
+  sampleAdCloseButton: {
+    width: 24,
+    height: 24,
+    borderRadius: 12,
+    backgroundColor: '#f0f0f0',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  sampleAdCloseButtonText: {
+    color: '#333',
+    fontSize: 18,
+    fontFamily: 'Inter_700Bold',
+    lineHeight: 24,
+  },
+  sampleAdContent: {
+    padding: 15,
+    alignItems: 'center',
+  },
+  sampleAdImage: {
+    width: 120,
+    height: 120,
+    marginBottom: 15,
+    borderRadius: 8,
+  },
+  sampleAdTitle: {
+    color: '#333',
+    fontSize: 18,
+    fontFamily: 'Inter_700Bold',
+    marginBottom: 8,
+    textAlign: 'center',
+  },
+  sampleAdDescription: {
+    color: '#666',
+    fontSize: 14,
+    fontFamily: 'Inter_400Regular',
+    marginBottom: 15,
+    textAlign: 'center',
+    paddingHorizontal: 10,
+  },
+  sampleAdRating: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginBottom: 15,
+  },
+  sampleAdRatingText: {
+    color: '#666',
+    fontSize: 14,
+    fontFamily: 'Inter_500Medium',
+    marginLeft: 8,
+  },
+  sampleAdButton: {
+    backgroundColor: '#4285F4',
+    paddingVertical: 10,
+    paddingHorizontal: 20,
+    borderRadius: 20,
+  },
+  sampleAdButtonText: {
+    color: 'white',
+    fontSize: 14,
+    fontFamily: 'Inter_600SemiBold',
+  },
+  sampleAdFooter: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    padding: 10,
+    backgroundColor: '#f9f9f9',
+  },
+  sampleAdCountdown: {
+    color: '#666',
+    fontSize: 12,
+    fontFamily: 'Inter_400Regular',
+    marginLeft: 8,
+  },
+  videoAdOverlay: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
+    bottom: 0,
+    backgroundColor: 'rgba(0, 0, 0, 0.85)',
+    justifyContent: 'center',
+    alignItems: 'center',
+    zIndex: 1000,
+  },
+  videoAdContainer: {
+    backgroundColor: '#111',
+    borderRadius: 16,
+    width: '90%',
+    maxWidth: 350,
+    overflow: 'hidden',
+  },
+  videoAdHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    padding: 10,
+    backgroundColor: '#000',
+  },
+  videoAdBadge: {
+    backgroundColor: '#FFEB3B',
+    paddingVertical: 2,
+    paddingHorizontal: 6,
+    borderRadius: 4,
+  },
+  videoAdBadgeText: {
+    color: '#000',
+    fontSize: 10,
+    fontFamily: 'Inter_700Bold',
+  },
+  videoAdTitle: {
+    flex: 1,
+    color: 'white',
+    fontSize: 14,
+    fontFamily: 'Inter_600SemiBold',
+    marginLeft: 10,
+  },
+  videoAdCounter: {
+    color: 'rgba(255, 255, 255, 0.7)',
+    fontSize: 12,
+    fontFamily: 'Inter_400Regular',
+  },
+  videoAdContent: {
+    alignItems: 'center',
+    padding: 15,
+  },
+  videoPreviewContainer: {
+    width: '100%',
+    aspectRatio: 16/9,
+    borderRadius: 8,
+    overflow: 'hidden',
+    marginBottom: 15,
+    position: 'relative',
+  },
+  videoPreviewImage: {
+    width: '100%',
+    height: '100%',
+  },
+  videoPlayingIndicator: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
+    bottom: 0,
+    backgroundColor: 'rgba(0, 0, 0, 0.5)',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  videoPlayButton: {
+    width: 64,
+    height: 64,
+    borderRadius: 32,
+    backgroundColor: 'rgba(0, 0, 0, 0.6)',
+    justifyContent: 'center',
+    alignItems: 'center',
+    borderWidth: 2,
+    borderColor: 'rgba(255, 255, 255, 0.8)',
+  },
+  videoAdProductName: {
+    position: 'absolute',
+    bottom: 0,
+    left: 0,
+    right: 0,
+    backgroundColor: 'rgba(0, 0, 0, 0.7)',
+    padding: 8,
+    color: 'white',
+    fontSize: 14,
+    fontFamily: 'Inter_600SemiBold',
+    textAlign: 'center',
+  },
+  videoAdMessageContainer: {
+    alignItems: 'center',
+    width: '100%',
+  },
+  videoAdMessage: {
+    color: 'rgba(255, 255, 255, 0.8)',
+    fontSize: 14,
+    fontFamily: 'Inter_400Regular',
+    textAlign: 'center',
+    marginBottom: 15,
+  },
+  videoAdRating: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginBottom: 15,
+  },
+  videoAdRatingText: {
+    color: 'rgba(255, 255, 255, 0.7)',
+    fontSize: 12,
+    fontFamily: 'Inter_400Regular',
+    marginLeft: 5,
+  },
+  videoAdButton: {
+    backgroundColor: '#4285F4',
+    paddingVertical: 8,
+    paddingHorizontal: 16,
+    borderRadius: 16,
+  },
+  videoAdButtonText: {
+    color: 'white',
+    fontSize: 14,
+    fontFamily: 'Inter_600SemiBold',
+  },
+  videoAdProgressContainer: {
+    padding: 10,
+    backgroundColor: '#000',
+    width: '100%',
+  },
+  videoAdProgressBar: {
+    width: '100%',
+    height: 4,
+    backgroundColor: 'rgba(255, 255, 255, 0.2)',
+    borderRadius: 2,
+    marginBottom: 5,
+  },
+  videoAdProgressFill: {
+    height: '100%',
+    backgroundColor: '#FFEB3B',
+    borderRadius: 2,
+  },
+  videoAdProgressText: {
+    color: 'rgba(255, 255, 255, 0.7)',
+    fontSize: 10,
+    fontFamily: 'Inter_400Regular',
+    textAlign: 'center',
   },
 }); 
